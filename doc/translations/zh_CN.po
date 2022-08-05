@@ -62,7 +62,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Godot Engine class reference\n"
 "Report-Msgid-Bugs-To: https://github.com/godotengine/godot\n"
-"PO-Revision-Date: 2022-07-26 01:54+0000\n"
+"PO-Revision-Date: 2022-07-31 16:43+0000\n"
 "Last-Translator: Haoyu Qiu <timothyqiu32@gmail.com>\n"
 "Language-Team: Chinese (Simplified) <https://hosted.weblate.org/projects/"
 "godot-engine/godot-class-reference/zh_Hans/>\n"
@@ -1322,7 +1322,6 @@ msgstr ""
 "在打印错误或警告时还会显示堆栈跟踪。"
 
 #: modules/gdscript/doc_classes/@GDScript.xml
-#, fuzzy
 msgid ""
 "Like [method print], but includes the current stack frame when running with "
 "the debugger turned on.\n"
@@ -1332,10 +1331,11 @@ msgid ""
 "   At: res://test.gd:15:_process()\n"
 "[/codeblock]"
 msgstr ""
-"在代码位置打印堆栈轨迹，仅在打开调试器的情况下运行。\n"
-"控制台中的输出如下所示：\n"
+"与 [method print] 类似，但在打开调试器运行时还会包含当前栈帧。\n"
+"控制台中的输出应该是类似这样的：\n"
 "[codeblock]\n"
-"Frame 0 - res://test.gd:16 in function '_process'\n"
+"Test print\n"
+"   At: res://test.gd:15:_process()\n"
 "[/codeblock]"
 
 #: modules/gdscript/doc_classes/@GDScript.xml
@@ -9581,7 +9581,6 @@ msgstr ""
 "制器也将保持相同的 ID。"
 
 #: doc/classes/ARVRController.xml
-#, fuzzy
 msgid ""
 "The degree to which the controller vibrates. Ranges from [code]0.0[/code] to "
 "[code]1.0[/code]. If changed, updates [member ARVRPositionalTracker.rumble] "
@@ -9589,9 +9588,8 @@ msgid ""
 "This is a useful property to animate if you want the controller to vibrate "
 "for a limited duration."
 msgstr ""
-"控制器振动的程度。范围从 [code]0.0[/code] 到 [code]1.0[/code]，精度 "
-"[code].01[/code]。如果更改，会相应地更新 [member ARVRPositionalTracker."
-"rumble]。\n"
+"控制器振动的程度。范围从 [code]0.0[/code] 到 [code]1.0[/code]。如果更改，"
+"会相应地更新 [member ARVRPositionalTracker.rumble]。\n"
 "如果你想让控制器在限定时间内振动，这是一个有用的属性，可以将其动画化。"
 
 #: doc/classes/ARVRController.xml
@@ -14589,6 +14587,10 @@ msgid ""
 "current, setting one camera's [member current] to [code]false[/code] will "
 "cause the other camera to be made current."
 msgstr ""
+"如果为 [code]true[/code]，则祖级 [Viewport] 正在使用这个相机。\n"
+"如果场景中有多个相机，总会有一个被设为当前相机。例如，假设场景中存在两个 "
+"[Camera] 节点并且只有一个为当前相机，那么如果把某一个相机的 [member current] "
+"设为 [code]false[/code] 就会导致另一个相机被设为当前相机。"
 
 #: doc/classes/Camera.xml
 msgid ""
@@ -17985,7 +17987,7 @@ msgstr "道奇蓝色。"
 
 #: doc/classes/Color.xml
 msgid "Firebrick color."
-msgstr "火砖的颜色。"
+msgstr "耐火砖红色。"
 
 #: doc/classes/Color.xml
 msgid "Floral white color."
@@ -17997,11 +17999,11 @@ msgstr "森林绿色。"
 
 #: doc/classes/Color.xml
 msgid "Fuchsia color."
-msgstr "紫红色的颜色。"
+msgstr "洋红色。"
 
 #: doc/classes/Color.xml
 msgid "Gainsboro color."
-msgstr "庚斯伯勒颜色。"
+msgstr "庚斯伯勒灰色。"
 
 #: doc/classes/Color.xml
 msgid "Ghost white color."
@@ -18013,7 +18015,7 @@ msgstr "金色。"
 
 #: doc/classes/Color.xml
 msgid "Goldenrod color."
-msgstr "金黄的颜色。"
+msgstr "金菊色。"
 
 #: doc/classes/Color.xml
 msgid "Gray color."
@@ -18033,7 +18035,7 @@ msgstr "蜜露色。"
 
 #: doc/classes/Color.xml
 msgid "Hot pink color."
-msgstr "炙热的粉红色。"
+msgstr "亮粉色。"
 
 #: doc/classes/Color.xml
 msgid "Indian red color."
@@ -18057,7 +18059,7 @@ msgstr "薰衣草色。"
 
 #: doc/classes/Color.xml
 msgid "Lavender blush color."
-msgstr "薰衣草腮红的颜色。"
+msgstr "薰衣草紫红色。"
 
 #: doc/classes/Color.xml
 msgid "Lawn green color."
@@ -18081,7 +18083,7 @@ msgstr "淡青色。"
 
 #: doc/classes/Color.xml
 msgid "Light goldenrod color."
-msgstr "淡淡的金黄色。"
+msgstr "亮金菊黄色。"
 
 #: doc/classes/Color.xml
 msgid "Light gray color."
@@ -22935,7 +22937,7 @@ msgstr ""
 msgid ""
 "A script implemented in the C# programming language (Mono-enabled builds "
 "only)."
-msgstr "用C＃编程语言实现的脚本（仅启用Mono的版本）。"
+msgstr "用 C# 编程语言实现的脚本（仅 Mono 版本中存在）。"
 
 #: modules/mono/doc_classes/CSharpScript.xml
 msgid ""
@@ -22943,14 +22945,14 @@ msgid ""
 "class and is only available in Mono-enabled Godot builds.\n"
 "See also [GodotSharp]."
 msgstr ""
-"此类表示C＃脚本。它与[GDScript]类的C＃等效，并且仅在启用了Mono的Godot版本中可"
-"用。\n"
-"另请参阅[GodotSharp]。"
+"这个类表示 C# 脚本，是 [GDScript] 类在 C# 中的对等体，仅在启用了 Mono 的 "
+"Godot 版本中可用。\n"
+"另请参阅 [GodotSharp]。"
 
 #: modules/mono/doc_classes/CSharpScript.xml
 #: modules/gdnative/doc_classes/PluginScript.xml
 msgid "Returns a new instance of the script."
-msgstr "返回脚本的新实例。"
+msgstr "返回该脚本的新实例。"
 
 #: doc/classes/CubeMap.xml
 msgid "A CubeMap is a 6-sided 3D texture."
@@ -23267,7 +23269,7 @@ msgstr "重新计算曲线的烘焙点缓存。"
 msgid ""
 "Removes points that are closer than [code]CMP_EPSILON[/code] (0.00001) units "
 "to their neighbor on the curve."
-msgstr "移除比曲线上的相邻点近[code]CMP_EPSILON[/code]（0.00001）个单位的点。"
+msgstr "移除比曲线上的相邻点近 [code]CMP_EPSILON[/code]（0.00001）个单位的点。"
 
 #: doc/classes/Curve.xml doc/classes/Curve2D.xml doc/classes/Curve3D.xml
 msgid "Removes all points from the curve."
@@ -23462,9 +23464,9 @@ msgid ""
 "the index is out of bounds, the function sends an error to the console, and "
 "returns [code](0, 0)[/code]."
 msgstr ""
-"返回指向顶点[code]idx[/code]的控制点位置。返回的位置是相对于顶点[code]idx[/"
-"code]的。如果索引超出了范围，函数会向控制台发送一条错误，并返回 [code](0, 0)"
-"[/code]。"
+"返回指向顶点 [code]idx[/code] 的控制点位置。返回的位置是相对于顶点 "
+"[code]idx[/code] 的。如果索引超出了范围，函数会向控制台发送一条错误，并返回 "
+"[code](0, 0)[/code]。"
 
 #: doc/classes/Curve2D.xml
 msgid ""
@@ -23473,9 +23475,9 @@ msgid ""
 "code]. If the index is out of bounds, the function sends an error to the "
 "console, and returns [code](0, 0)[/code]."
 msgstr ""
-"返回从顶点[code]idx[/code]引出的控制点位置。返回的位置是相对于顶点 "
-"[code]idx[/code]。如果索引越界，函数会向控制台发送错误，并返回 [code](0, 0)[/"
-"code]。"
+"返回从顶点 [code]idx[/code] 引出的控制点位置。返回的位置是相对于顶点 "
+"[code]idx[/code]。如果索引越界，函数会向控制台发送错误，并返回 [code](0, "
+"0)[/code]。"
 
 #: doc/classes/Curve2D.xml
 msgid ""
@@ -25234,9 +25236,9 @@ msgid ""
 "appear in the inspector when selecting a node that extends the class "
 "specified by [code]class_name[/code]."
 msgstr ""
-"如果[code]class_name[/code]指定的类中的[code]property[/code]被禁用，则返回 "
-"[code]true[/code]。当属性被禁用时，当[code]class_name[/code]类被指定为类的(继"
-"承)父节点时，它将不会出现在检查器中。"
+"如果 [code]class_name[/code] 指定的类中的 [code]property[/code] 属性被禁用，"
+"则返回 [code]true[/code]。禁用某一属性后，当选中继承自 "
+"[code]class_name[/code] 类的节点时，该属性将不会出现在检查器中。"
 
 #: doc/classes/EditorFeatureProfile.xml
 msgid ""
@@ -25252,18 +25254,19 @@ msgid ""
 "format obtained by using the feature profile manager's [b]Export[/b] button "
 "or the [method save_to_file] method."
 msgstr ""
-"从文件中加载一个编辑器功能配置文件。该文件必须遵循JSON格式，通过使用功能配置"
-"文件管理器的[b]Export[/b]按钮或[method save_to_file]方法获得。"
+"从文件中加载一个编辑器功能配置文件。该文件必须遵循 JSON "
+"格式，通过使用功能配置文件管理器的[b]导出[/b]按钮或 [method save_to_file] "
+"方法获得。"
 
 #: doc/classes/EditorFeatureProfile.xml
-#, fuzzy
 msgid ""
 "Saves the editor feature profile to a file in JSON format. It can then be "
 "imported using the feature profile manager's [b]Import[/b] button or the "
 "[method load_from_file] method."
 msgstr ""
-"将编辑器的功能配置保存到JSON格式的文件中。然后可以使用特征配置文件管理器的[b]"
-"导入[/b]按钮或[method load_from_file]按钮导入它。"
+"将编辑器的功能配置保存到 JSON "
+"格式的文件中。然后可以使用功能配置文件管理器的[b]导入[/b]按钮或 [method "
+"load_from_file] 方法导入它。"
 
 #: doc/classes/EditorFeatureProfile.xml
 msgid ""
@@ -25271,8 +25274,9 @@ msgid ""
 "by [code]class_name[/code]. When disabled, the class won't appear in the "
 "Create New Node dialog."
 msgstr ""
-"如果 [code]disable[/code] 是 [code]true[/code]，则禁用 [code]class_name[/"
-"code] 指定的类。被禁用时，该类不会出现在“创建新 Node”对话框中。"
+"如果 [code]disable[/code] 为 [code]true[/code]，则禁用 "
+"[code]class_name[/code] 指定的类。禁用后，该类不会出现在“创建新 "
+"Node”对话框中。"
 
 #: doc/classes/EditorFeatureProfile.xml
 msgid ""
@@ -25281,9 +25285,9 @@ msgid ""
 "appear in the Create New Node dialog but the inspector will be read-only "
 "when selecting a node that extends the class."
 msgstr ""
-"如果 [code]disable[/code] 为 [code]true[/code]，则禁用 [code]class_name[/"
-"code] 指定的类的编辑。禁用时，类仍然会出现在“创建新 Node”对话框中，但在选择继"
-"承的节点时，检查器将只读。"
+"如果 [code]disable[/code] 为 [code]true[/code]，则禁用 "
+"[code]class_name[/code] 指定的类的编辑。禁用后，该类仍然会出现在“创建新 "
+"Node”对话框中，但在选中继承的节点时，检查器将只读。"
 
 #: doc/classes/EditorFeatureProfile.xml
 msgid ""
@@ -25292,9 +25296,10 @@ msgid ""
 "When a property is disabled, it won't appear in the inspector when selecting "
 "a node that extends the class specified by [code]class_name[/code]."
 msgstr ""
-"如果 [code]disable[/code] 是 [code]true[/code]，则禁用 [code]class_name[/"
-"code] 指定的类中的 [code]property[/code] 的编辑。当属性被禁用时，当选择继承 "
-"[code]class_name[/code] 指定的类的节点时，它将不会出现在检查器中。"
+"如果 [code]disable[/code] 为 [code]true[/code]，则禁用 "
+"[code]class_name[/code] 指定的类中的 [code]property[/code] "
+"属性的编辑。禁用某一属性后，选中继承自 [code]class_name[/code] "
+"指定的类的节点时，这个属性将不会出现在检查器中。"
 
 #: doc/classes/EditorFeatureProfile.xml
 msgid ""
@@ -25325,7 +25330,7 @@ msgstr ""
 msgid ""
 "The AssetLib tab. If this feature is disabled, the AssetLib tab won't "
 "display."
-msgstr "AssetLib选项卡。如果禁用此功能，则不会显示AssetLib选项卡。"
+msgstr "AssetLib 选项卡。如果禁用此功能，则不会显示 AssetLib 选项卡。"
 
 #: doc/classes/EditorFeatureProfile.xml
 msgid ""
@@ -29678,14 +29683,13 @@ msgid "The default exposure used for tonemapping."
 msgstr "用于色调映射的默认曝光。"
 
 #: doc/classes/Environment.xml
-#, fuzzy
 msgid ""
 "The tonemapping mode to use. Tonemapping is the process that \"converts\" "
 "HDR values to be suitable for rendering on a SDR display. (Godot doesn't "
 "support rendering on HDR displays yet.)"
 msgstr ""
-"要使用的色调映射模式。色调映射是“转换”HDR 值以适合在 LDR 显示器上呈现的过程。"
-"（Godot 尚不支持在 HDR 显示器上进行渲染。）"
+"要使用的色调映射模式。色调映射是将 HDR 值“转换”为适合在 SDR "
+"显示器上呈现的值过程。（Godot 尚不支持在 HDR 显示器上进行渲染。）"
 
 #: doc/classes/Environment.xml
 msgid ""
@@ -31958,16 +31962,16 @@ msgstr ""
 "[b]注意：[/b]直线是使用方向向量而不是终点指定的。"
 
 #: doc/classes/Geometry.xml
-#, fuzzy
 msgid ""
 "Given an array of [Vector2]s representing tiles, builds an atlas. The "
 "returned dictionary has two keys: [code]points[/code] is an array of "
 "[Vector2] that specifies the positions of each tile, [code]size[/code] "
 "contains the overall size of the whole atlas as [Vector2]."
 msgstr ""
-"给定表示图块的[Vector2]数组，构建一个地图集。返回的字典有两个键："
-"[code]points[/code]是[Vector2]的向量，用于指定每个图块的位置，[code]size[/"
-"code]包含整个图集的整体大小，作为[Vector2]。"
+"给定表示图块的 [Vector2] "
+"数组，构建一个地图集。返回的字典有两个键：[code]points[/code] 是 [Vector2] "
+"的数组，用于指定每个图块的位置，[code]size[/code] 包含整个图集的整体大小，"
+"是一个 [Vector2]。"
 
 #: doc/classes/Geometry.xml
 msgid ""
@@ -33247,9 +33251,7 @@ msgstr "小图矩形的大小。地图自身基于网格区域的大小，并被
 msgid ""
 "If [code]true[/code], enables disconnection of existing connections in the "
 "GraphEdit by dragging the right end."
-msgstr ""
-"如果为 [code]true[/code]，通过拖动右端，可以断开图形编辑GraphEdit中现有的连"
-"接。"
+msgstr "如果为 [code]true[/code]，通过拖动右端，可以断开 GraphEdit 中现有的连接。"
 
 #: doc/classes/GraphEdit.xml
 msgid "The scroll offset."
@@ -33306,9 +33308,9 @@ msgid ""
 "code] slot of the [code]from[/code] GraphNode and the [code]to_slot[/code] "
 "slot of the [code]to[/code] GraphNode is attempted to be created."
 msgstr ""
-"当试图创建[code]来自from[/code]图形节点GraphNode1的[code]from_slot[/code]槽和"
-"[code]to[/code]图形节点GraphNode2的[code]to_slot[/code]槽之间的连接时，会向图"
-"形编辑GraphEdit发出。"
+"尝试创建从 [code]from[/code] GraphNode 的 [code]from_slot[/code] 槽到 "
+"[code]to[/code] GraphNode 的 [code]to_slot[/code] 槽之间的连接时，会向该 "
+"GraphEdit 发出。"
 
 #: doc/classes/GraphEdit.xml
 msgid ""
@@ -33335,9 +33337,9 @@ msgid ""
 "slot of [code]from[/code] GraphNode and [code]to_slot[/code] slot of "
 "[code]to[/code] GraphNode is attempted to be removed."
 msgstr ""
-"当试图移除 [code]from[/code] 图形节点GraphNode1的 [code]from_slot[/code]槽和"
-"[code]to[/code] 图形节点GraphNode 的[code]to_slot[/code] 槽之间的连接时，会发"
-"送到图形编辑GraphEdit。"
+"尝试移除从 [code]from[/code] GraphNode 的 [code]from_slot[/code] 槽到 "
+"[code]to[/code] GraphNode 的 [code]to_slot[/code] 槽之间的连接时，会向该 "
+"GraphEdit 发出。"
 
 #: doc/classes/GraphEdit.xml
 msgid ""
@@ -33561,9 +33563,8 @@ msgstr ""
 msgid ""
 "Sets the [Color] of the right (output) side of the slot [code]idx[/code] to "
 "[code]color_right[/code]."
-msgstr ""
-"将插槽[code]idx[/code]的右侧（输出）的颜色[Color]设置为[code]color_right[/"
-"code]。"
+msgstr "将插槽 [code]idx[/code] 的右侧（输出）的颜色 [Color] 设置为 "
+"[code]color_right[/code]。"
 
 #: doc/classes/GraphNode.xml
 msgid ""
@@ -33599,7 +33600,7 @@ msgstr ""
 
 #: doc/classes/GraphNode.xml
 msgid "If [code]true[/code], the GraphNode is a comment node."
-msgstr "如果为 [code]true[/code]，则 GraphNode 是注释节点。"
+msgstr "如果为 [code]true[/code]，则该 GraphNode 是注释节点。"
 
 #: doc/classes/GraphNode.xml
 msgid ""
@@ -33627,7 +33628,7 @@ msgstr ""
 
 #: doc/classes/GraphNode.xml
 msgid "If [code]true[/code], the GraphNode is selected."
-msgstr "如果为 [code]true[/code]，图形节点GraphNode被选中。"
+msgstr "如果为 [code]true[/code]，则该 GraphNode 被选中。"
 
 #: doc/classes/GraphNode.xml
 msgid ""
@@ -41016,7 +41017,6 @@ msgid "The tint of [Font]'s outline."
 msgstr "对 [Font] 轮廓的染色。"
 
 #: doc/classes/Label3D.xml
-#, fuzzy
 msgid ""
 "Sets the render priority for the text outline. Higher priority objects will "
 "be sorted in front of lower priority objects.\n"
@@ -41028,8 +41028,8 @@ msgid ""
 "sorted from back to front (subject to priority)."
 msgstr ""
 "设置文本轮廓的渲染优先级。优先级高的物体将被排序在优先级低的物体前面。\n"
-"[b]注意：[/b]仅在 [member alpha_cut] 为 [constant ALPHA_CUT_DISABLED]（默认"
-"值）时适用。\n"
+"[b]注意：[/b]仅在 [member alpha_cut] 为 [constant "
+"ALPHA_CUT_DISABLED]（默认值）时适用。\n"
 "[b]注意：[/b]仅适用于透明物体的排序。这不会影响透明物体相对于不透明物体的排序"
 "方式。这是因为不透明对象不被排序，而透明对象则从后往前排序（取决于优先级）。"
 
@@ -41038,7 +41038,6 @@ msgid "The size of one pixel's width on the label to scale it in 3D."
 msgstr "标签上一个像素宽度的大小，以 3D 缩放。"
 
 #: doc/classes/Label3D.xml
-#, fuzzy
 msgid ""
 "Sets the render priority for the text. Higher priority objects will be "
 "sorted in front of lower priority objects.\n"
@@ -41050,8 +41049,8 @@ msgid ""
 "sorted from back to front (subject to priority)."
 msgstr ""
 "设置文本的渲染优先级。优先级高的物体将被排序在优先级低的物体前面。\n"
-"[b]注意：[/b]仅在 [member alpha_cut] 为 [constant ALPHA_CUT_DISABLED]（默认"
-"值）时适用。\n"
+"[b]注意：[/b]仅在 [member alpha_cut] 为 [constant "
+"ALPHA_CUT_DISABLED]（默认值）时适用。\n"
 "[b]注意：[/b]仅适用于透明物体的排序。这不会影响透明物体相对于不透明物体的排序"
 "方式。这是因为不透明对象不被排序，而透明对象则从后往前排序（取决于优先级）。"
 
@@ -41077,11 +41076,10 @@ msgid "If set, lights in the environment affect the label."
 msgstr "如果打开，环境中的灯光会影响该标签。"
 
 #: doc/classes/Label3D.xml
-#, fuzzy
 msgid ""
 "If set, text can be seen from the back as well. If not, the text is "
 "invisible when looking at it from behind."
-msgstr "如果打开，从后面也可以看到文本，如果不打开，从后面看它是不可见的。"
+msgstr "如果打开，从后面也可以看到文本。如果不打开，从后面看该文本是不可见的。"
 
 #: doc/classes/Label3D.xml doc/classes/SpatialMaterial.xml
 #: doc/classes/SpriteBase3D.xml
@@ -46077,7 +46075,6 @@ msgid "An instance of a [NavigationMesh]."
 msgstr "[NavigationMesh] 的一个实例。"
 
 #: doc/classes/NavigationMeshInstance.xml
-#, fuzzy
 msgid ""
 "An instance of a [NavigationMesh]. It tells the [Navigation] node what can "
 "be navigated and what cannot, based on the [NavigationMesh] resource.\n"
@@ -46096,13 +46093,13 @@ msgid ""
 "The cost of traveling distances inside this region can be controlled with "
 "the [member travel_cost] multiplier."
 msgstr ""
-"[NavigationMesh] 的实例。[Navigation] 节点根据它的 [NavigationMesh] 资源来确"
-"定哪些可以进行导航、哪些不能。\n"
+"[NavigationMesh] 的实例。[Navigation] 节点根据它的 [NavigationMesh] "
+"资源来确定哪些可以进行导航、哪些不能。\n"
 "默认情况下，这个节点会在默认的 [World] 导航地图中进行注册。如果这个节点是 "
 "[Navigation] 节点的子项，就会在该导航节点的导航地图中进行注册。\n"
 "如果两个地图共享类似的边界，就可以相互连接。你可以通过 [method "
-"NavigationServer.map_set_edge_connection_margin] 设置两个顶点连接两条边界所需"
-"的最小距离。\n"
+"NavigationServer.map_set_edge_connection_margin] "
+"设置两个顶点连接两条边界所需的最小距离。\n"
 "[b]注意：[/b]将两个地区的导航网格相互重叠并不足以将其相连。它们必须共享类似的"
 "边界。\n"
 "从另一个地区进入这个地图的消耗可以通过 [member enter_cost] 进行控制。\n"
@@ -46415,7 +46412,6 @@ msgid "A region of the 2D navigation map."
 msgstr "2D 导航地图上的一个地区。"
 
 #: doc/classes/NavigationPolygonInstance.xml
-#, fuzzy
 msgid ""
 "A region of the navigation map. It tells the [Navigation2DServer] what can "
 "be navigated and what cannot, based on its [NavigationPolygon] resource.\n"
@@ -46434,13 +46430,13 @@ msgid ""
 "The pathfinding cost of traveling distances inside this region can be "
 "controlled with the [member travel_cost] multiplier."
 msgstr ""
-"导航地图上的地区。[Navigation2DServer] 根据它的 [NavigationPolygon] 资源来确"
-"定哪些可以进行导航、哪些不能。\n"
+"导航地图上的地区。[Navigation2DServer] 根据它的 [NavigationPolygon] "
+"资源来确定哪些可以进行导航、哪些不能。\n"
 "默认情况下，这个节点会在默认的 [World2D] 导航地图中进行注册。如果这个节点是 "
 "[Navigation2D] 节点的子项，就会在该导航节点的导航地图中进行注册。\n"
 "如果两个地图共享类似的边界，就可以相互连接。你可以通过 [method "
-"Navigation2DServer.map_set_edge_connection_margin] 设置两个顶点连接两条边界所"
-"需的最小距离。\n"
+"Navigation2DServer.map_set_edge_connection_margin] "
+"设置两个顶点连接两条边界所需的最小距离。\n"
 "[b]注意：[/b]将两个地区的导航网格相互重叠并不足以将其相连。它们必须共享类似的"
 "边界。\n"
 "从另一个地区进入这个地图的寻路消耗可以通过 [member enter_cost] 进行控制。\n"
@@ -46587,7 +46583,7 @@ msgstr "控制这个服务器是否激活。"
 msgid ""
 "A [NetworkedMultiplayerPeer] implementation that can be controlled from a "
 "script."
-msgstr ""
+msgstr "对 [NetworkedMultiplayerPeer] 的一种实现，能够通过脚本控制。"
 
 #: doc/classes/NetworkedMultiplayerCustom.xml
 msgid ""
@@ -46596,6 +46592,9 @@ msgid ""
 "Its purpose is to allow adding a new backend for the high-Level multiplayer "
 "API without needing to use GDNative."
 msgstr ""
+"对 [NetworkedMultiplayerPeer] 的一种实现，能够作为 [member MultiplayerAPI."
+"network_peer] 使用并且通过脚本控制。\n"
+"其目的是为高级多人 API 添加新的后端，不必使用 GDNative。"
 
 #: doc/classes/NetworkedMultiplayerCustom.xml
 msgid ""
@@ -46604,24 +46603,26 @@ msgid ""
 "(originating from the [signal packet_generated] signal on the sending peer), "
 "passing it to this method will deliver it locally."
 msgstr ""
+"向本地 [MultiplayerAPI] 传递数据包。\n"
+"当你的脚本通过网络收到其他对等体的数据包时（发送方发出 [signal "
+"packet_generated] 信号），将其传递给这个方法会在本地进行传递。"
 
 #: doc/classes/NetworkedMultiplayerCustom.xml
 msgid ""
 "Initialize the peer with the given [code]peer_id[/code] (must be between 1 "
 "and 2147483647)."
-msgstr ""
+msgstr "使用给定的 [code]peer_id[/code] 初始化该对等体（必须在 1 和 2147483647 "
+"之间）。"
 
 #: doc/classes/NetworkedMultiplayerCustom.xml
-#, fuzzy
 msgid ""
 "Set the state of the connection. See [enum NetworkedMultiplayerPeer."
 "ConnectionStatus]."
-msgstr "返回连接的当前状态。见 [enum ConnectionStatus]。"
+msgstr "设置连接的状态。见 [enum NetworkedMultiplayerPeer.ConnectionStatus]。"
 
 #: doc/classes/NetworkedMultiplayerCustom.xml
-#, fuzzy
 msgid "Set the max packet size that this peer can handle."
-msgstr "设置该实例使用的光照图。"
+msgstr "设置这个对等体所能够处理的最大数据包大小。"
 
 #: doc/classes/NetworkedMultiplayerCustom.xml
 msgid ""
@@ -46630,6 +46631,9 @@ msgid ""
 "the network (which should call [method deliver_packet] with the data when "
 "it's received)."
 msgstr ""
+"当本地 [MultiplayerAPI] 生成数据包时触发。\n"
+"你的脚本应当获取这个数据包并将其通过网络发送给请求的对等体（"
+"对方收到该数据时应当调用 [method deliver_packet]）。"
 
 #: modules/enet/doc_classes/NetworkedMultiplayerENet.xml
 msgid ""
@@ -50336,6 +50340,10 @@ msgid ""
 "series don't support cubemap shadows and will fall back to dual paraboloid "
 "shadows as a result."
 msgstr ""
+"为这个 [OmniLight] 使用的阴影渲染模式。见 [enum ShadowMode]。\n"
+"[b]注意：[/b]在 GLES2 中，只有支持深度立方体贴图功能的 GPU 才支持 [constant "
+"SHADOW_CUBE]。Radeon HD 4000 系列等较老的 GPU "
+"不支持立方体贴图阴影，因此会回退到使用双抛物面阴影。"
 
 #: doc/classes/OmniLight.xml
 msgid ""
@@ -50345,14 +50353,13 @@ msgstr ""
 "阴影被渲染到一个双抛物面纹理。比 [constant SHADOW_CUBE] 更快，但质量较差。"
 
 #: doc/classes/OmniLight.xml
-#, fuzzy
 msgid ""
 "Shadows are rendered to a cubemap. Slower than [constant "
 "SHADOW_DUAL_PARABOLOID], but higher-quality. Only supported on GPUs that "
 "feature support for depth cubemaps."
 msgstr ""
-"阴影被渲染成一个立方体贴图。比 [constant SHADOW_DUAL_PARABOLOID] 慢，但质量更"
-"高。"
+"阴影被渲染至一个立方体贴图。比 [constant SHADOW_DUAL_PARABOLOID] "
+"慢，但质量更高。仅在支持深度立方体贴图功能的 GPU 上支持。"
 
 #: doc/classes/OmniLight.xml
 msgid "Use more detail vertically when computing the shadow."
@@ -72901,7 +72908,6 @@ msgid "The size of one pixel's width on the sprite to scale it in 3D."
 msgstr "精灵上一个像素宽度的大小，以 3D 缩放。"
 
 #: doc/classes/SpriteBase3D.xml
-#, fuzzy
 msgid ""
 "Sets the render priority for the sprite. Higher priority objects will be "
 "sorted in front of lower priority objects.\n"
@@ -72912,9 +72918,9 @@ msgid ""
 "This is because opaque objects are not sorted, while transparent objects are "
 "sorted from back to front (subject to priority)."
 msgstr ""
-"设置精灵的渲染优先级。优先级高的物体将被排序在优先级低的物体前面。\n"
-"[b]注意：[/b]仅在 [member alpha_cut] 为 [constant ALPHA_CUT_DISABLED]（默认"
-"值）时适用。\n"
+"设置该精灵的渲染优先级。优先级高的物体将被排序在优先级低的物体前面。\n"
+"[b]注意：[/b]仅在 [member alpha_cut] 为 [constant "
+"ALPHA_CUT_DISABLED]（默认值）时适用。\n"
 "[b]注意：[/b]仅适用于透明物体的排序。这不会影响透明物体相对于不透明物体的排序"
 "方式。这是因为不透明对象不被排序，而透明对象则从后往前排序（取决于优先级）。"
 
@@ -76499,14 +76505,13 @@ msgid "Sets the text for a specific line."
 msgstr "设置特定行的文本。"
 
 #: doc/classes/TextEdit.xml
-#, fuzzy
 msgid ""
 "Bookmarks the [code]line[/code] if [code]bookmark[/code] is [code]true[/"
 "code]. Deletes the bookmark if [code]bookmark[/code] is [code]false[/code].\n"
 "Bookmarks are shown in the [member breakpoint_gutter]."
 msgstr ""
-"如果 [code]bookmark[/code] 为 true，则为行 [code]line[/code] 设置书签。如果 "
-"[code]bookmark[/code] 为 false，则删除该书签。\n"
+"如果 [code]bookmark[/code] 为 [code]true[/code]，则为行 [code]line[/code] "
+"设置书签。如果 [code]bookmark[/code] 为 [code]false[/code]，则删除该书签。\n"
 "书签显示在 [member breakpoint_gutter] 中。"
 
 #: doc/classes/TextEdit.xml
@@ -80906,14 +80911,12 @@ msgid ""
 msgstr "返回使用 [method set_metadata] 为指定列设置的元数据。"
 
 #: doc/classes/TreeItem.xml
-#, fuzzy
 msgid ""
 "Returns the next sibling TreeItem in the tree or a null object if there is "
 "none."
-msgstr "返回树中的下一个 TreeItem，如果没有，则返回一个空对象。"
+msgstr "返回树中的下一个兄弟 TreeItem，如果没有，则返回一个空对象。"
 
 #: doc/classes/TreeItem.xml
-#, fuzzy
 msgid ""
 "Returns the next visible sibling TreeItem in the tree or a null object if "
 "there is none.\n"
@@ -80921,8 +80924,8 @@ msgid ""
 "visible element in the tree when called on the last visible element, "
 "otherwise it returns [code]null[/code]."
 msgstr ""
-"返回树中下一个可见的 TreeItem，如果没有，则返回空对象。\n"
-"如果 [code]wrap[/code] 被启用，当在最后一个可见元素上调用时，该方法将环绕到树"
+"返回树中下一个可见的兄弟 TreeItem，如果没有，则返回空对象。\n"
+"如果启用了 [code]wrap[/code]，当在最后一个可见元素上调用时，该方法将环绕到树"
 "中的第一个可见元素，否则它将返回 [code]null[/code]。"
 
 #: doc/classes/TreeItem.xml
@@ -80930,14 +80933,12 @@ msgid "Returns the parent TreeItem or a null object if there is none."
 msgstr "返回父级 TreeItem，如果没有，则返回一个空对象。"
 
 #: doc/classes/TreeItem.xml
-#, fuzzy
 msgid ""
 "Returns the previous sibling TreeItem in the tree or a null object if there "
 "is none."
-msgstr "返回树中的前一个 TreeItem，如果没有，则返回一个空对象。"
+msgstr "返回树中的前一个兄弟 TreeItem，如果没有，则返回一个空对象。"
 
 #: doc/classes/TreeItem.xml
-#, fuzzy
 msgid ""
 "Returns the previous visible sibling TreeItem in the tree or a null object "
 "if there is none.\n"
@@ -80945,8 +80946,8 @@ msgid ""
 "visible element in the tree when called on the first visible element, "
 "otherwise it returns [code]null[/code]."
 msgstr ""
-"返回树中前一个可见的 TreeItem，如果没有，则返回 null 对象。\n"
-"如果 [code]wrap[/code] 被启用，当在第一个可见元素上调用时，该方法将环绕到树中"
+"返回树中前一个可见的兄弟 TreeItem，如果没有，则返回 null 对象。\n"
+"如果启用了 [code]wrap[/code]，当在第一个可见元素上调用时，该方法将环绕到树中"
 "最后一个可见元素，否则它将返回 [code]null[/code]。"
 
 #: doc/classes/TreeItem.xml
@@ -89273,6 +89274,10 @@ msgid ""
 "viewport_set_use_32_bpc_depth].\n"
 "[b]Note:[/b] Only available on the GLES3 backend."
 msgstr ""
+"如果为 "
+"[code]true[/code]，该视区会渲染至高动态范围（HDR）而不是标准动态范围（SDR）。"
+"另请参阅 [method viewport_set_use_32_bpc_depth]。\n"
+"[b]注意：[/b]仅在 GLES3 后端可用。"
 
 #: doc/classes/VisualServer.xml
 msgid "If [code]true[/code], the viewport's canvas is not rendered."
@@ -89370,7 +89375,6 @@ msgid ""
 msgstr "设置视窗的 2D/3D 模式。选项见 [enum ViewportUsage] 常量。"
 
 #: doc/classes/VisualServer.xml
-#, fuzzy
 msgid ""
 "If [code]true[/code], allocates the viewport's framebuffer with full "
 "floating-point precision (32-bit) instead of half floating-point precision "
@@ -89378,11 +89382,9 @@ msgid ""
 "on the same [Viewport] to set HDR to [code]true[/code].\n"
 "[b]Note:[/b] Only available on the GLES3 backend."
 msgstr ""
-"如果为 [code]true[/code]，分配该视窗的帧缓冲时将使用完整浮点数精度（32 位）而"
-"不是半浮点数精度（16 位）。仅在同时启用 [member hdr] 时有效。\n"
-"[b]注意：[/b]启用这个设置不会提升渲染质量。使用完整浮点数精度较慢，一般只有要"
-"求更高精度的高级着色器需要使用。如果是要减少条带效应，请启用 [member "
-"debanding]。\n"
+"如果为 [code]true[/code]，分配该视区的帧缓冲时将使用完整浮点数精度（32 "
+"位）而不是半浮点数精度（16 位）。只有在同一个 [Viewport] 上通过 [method "
+"viewport_set_use_32_bpc_depth] 将 HDR 设为 [code]true[/code] 时有效。\n"
 "[b]注意：[/b]仅在 GLES3 后端中可用。"
 
 #: doc/classes/VisualServer.xml

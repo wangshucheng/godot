@@ -3,7 +3,7 @@
 # Copyright (c) 2014-2022 Godot Engine contributors (cf. AUTHORS.md).
 # This file is distributed under the same license as the Godot source code.
 #
-# Haoyu Qiu <timothyqiu32@gmail.com>, 2020, 2021, 2022.
+# Haoyu Qiu <timothyqiu32@gmail.com>, 2020, 2021, 2022, 2023.
 # fangxvan <2661712415@qq.com>, 2020.
 # yzt <834950797@qq.com>, 2020.
 # 懵逼Kitty <m1330586660@163.com>, 2020, 2021.
@@ -37,7 +37,7 @@
 # Juer Genie Whang <2695996944@qq.com>, 2021.
 # SimonChang <simon_chang@foxmail.com>, 2021.
 # zeng haochen <m18621006730@163.com>, 2021.
-# suplife <2634557184@qq.com>, 2021.
+# suplife <2634557184@qq.com>, 2021, 2023.
 # Magian <magian1127@gmail.com>, 2021, 2022.
 # ji233 <27987772@qq.com>, 2021.
 # 沈士超 <shenshichao920@hotmail.com>, 2021.
@@ -64,7 +64,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Godot Engine class reference\n"
 "Report-Msgid-Bugs-To: https://github.com/godotengine/godot\n"
-"PO-Revision-Date: 2022-12-12 06:48+0000\n"
+"PO-Revision-Date: 2023-01-09 20:42+0000\n"
 "Last-Translator: Haoyu Qiu <timothyqiu32@gmail.com>\n"
 "Language-Team: Chinese (Simplified) <https://hosted.weblate.org/projects/"
 "godot-engine/godot-class-reference/zh_Hans/>\n"
@@ -73,7 +73,7 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8-bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
-"X-Generator: Weblate 4.15-dev\n"
+"X-Generator: Weblate 4.15.1-dev\n"
 
 #: doc/tools/make_rst.py
 msgid "Description"
@@ -730,7 +730,6 @@ msgstr ""
 "[/codeblock]"
 
 #: modules/gdscript/doc_classes/@GDScript.xml
-#, fuzzy
 msgid ""
 "Returns an array of dictionaries representing the current call stack. See "
 "also [method print_stack].\n"
@@ -754,7 +753,7 @@ msgid ""
 "get_stack] will not work in projects exported in release mode, or in "
 "projects exported in debug mode if not connected to a debugging server."
 msgstr ""
-"返回一个表示当前调用堆栈的字典数组。\n"
+"返回一个表示当前调用堆栈的字典数组。另请参阅 [method print_stack]。\n"
 "[codeblock]\n"
 "func _ready():\n"
 "    foo()\n"
@@ -769,7 +768,11 @@ msgstr ""
 "[codeblock]\n"
 "[{function:bar, line:12, source:res://script.gd}, {function:foo, line:9, "
 "source:res://script.gd}, {function:_ready, line:6, source:res://script.gd}]\n"
-"[/codeblock]"
+"[/codeblock]\n"
+"[b]注意：[/b]运行中的实例连接到调试服务器（例如编辑器实例）后，[method "
+"get_stack] 才能正常工作。[method get_stack] 无法在使用发布模式导出的项目中正"
+"常工作。使用调试模式导出的项目如果没有连接到调试服务器，则该函数也无法正常工"
+"作。"
 
 #: modules/gdscript/doc_classes/@GDScript.xml
 msgid ""
@@ -1367,6 +1370,15 @@ msgid ""
 "print_stack] will not work in projects exported in release mode, or in "
 "projects exported in debug mode if not connected to a debugging server."
 msgstr ""
+"输出当前代码位置的栈追踪。另请参阅 [method get_stack]。\n"
+"控制台中的输出是类似这样的：\n"
+"[codeblock]\n"
+"Frame 0 - res://test.gd:16 in function '_process'\n"
+"[/codeblock]\n"
+"[b]注意：[/b]运行中的实例连接到调试服务器（例如编辑器实例）后，[method "
+"print_stack] 才能正常工作。[method print_stack] 无法在使用发布模式导出的项目"
+"中正常工作。使用调试模式导出的项目如果没有连接到调试服务器，则该函数也无法正"
+"常工作。"
 
 #: modules/gdscript/doc_classes/@GDScript.xml
 msgid ""
@@ -4407,6 +4419,18 @@ msgid ""
 "[b]Note:[/b] The final colon is required to specify for properly detecting "
 "built-in types."
 msgstr ""
+"提示一个属性代表特定的类型。如果属性为 [constant TYPE_STRING]，则可以通过创建"
+"对话框设置其类型。如果你需要创建一个 [Array] 来放置特定类型的元素，则 "
+"[code]hint_string[/code] 必须使用 [code]\":\"[/code] 来编码嵌套类型，使用 "
+"[code]\"/\"[/code] 来指定 [Resource] 类型。例如：\n"
+"[codeblock]\n"
+"hint_string = \"%s:\" % [TYPE_INT] # 整数数组。\n"
+"hint_string = \"%s:%s:\" % [TYPE_ARRAY, TYPE_REAL] # 浮点数二维数组。\n"
+"hint_string = \"%s/%s:Resource\" % [TYPE_OBJECT, TYPE_OBJECT] # 资源数组。\n"
+"hint_string = \"%s:%s/%s:Resource\" % [TYPE_ARRAY, TYPE_OBJECT, TYPE_OBJECT] "
+"# 资源二维数组。\n"
+"[/codeblock]\n"
+"[b]注意：[/b]最后的冒号是必须的，否则无法正确检测内置类型。"
 
 #: doc/classes/@GlobalScope.xml
 msgid "The property is serialized and saved in the scene file (default)."
@@ -8808,7 +8832,6 @@ msgstr ""
 "较慢。这是因为所有放置在删除元素之后的元素都必须重新索引。"
 
 #: doc/classes/Array.xml
-#, fuzzy
 msgid ""
 "Assigns the given value to all elements in the array. This can typically be "
 "used together with [method resize] to create an array with a given size and "
@@ -8828,7 +8851,9 @@ msgstr ""
 "var array = []\n"
 "array.resize(10)\n"
 "array.fill(0) # 将 10 个元素都初始化为 0。\n"
-"[/codeblock]"
+"[/codeblock]\n"
+"[b]注意：[/b]如果 [code]value[/code] 为引用类型（派生自 [Object]、[Array]、"
+"[Dictionary] 等），那么会用同一个对象的引用填充该数组，即不会创建副本。"
 
 #: doc/classes/Array.xml doc/classes/PoolByteArray.xml
 #: doc/classes/PoolColorArray.xml doc/classes/PoolIntArray.xml
@@ -9076,7 +9101,6 @@ msgstr ""
 "索引之间的变化。"
 
 #: doc/classes/Array.xml
-#, fuzzy
 msgid ""
 "Sorts the array.\n"
 "[b]Note:[/b] The sorting algorithm used is not [url=https://en.wikipedia.org/"
@@ -9092,6 +9116,9 @@ msgid ""
 "[/codeblock]"
 msgstr ""
 "对数组进行排序。\n"
+"[b]注意：[/b]排序所使用的算法并不[url=https://zh.wikipedia.org/wiki/"
+"%E6%8E%92%E5%BA%8F%E7%AE%97%E6%B3%95#%E7%A9%A9%E5%AE%9A%E6%80%A7]稳定[/url]。"
+"也就是说，使用 [method sort] 时相等的值之间的顺序可能会改变。\n"
 "[b]注意：[/b]字符串按字母顺序排序（与自然顺序相反）。当对一个以数字序列结尾的"
 "字符串数组进行排序时，这可能会导致意外的行为。请看下面的例子。\n"
 "[codeblock]\n"
@@ -9101,7 +9128,6 @@ msgstr ""
 "[/codeblock]"
 
 #: doc/classes/Array.xml
-#, fuzzy
 msgid ""
 "Sorts the array using a custom method. The arguments are an object that "
 "holds the method and the name of such method. The custom method receives two "
@@ -9135,8 +9161,11 @@ msgstr ""
 "对于两个元素 [code]a[/code] 和 [code]b[/code]，如果给定的方法返回 "
 "[code]true[/code]，数组中的元素 [code]b[/code] 将排在元素 [code]a[/code] 之"
 "后。\n"
-"[b]注意：[/b]你不能随机化返回值，因为堆排序算法期望一个确定的结果。而这样做会"
-"导致意外的行为。\n"
+"[b]注意：[/b]排序所使用的算法并不[url=https://zh.wikipedia.org/wiki/"
+"%E6%8E%92%E5%BA%8F%E7%AE%97%E6%B3%95#%E7%A9%A9%E5%AE%9A%E6%80%A7]稳定[/url]。"
+"也就是说，使用 [method sort] 时相等的值之间的顺序可能会改变。\n"
+"[b]注意：[/b]不能随机返回一个值，因为堆排序算法期望确定的结果。随机返回一个值"
+"会导致意外的行为。\n"
 "[codeblock]\n"
 "class MyCustomSorter:\n"
 "    static func sort_ascending(a, b):\n"
@@ -9787,7 +9816,7 @@ msgid ""
 "However, at this point in time only one interface can render to an HMD."
 msgstr ""
 "调用这个来初始化这个接口。第一个被初始化的接口确定为主接口，用于渲染输出。\n"
-"在初始化了接口之后，需要启用视窗的 AR/VR 模式，将开始渲染。\n"
+"在初始化了接口之后，需要启用视口的 AR/VR 模式，将开始渲染。\n"
 "[b]注意：[/b]对于任何使用 Godot 主输出的设备，如移动 VR，你必须在主视口上启"
 "用 AR/VR 模式。\n"
 "如果你为一个处理自己输出的平台这样做（如 OpenVR），Godot 就会在屏幕上只显示一"
@@ -9844,9 +9873,9 @@ msgid ""
 "[method get_render_targetsize]). Using a separate viewport node frees up the "
 "main viewport for other purposes."
 msgstr ""
-"这个接口输出到一个外部设备。如果使用主视区，屏幕上的输出是一个未经修改的左眼"
-"或右眼的缓冲区，如果没有将视窗尺寸更改为 [method get_render_targetsize] 的相"
-"同长宽比，则被拉伸。使用一个单独的视窗节点可以释放出主视区，用于其他用途。"
+"这个接口输出到一个外部设备。如果使用主视口，屏幕上的输出是一个未经修改的左眼"
+"或右眼的缓冲区，如果没有将视口尺寸更改为 [method get_render_targetsize] 的相"
+"同长宽比，则被拉伸。使用一个单独的视口节点可以释放出主视口，用于其他用途。"
 
 #: doc/classes/ARVRInterface.xml
 msgid ""
@@ -12402,14 +12431,13 @@ msgid "Clears the audio sample data buffer."
 msgstr "清除音频样本数据缓冲区。"
 
 #: doc/classes/AudioStreamGeneratorPlayback.xml
-#, fuzzy
 msgid ""
 "Returns the number of frames that can be pushed to the audio sample data "
 "buffer without overflowing it. If the result is [code]0[/code], the buffer "
 "is full."
 msgstr ""
-"如果可以将大小为 [code]amount[/code] 的缓冲区推送到音频采样数据缓冲区而不使其"
-"溢出，则返回 [code]true[/code]，否则返回 [code]false[/code]。"
+"返回能够推送到音频采样数据缓冲区而不使其溢出的帧数。如果结果为 [code]0[/"
+"code]，则缓冲区已满。"
 
 #: doc/classes/AudioStreamGeneratorPlayback.xml
 msgid ""
@@ -13042,7 +13070,6 @@ msgstr ""
 "[code]texture(SCREEN_TEXTURE, ...)[/code] 函数在着色器脚本中对其进行访问。"
 
 #: doc/classes/BackBufferCopy.xml
-#, fuzzy
 msgid ""
 "Node for back-buffering the currently-displayed screen. The region defined "
 "in the [BackBufferCopy] node is buffered with the content of the screen it "
@@ -13055,44 +13082,40 @@ msgid ""
 "derived nodes as [i]siblings[/i] to the [BackBufferCopy] node instead of "
 "adding them as children."
 msgstr ""
-"用于对当前屏幕显示进行后台缓冲的节点。BackBufferCopy 节点中定义的区域与其覆盖"
-"屏幕的内容一起缓冲，或者根据拷贝模式设置的整个屏幕进行缓冲。在着色器脚本中使"
-"用 [code]texture(SCREEN_TEXTURE, ...)[/code] 函数来访问缓冲区。\n"
+"用于对当前显示的屏幕进行后台缓冲的节点。[BackBufferCopy] 节点中定义的区域与其"
+"覆盖屏幕的内容一起缓冲，或者根据拷贝模式设置的整个屏幕进行缓冲。在着色器脚本"
+"中使用 [code]texture(SCREEN_TEXTURE, ...)[/code] 函数来访问缓冲区。\n"
 "[b]注意：[/b]由于该节点继承自 [Node2D] 而非 [Control]，锚点和边距将不会应用于"
 "从 [Control] 派生的子节点。这在调整窗口大小时可能会出现问题。为避免这种情况，"
-"请将 [Control] 派生节点添加为 BackBufferCopy 节点的[i]同级[/i]，不要将它们添"
-"加为其子节点。"
+"请将 [Control] 派生节点添加为 [BackBufferCopy] 节点的[i]同级[/i]，不要将它们"
+"添加为其子节点。"
 
 #: doc/classes/BackBufferCopy.xml
 msgid "Buffer mode. See [enum CopyMode] constants."
 msgstr "缓冲区模式。见 [enum CopyMode] 常量。"
 
 #: doc/classes/BackBufferCopy.xml
-#, fuzzy
 msgid ""
 "The area covered by the [BackBufferCopy]. Only used if [member copy_mode] is "
 "[constant COPY_MODE_RECT]."
 msgstr ""
-"BackBufferCopy 覆盖的区域。只有当 [member copy_mode] 是 [constant "
+"该 [BackBufferCopy] 所覆盖的区域。只有当 [member copy_mode] 为 [constant "
 "COPY_MODE_RECT] 时才使用。"
 
 #: doc/classes/BackBufferCopy.xml
-#, fuzzy
 msgid ""
 "Disables the buffering mode. This means the [BackBufferCopy] node will "
 "directly use the portion of screen it covers."
 msgstr ""
-"禁用缓冲模式。这意味着 BackBufferCopy 节点将直接使用它所覆盖的屏幕部分。"
+"禁用缓冲模式。这意味着该 [BackBufferCopy] 节点将直接使用它所覆盖的屏幕部分。"
 
 #: doc/classes/BackBufferCopy.xml
-#, fuzzy
 msgid "[BackBufferCopy] buffers a rectangular region."
-msgstr "BackBufferCopy 缓冲一个矩形区域。"
+msgstr "[BackBufferCopy] 缓冲一个矩形区域。"
 
 #: doc/classes/BackBufferCopy.xml
-#, fuzzy
 msgid "[BackBufferCopy] buffers the entire screen."
-msgstr "BackBufferCopy 缓冲整个屏幕。"
+msgstr "[BackBufferCopy] 缓冲整个屏幕。"
 
 #: doc/classes/BakedLightmap.xml
 msgid "Prerendered indirect light map for a scene."
@@ -14561,9 +14584,9 @@ msgid ""
 "[Viewport] (or higher viewports) can't be displayed."
 msgstr ""
 "相机是一个特殊节点，用于显示从其当前位置可见的内容。相机在最近的 [Viewport] "
-"节点中注册自己（当树上行）。每个视区只能激活一个相机。如果在树上没有可用的视"
-"区，相机将在全局视区中注册。换句话说，相机只是为 [Viewport] 提供 3D 显示能"
-"力，如果没有，则无法显示在该 [Viewport] 或更高视区中注册的场景。"
+"节点中注册自己（当树上行）。每个视口只能激活一个相机。如果在树上没有可用的视"
+"口，相机将在全局视口中注册。换句话说，相机只是为 [Viewport] 提供 3D 显示能"
+"力，如果没有，则无法显示在该 [Viewport] 或更高视口中注册的场景。"
 
 #: doc/classes/Camera.xml
 msgid ""
@@ -14720,7 +14743,7 @@ msgid ""
 "[/codeblock]"
 msgstr ""
 "返回 [Viewport] 矩形中的 2D 坐标，该坐标映射到世界空间中给定的 3D 点。\n"
-"[b]注意：[/b]当使用它来定位 3D 视区上的 GUI 元素时，如果 3D 点在相机后面，请"
+"[b]注意：[/b]当使用它来定位 3D 视口上的 GUI 元素时，如果 3D 点在相机后面，请"
 "使用 [method is_position_behind] 来防止它们显示。\n"
 "[codeblock]\n"
 "# 这个代码块是继承自 Spatial 的脚本的一部分。\n"
@@ -14768,7 +14791,7 @@ msgstr ""
 "[code]_process[/code] 方法中的变化。多普勒效果只对 [member "
 "AudioStreamPlayer3D.doppler_tracking] 设置为 [constant AudioStreamPlayer3D."
 "DOPPLER_TRACKING_DISABLED] 以外的值的 [AudioStreamPlayer3D] 节点进行模拟。\n"
-"[b]注意：[/b]要在编辑器中切换多普勒效果预览，使用 3D 视区左上角的透视菜单，并"
+"[b]注意：[/b]要在编辑器中切换多普勒效果预览，使用 3D 视口左上角的透视菜单，并"
 "切换为[b]启用多普勒[/b]。"
 
 #: doc/classes/Camera.xml
@@ -14816,7 +14839,7 @@ msgstr ""
 
 #: doc/classes/Camera.xml
 msgid "The horizontal (X) offset of the camera viewport."
-msgstr "相机视窗的水平（X）偏移量。"
+msgstr "相机视口的水平（X）偏移量。"
 
 #: doc/classes/Camera.xml
 msgid ""
@@ -14852,7 +14875,7 @@ msgstr ""
 
 #: doc/classes/Camera.xml
 msgid "The vertical (Y) offset of the camera viewport."
-msgstr "相机视窗的垂直（Y）偏移量。"
+msgstr "相机视口的垂直（Y）偏移量。"
 
 #: doc/classes/Camera.xml
 msgid ""
@@ -15023,7 +15046,7 @@ msgstr ""
 msgid ""
 "Make this the current 2D camera for the scene (viewport and layer), in case "
 "there are many cameras in the scene."
-msgstr "使之成为该场景（视区和图层）的当前 2D 相机，以防场景中有很多相机。"
+msgstr "使之成为该场景（视口和图层）的当前 2D 相机，以防场景中有很多相机。"
 
 #: doc/classes/Camera2D.xml
 msgid ""
@@ -15070,7 +15093,7 @@ msgid ""
 "or not a [Viewport], uses the default viewport instead."
 msgstr ""
 "连接到 [Camera2D] 的自定义 [Viewport] 节点。如果为 [code]null[/code] 或者不"
-"是 [Viewport]，则使用默认的视区。"
+"是 [Viewport]，则使用默认的视口。"
 
 #: doc/classes/Camera2D.xml
 msgid ""
@@ -15883,11 +15906,11 @@ msgstr "返回此项目的变换矩阵。"
 
 #: doc/classes/CanvasItem.xml
 msgid "Returns the viewport's boundaries as a [Rect2]."
-msgstr "以 [Rect2] 形式返回视区的边界。"
+msgstr "以 [Rect2] 形式返回视口的边界。"
 
 #: doc/classes/CanvasItem.xml
 msgid "Returns this item's transform in relation to the viewport."
-msgstr "返回这个项目相对于视区的变换。"
+msgstr "返回这个项目相对于视口的变换。"
 
 #: doc/classes/CanvasItem.xml
 msgid "Returns the [World2D] where this item is in."
@@ -16281,7 +16304,7 @@ msgid ""
 "Together with [member follow_viewport_scale] it can be used for a pseudo 3D "
 "effect."
 msgstr ""
-"启用时，该 [CanvasLayer] 会使用视区的变换，所以它会随相机移动，而不是保持在屏"
+"启用时，该 [CanvasLayer] 会使用视口的变换，所以它会随相机移动，而不是保持在屏"
 "幕上的某个固定位置。\n"
 "与 [member follow_viewport_scale] 配合可以实现伪 3D 效果。"
 
@@ -19193,7 +19216,7 @@ msgid ""
 msgstr ""
 "加载指定为参数的配置文件。解析文件的内容并将其加载到调用该方法的 "
 "[ConfigFile] 对象中。\n"
-"返回 [enum Error] 代码常量之一（成功时返回 [code]OK[/code]）。"
+"返回 [enum Error] 错误码常量（成功时为 [code]OK[/code]）。"
 
 #: doc/classes/ConfigFile.xml
 msgid ""
@@ -19204,7 +19227,7 @@ msgid ""
 msgstr ""
 "加载指定为参数的加密配置文件，使用提供的 [code]key[/code] 对其解密。解析文件"
 "的内容并将其加载到调用该方法的 [ConfigFile] 对象中。\n"
-"返回 [enum Error] 代码常量之一（成功时返回 [code]OK[/code]）。"
+"返回 [enum Error] 错误码常量（成功时为 [code]OK[/code]）。"
 
 #: doc/classes/ConfigFile.xml
 msgid ""
@@ -19215,7 +19238,7 @@ msgid ""
 msgstr ""
 "加载作为参数的加密配置文件，使用提供的 [code]password[/code] 解密。该文件的内"
 "容被解析并加载到调用该方法的 [ConfigFile] 对象中。\n"
-"返回 [enum Error] 代码常量之一（成功时返回 [code]OK[/code]）。"
+"返回 [enum Error] 错误码常量（成功时为 [code]OK[/code]）。"
 
 #: doc/classes/ConfigFile.xml
 msgid ""
@@ -19225,7 +19248,7 @@ msgid ""
 msgstr ""
 "将传递的字符串解析为配置文件的内容。该字符串被解析并加载到调用该方法的 "
 "ConfigFile 对象中。\n"
-"返回 [enum Error] 常量之一，成功时返回 [code]OK[/code]。"
+"返回 [enum Error] 错误码常量（成功时为 [code]OK[/code]）。"
 
 #: doc/classes/ConfigFile.xml
 msgid ""
@@ -19235,7 +19258,7 @@ msgid ""
 msgstr ""
 "将 [ConfigFile] 对象的内容保存到指定为参数的文件中。输出文件使用 INI 样式的结"
 "构。\n"
-"返回 [enum Error] 代码常量之一（成功时返回 [code]OK[/code]）。"
+"返回 [enum Error] 错误码常量（成功时为 [code]OK[/code]）。"
 
 #: doc/classes/ConfigFile.xml
 msgid ""
@@ -19246,7 +19269,7 @@ msgid ""
 msgstr ""
 "使用提供的 [code]key[/code] 将 [ConfigFile] 对象的内容保存到作为参数指定的 "
 "AES-256 加密文件中。输出文件使用 INI 样式的结构。\n"
-"返回 [enum Error] 代码常量之一（成功时返回 [code]OK[/code]）。"
+"返回 [enum Error] 错误码常量（成功时为 [code]OK[/code]）。"
 
 #: doc/classes/ConfigFile.xml
 msgid ""
@@ -19257,7 +19280,7 @@ msgid ""
 msgstr ""
 "将 [ConfigFile] 对象的内容保存到作为参数指定的 AES-256 加密文件中，使用提供"
 "的 [code]password[/code]进行加密。输出文件使用 INI 风格的结构。\n"
-"返回 [enum Error] 代码常量之一（成功时返回 [code]OK[/code]）。"
+"返回 [enum Error] 错误码常量（成功时为 [code]OK[/code]）。"
 
 #: doc/classes/ConfigFile.xml
 msgid ""
@@ -19380,7 +19403,7 @@ msgid ""
 "code] methods provided by this class."
 msgstr ""
 "所有 UI 相关节点的基类。[Control] 具有定义其范围的边界矩形、相对于其父控件或"
-"当前视窗的锚点位置以及表示锚点偏移的边距。当节点、其任何父节点或屏幕尺寸发生"
+"当前视口的锚点位置以及表示锚点偏移的边距。当节点、其任何父节点或屏幕尺寸发生"
 "变化时，边距会自动更新。\n"
 "更多关于 Godot 的 UI 系统、锚点、边距和容器的信息，请参阅手册中的相关教程。要"
 "构建灵活的 UI，您需要混合使用从 [Control] 和 [Container] 节点继承的 UI 元"
@@ -19557,8 +19580,8 @@ msgid ""
 "propagating, even to nodes listening to [method Node._unhandled_input] or "
 "[method Node._unhandled_key_input]."
 msgstr ""
-"将输入事件标记为已处理。一旦接受输入事件，它就会停止传播，甚至传播到正在侦听"
-"[method Node._unhandled_input]或[method Node._unhandled_key_input]的节点。"
+"将输入事件标记为已处理。一旦接受输入事件，传播就会停止，不会再传播到正在侦听 "
+"[method Node._unhandled_input] 和 [method Node._unhandled_key_input] 的节点。"
 
 #: doc/classes/Control.xml
 msgid ""
@@ -20647,7 +20670,7 @@ msgid ""
 "handled."
 msgstr ""
 "关闭模态控件时，输入是否传播。\n"
-"如果为 [code]false[/code]，事件处理将停止在视区的输入事件处理。该视区会先将模"
+"如果为 [code]false[/code]，事件处理将停止在视口的输入事件处理。该视口会先将模"
 "态控件隐藏，然后再将输入标记为已处理。"
 
 #: doc/classes/Control.xml
@@ -20800,7 +20823,7 @@ msgstr ""
 "这个值进行缩放。\n"
 "[b]注意：[/b]这个属性主要用于动画用途。当控件被缩放时，控件内的文本将看起来是"
 "像素化或模糊的。要在你的项目支持多种分辨率，请使用[url=$DOCS_URL/tutorials/"
-"rendering/multiple_resolutions.html]文档[/url]中描述的合适的视窗拉伸模式，而"
+"rendering/multiple_resolutions.html]文档[/url]中描述的合适的视口拉伸模式，而"
 "不是单独缩放控件。\n"
 "[b]注意：[/b]如果控件节点是 [Container] 节点的子节点，当场景实例化时，缩放将"
 "被重置为 [code]Vector2(1, 1)[/code]。要在实例化时设置控件的缩放，使用 "
@@ -24076,7 +24099,7 @@ msgstr ""
 
 #: doc/classes/CylinderShape.xml
 msgid "Cylinder shape for collisions."
-msgstr "碰撞用的圆柱体形状。"
+msgstr "用于碰撞的圆柱体形状。"
 
 #: doc/classes/CylinderShape.xml
 msgid ""
@@ -24085,6 +24108,9 @@ msgid ""
 "engine, there are several known bugs with cylinder collision shapes. Using "
 "[CapsuleShape] or [BoxShape] instead is recommended."
 msgstr ""
+"用于碰撞的圆柱体形状。\n"
+"[b]注意：[/b]使用 GodotPhysics 而非默认的 Bullet 物理引擎时，圆柱体碰撞形状存"
+"在已知的问题。推荐使用 [CapsuleShape] 或 [BoxShape] 代替。"
 
 #: doc/classes/CylinderShape.xml
 msgid "The cylinder's height."
@@ -24665,7 +24691,7 @@ msgstr ""
 "将当前打开的目录改为参数传递的目录。参数可以是相对于当前目录的（例如 "
 "[code]newdir[/code] 或 [code].../newdir[/code]），也可以是绝对路径（例如 "
 "[code]/tmp/newdir[/code] 或 [code]res://somedir/newdir[/code]）。\n"
-"返回 [enum Error] 代码常量之一（[code]OK[/code] 成功时）。"
+"返回 [enum Error] 错误码常量（成功时为 [code]OK[/code]）。"
 
 #: doc/classes/Directory.xml
 msgid ""
@@ -24677,7 +24703,7 @@ msgid ""
 msgstr ""
 "将 [code]from[/code] 文件复制到 [code]to[/code] 目标位置。两个参数都应该是相"
 "对或绝对文件的路径。如果目标文件存在且没有访问保护，则会被覆盖。\n"
-"返回 [enum Error] 代码常量之一（成功时返回 [code]OK[/code]）。"
+"返回 [enum Error] 错误码常量（成功时为 [code]OK[/code]）。"
 
 #: doc/classes/Directory.xml
 msgid ""
@@ -24685,8 +24711,8 @@ msgid ""
 "call is a directory ([code].[/code] and [code]..[/code] are considered "
 "directories)."
 msgstr ""
-"返回上一次 [method get_next] 调用处理的当前项目是否为目录（[code].[/code]和"
-"[code].[/code]被认为是目录）。"
+"返回上一次 [method get_next] 调用处理的当前项目是否为目录（[code].[/code] 和 "
+"[code].[/code] 属于目录）。"
 
 #: doc/classes/Directory.xml
 msgid ""
@@ -24707,16 +24733,16 @@ msgid ""
 "Returns the absolute path to the currently opened directory (e.g. "
 "[code]res://folder[/code] or [code]C:\\tmp\\folder[/code])."
 msgstr ""
-"返回当前打开目录的绝对路径（例如[code]res://文件夹[/code]或[code]C:\\tmp\\文"
-"件夹[/code]）。"
+"返回当前打开目录的绝对路径（例如 [code]res://文件夹[/code] 或 [code]C:"
+"\\tmp\\文件夹[/code]）。"
 
 #: doc/classes/Directory.xml
 msgid ""
 "Returns the currently opened directory's drive index. See [method get_drive] "
 "to convert returned index to the name of the drive."
 msgstr ""
-"返回当前打开的目录的驱动器索引。请参阅[method get_drive]将返回的索引转换为驱"
-"动器的名称。"
+"返回当前打开的目录的驱动器索引。请参阅 [method get_drive] 将返回的索引转换为"
+"驱动器的名称。"
 
 #: doc/classes/Directory.xml
 msgid ""
@@ -24757,11 +24783,12 @@ msgid ""
 "closes the stream automatically (i.e. [method list_dir_end] would not be "
 "mandatory in such a case)."
 msgstr ""
-"返回当前目录中的下一个元素（文件或目录）（包括[code].[/code]和[code].[/"
-"code]，除非[code]skip_navigational[/code]被赋予[method list_dir_begin]）。\n"
+"返回当前目录中的下一个元素（文件或目录。除非将 [code]skip_navigational[/"
+"code] 赋予 [method list_dir_begin]，否则包括 [code].[/code] 和 [code].[/"
+"code]）。\n"
 "返回的是文件或目录的名称（而不是它的完整路径）。一旦流被完全处理，该方法返回"
-"一个空的String，并自动关闭流（即在这种情况下，[method list_dir_end]将不是强制"
-"性的）。"
+"一个空的 String，并自动关闭流（即在这种情况下，[method list_dir_end] 将不是强"
+"制性的）。"
 
 #: doc/classes/Directory.xml
 msgid ""
@@ -24808,7 +24835,7 @@ msgstr ""
 "创建一个目录。参数可以是当前目录的相对路径，也可以是绝对路径。目标目录应该放"
 "置在一个已经存在的目录中（如果要递归创建完整的路径，请参阅 [method "
 "make_dir_recursive]）。\n"
-"返回 [enum Error] 代码常量之一（成功时返回 [code]OK[/code]）。"
+"返回 [enum Error] 错误码常量（成功时为 [code]OK[/code]）。"
 
 #: doc/classes/Directory.xml
 msgid ""
@@ -24817,9 +24844,9 @@ msgid ""
 "to the current directory, or an absolute path.\n"
 "Returns one of the [enum Error] code constants ([code]OK[/code] on success)."
 msgstr ""
-"通过递归调用 [method make_dir]方法，创建一个目标目录和其路径中所有必要的中间"
+"通过递归调用 [method make_dir] 方法，创建一个目标目录和其路径中所有必要的中间"
 "目录。参数可以是相对于当前目录的，也可以是绝对路径。\n"
-"返回 [enum Error] 代码常量之一（成功时返回 [code]OK[/code]）。"
+"返回 [enum Error] 错误码常量（成功时为 [code]OK[/code]）。"
 
 #: doc/classes/Directory.xml
 msgid ""
@@ -24833,7 +24860,7 @@ msgstr ""
 "folder[/code]），用户目录（[code]user:// folder[/code]）或以下位置的绝对路径"
 "内：用户文件系统（例如 [code]/tmp/folder[/code] 或 [code]C:\\tmp\\folder[/"
 "code]）。\n"
-"返回 [enum Error] 代码常量之一（成功时返回 [code]OK[/code]）。"
+"返回 [enum Error] 错误码常量（成功时为 [code]OK[/code]）。"
 
 #: doc/classes/Directory.xml
 msgid ""
@@ -24847,7 +24874,7 @@ msgstr ""
 "永久删除目标文件或空目录。参数可以是相对于当前目录的，也可以是绝对路径。如果"
 "目标目录不是空的，操作将失败。\n"
 "如果你不想永久删除该文件/目录，请使用 [method OS.move_to_trash] 代替。\n"
-"返回 [enum Error] 代码常量之一（成功时返回 [code]OK[/code]）。"
+"返回 [enum Error] 错误码常量（成功时为 [code]OK[/code]）。"
 
 #: doc/classes/Directory.xml
 msgid ""
@@ -24860,7 +24887,7 @@ msgstr ""
 "将 [code]from[/code] 文件或目录重命名且移动到 [code]to[/code] 目标。两个参数"
 "都应该是文件或目录的相对路径或绝对路径。如果目标文件或目录存在且不受访问保"
 "护，它将被覆盖。\n"
-"返回 [enum Error] 代码常量之一，成功时返回 [code]OK[/code]。"
+"返回 [enum Error] 错误码常量（成功时为 [code]OK[/code]）。"
 
 #: doc/classes/DTLSServer.xml
 msgid "Helper class to implement a DTLS server."
@@ -25127,7 +25154,7 @@ msgid ""
 "This can be a negative number to make the distance between words smaller."
 msgstr ""
 "空格字符（在 [member extra_spacing_char] 之外）的额外间距，单位为像素。\n"
-"这可以是负数，使字符之间的距离更小。"
+"可以是负数，会使字符之间的距离更小。"
 
 #: doc/classes/DynamicFont.xml
 msgid "Extra spacing at the top in pixels."
@@ -25166,9 +25193,9 @@ msgid ""
 "control whose size changes over time, unless a pixel art aesthetic is "
 "desired."
 msgstr ""
-"如果为 [code]true[/code]，将使用过滤功能。如果字体过度采样被禁用或无效，这将"
-"使字体在缩放时变得模糊，而非像素化。当在尺寸随时变化的控件中使用字体时，建议"
-"启用这个功能，除非是像素设计。"
+"如果为 [code]true[/code]，将使用过滤功能。如果字体过采样被禁用或无法生效，字"
+"体在缩放时会变得模糊，而非像素化。在尺寸会随时变化的控件中使用字体时，建议启"
+"用这个功能，除非想要像素画风格。"
 
 #: doc/classes/DynamicFont.xml
 msgid ""
@@ -25176,8 +25203,8 @@ msgid ""
 "appearance when downscaling it if font oversampling is disabled or "
 "ineffective."
 msgstr ""
-"如果为 [code]true[/code]，将使用 mipmap 多级渐远纹理。在字体过度采样被禁用或"
-"无效时，可改善字体缩小时的表现。"
+"如果为 [code]true[/code]，将使用 mipmap 多级渐远纹理。在字体过采样被禁用或无"
+"法生效时，可改善字体缩小时的表现。"
 
 #: doc/classes/DynamicFont.xml
 msgid "Spacing at the top."
@@ -25229,7 +25256,7 @@ msgid ""
 "and viewport stretch mode."
 msgstr ""
 "如果设为比 [code]0.0[/code] 大的值，则会覆盖默认的字体过采样，忽略 [member "
-"SceneTree.use_font_oversampling] 的值和视口拉伸模式。"
+"SceneTree.use_font_oversampling] 的值和视口的拉伸模式。"
 
 #: doc/classes/DynamicFontData.xml
 msgid "Disables font hinting (smoother but less crisp)."
@@ -26338,7 +26365,7 @@ msgstr ""
 "新）加载场景，渲染网格预览，检查和编辑资源和对象。它允许自定义窗口，保存和"
 "（重新）加载场景，渲染网格预览，检查和编辑资源和对象，并提供对 "
 "[EditorSettings]、[EditorFileSystem]、[EditorResourcePreview]、"
-"[ScriptEditor]、编辑器视窗和场景信息的访问。\n"
+"[ScriptEditor]、编辑器视口和场景信息的访问。\n"
 "[b]注意：[/b]这个类不应该直接实例化。相反，使用 [method EditorPlugin."
 "get_editor_interface] 访问单例。"
 
@@ -26414,7 +26441,7 @@ msgid ""
 msgstr ""
 "返回主编辑器控件。将其作为主屏幕的父控件。\n"
 "[b]注意：[/b]这将返回包含整个编辑器的主编辑器控件，而不是具体的 2D或 3D 视"
-"窗。\n"
+"口。\n"
 "[b]警告：[/b]删除和释放这个节点将使编辑器的一部分失去作用，并可能导致崩溃。"
 
 #: doc/classes/EditorInterface.xml
@@ -26734,7 +26761,7 @@ msgid ""
 "custom gizmos to the 3D preview viewport for a [Spatial].\n"
 "See [method add_inspector_plugin] for an example of how to register a plugin."
 msgstr ""
-"注册一个新的 [EditorSpatialGizmoPlugin]。小工具插件可以在 3D 预览视区中为 "
+"注册一个新的 [EditorSpatialGizmoPlugin]。小工具插件可以在 3D 预览视口中为 "
 "[Spatial] 添加自定义的小工具。\n"
 "注册插件的示例见 [method add_inspector_plugin]。"
 
@@ -26830,8 +26857,8 @@ msgid ""
 "    return false\n"
 "[/codeblock]"
 msgstr ""
-"引擎会在 2D 编辑器的视区发生更新时调用。使用 [code]overlay[/code] [Control] "
-"进行绘制。你可以通过调用 [method update_overlays] 手动更新视窗。\n"
+"引擎会在 2D 编辑器的视口发生更新时调用。使用 [code]overlay[/code] [Control] "
+"进行绘制。你可以通过调用 [method update_overlays] 手动更新视口。\n"
 "[codeblock]\n"
 "func forward_canvas_draw_over_viewport(overlay):\n"
 "    # 在光标位置画一个圆。\n"
@@ -26840,7 +26867,7 @@ msgstr ""
 "\n"
 "func forward_canvas_gui_input(event):\n"
 "    if event is InputEventMouseMotion:\n"
-"        # 当光标被移动时，重绘视窗。\n"
+"        # 当光标被移动时，重绘视口。\n"
 "        update_overlays()\n"
 "        return true\n"
 "    return false\n"
@@ -26883,7 +26910,7 @@ msgid ""
 "    return forward\n"
 "[/codeblock]"
 msgstr ""
-"当当前编辑场景中有一个根节点时被调用，[method handles]实现，在2D视窗中发生按"
+"当当前编辑场景中有一个根节点时被调用，[method handles]实现，在2D视口中发生按"
 "键输入[InputEvent]。拦截按键输入[InputEvent]，如果[code]return true[/code] "
 "[EditorPlugin]消耗键值[code]event[/code]，否则将键值[code]event[/code]转发给"
 "其他Editor类。例子:\n"
@@ -26922,9 +26949,9 @@ msgid ""
 "    return false\n"
 "[/codeblock]"
 msgstr ""
-"引擎会在 3D 编辑器的视区发生更新时调用。使用 [code]overlay[/code] 控件 "
+"引擎会在 3D 编辑器的视口发生更新时调用。使用 [code]overlay[/code] 控件 "
 "[Control] 进行绘制。你可以通过调用 [method update_overlays] 更新覆盖手动更新"
-"视窗。\n"
+"视口。\n"
 "[codeblock]\n"
 "func forward_spatial_draw_over_viewport(overlay):\n"
 "    # 在光标位置画一个圆。\n"
@@ -26932,7 +26959,7 @@ msgstr ""
 "\n"
 "func forward_spatial_gui_input(camera, event):\n"
 "     if event is InputEventMouseMotion:\n"
-"        # 当光标被移动时，重绘视窗。\n"
+"        # 当光标被移动时，重绘视口。\n"
 "        update_overlays()\n"
 "        return true\n"
 "    return false\n"
@@ -26975,7 +27002,7 @@ msgid ""
 "    return forward\n"
 "[/codeblock]"
 msgstr ""
-"在当前编辑的场景中存在根节点时调用，实现[method handles]并在3D视窗中发生按键"
+"在当前编辑的场景中存在根节点时调用，实现[method handles]并在3D视口中发生按键"
 "输入[InputEvent]。拦截按键输入[InputEvent]，如果[code]return true[/code]，则"
 "[EditorPlugin]会使用键值[code]event[/code]，否则将键值[code]event[/code]转发"
 "到其他Editor类。例子：\n"
@@ -27245,7 +27272,7 @@ msgid ""
 "once and it will work permanently for this plugin."
 msgstr ""
 "启用 2D 编辑器的 [method forward_canvas_force_draw_over_viewport] 和 3D 编辑"
-"器的 [method forward_spatial_force_draw_over_viewport] 在其视窗更新时的调用。"
+"器的 [method forward_spatial_force_draw_over_viewport] 在其视口更新时的调用。"
 "你只需要调用这个方法一次，它就会对这个插件永久起作用。"
 
 #: doc/classes/EditorPlugin.xml
@@ -27312,7 +27339,7 @@ msgid ""
 "forward_spatial_draw_over_viewport] and [method "
 "forward_spatial_force_draw_over_viewport] to be called."
 msgstr ""
-"更新 2D 和 3D 编辑器视窗的覆盖层。导致方法 [method "
+"更新 2D 和 3D 编辑器视口的覆盖层。导致方法 [method "
 "forward_canvas_draw_over_viewport]、[method "
 "forward_canvas_force_draw_over_viewport]、[method "
 "forward_spatial_draw_over_viewport] 和 [method "
@@ -27890,7 +27917,6 @@ msgid "Base script that can be used to add extension functions to the editor."
 msgstr "可用于为编辑器添加扩展功能的基础脚本。"
 
 #: doc/classes/EditorScript.xml
-#, fuzzy
 msgid ""
 "Scripts extending this class and implementing its [method _run] method can "
 "be executed from the Script Editor's [b]File > Run[/b] menu option (or by "
@@ -27927,7 +27953,9 @@ msgstr ""
 "    print(\"Hello from the Godot Editor!\")\n"
 "[/codeblock]\n"
 "[b]注意：[/b]脚本在编辑器上下文中运行，这意味着输出在与编辑器一起启动的控制台"
-"窗口（stdout），而不是通常的 Godot [b]输出[/b]面板 。"
+"窗口（stdout），而不是通常的 Godot [b]输出[/b]面板 。\n"
+"[b]注意：[/b]EditorScript 进行了引用计数，不再被引用时就会被销毁。在进行异步"
+"操作时，如果不再存在对该脚本的引用，就可能造成错误。"
 
 #: doc/classes/EditorScript.xml
 msgid "This method is executed by the Editor when [b]File > Run[/b] is used."
@@ -37769,6 +37797,7 @@ msgstr ""
 "[b]注意：[/b]这个值在 Android 和 iOS 上可立即被硬件传感器的值所覆盖。"
 
 #: doc/classes/Input.xml
+#, fuzzy
 msgid ""
 "Sets a custom mouse cursor image, which is only visible inside the game "
 "window. The hotspot can also be specified. Passing [code]null[/code] to the "
@@ -37780,7 +37809,11 @@ msgid ""
 "using an [AnimatedTexture], only the first frame will be displayed.\n"
 "[b]Note:[/b] Only images imported with the [b]Lossless[/b], [b]Lossy[/b] or "
 "[b]Uncompressed[/b] compression modes are supported. The [b]Video RAM[/b] "
-"compression mode can't be used for custom cursors."
+"compression mode can't be used for custom cursors.\n"
+"[b]Note:[/b] On the web platform, the maximum allowed cursor image size is "
+"128×128. Cursor images larger than 32×32 will also only be displayed if the "
+"mouse cursor image is entirely located within the page for [url=https://"
+"chromestatus.com/feature/5825971391299584]security reasons[/url]."
 msgstr ""
 "设置一个自定义鼠标光标图像，该图像仅当游戏窗口内可见。还可以指定热点。将 "
 "[code]null[/code] 传递给 image 参数将重置为系统光标。有关详细信息，请参阅 "
@@ -37801,7 +37834,7 @@ msgid ""
 "[b]Note:[/b] This method generates an [InputEventMouseMotion] to update "
 "cursor immediately."
 msgstr ""
-"设置该视区中使用的默认光标形状，而不是 [constant CURSOR_ARROW]。\n"
+"设置该视口中使用的默认光标形状，而不是 [constant CURSOR_ARROW]。\n"
 "[b]注意：[/b]如果要更改 [Control] 节点的默认光标形状，请改用 [member Control."
 "mouse_default_cursor_shape]。\n"
 "[b]注意：[/b]这个方法会生成一个 [InputEventMouseMotion] 以立即更新光标。"
@@ -41529,7 +41562,6 @@ msgstr ""
 "如果为 [code]true[/code]，则光线的效果会逆转，使区域变暗并投射明亮的阴影。"
 
 #: doc/classes/Light.xml
-#, fuzzy
 msgid ""
 "The size of the light in Godot units. Only considered in baked lightmaps and "
 "only if [member light_bake_mode] is set to [constant BAKE_ALL]. Increasing "
@@ -41540,7 +41572,9 @@ msgid ""
 msgstr ""
 "灯光的大小，使用 Godot 的单位。只在烘焙的光照贴图中考虑，并且只在 [member "
 "light_bake_mode] 被设置为 [constant BAKE_ALL] 时考虑。增加这个值会使阴影看起"
-"来更模糊。这可以在一定程度上用于模拟区域灯光。"
+"来更模糊。这可以在一定程度上用于模拟区域灯光。\n"
+"[b]注意：[/b][member light_size] 不受 [member Spatial.scale] 的影响（无论是该"
+"灯光的缩放还是其父节点的缩放）。"
 
 #: doc/classes/Light.xml
 msgid ""
@@ -44044,7 +44078,7 @@ msgid ""
 "MeshInstance2D[/b] at the top of the 2D editor viewport."
 msgstr ""
 "用于在 2D 中显示 [Mesh] 的节点。可以通过编辑器工具栏上的工具从现有的 "
-"[Sprite] 构建。选中 [Sprite] 节点，然后在 2D 编辑器视区顶部选择[b]精灵 > 转换"
+"[Sprite] 构建。选中 [Sprite] 节点，然后在 2D 编辑器视口顶部选择[b]精灵 > 转换"
 "为 MeshInstance2D[/b]。"
 
 #: doc/classes/MeshInstance2D.xml
@@ -45547,7 +45581,6 @@ msgid "3D agent used in navigation for collision avoidance."
 msgstr "在导航中用于防撞的 3D 代理。"
 
 #: doc/classes/NavigationAgent.xml
-#, fuzzy
 msgid ""
 "3D agent that is used in navigation to reach a location while avoiding "
 "static and dynamic obstacles. The dynamic obstacles are avoided using RVO "
@@ -45574,7 +45607,9 @@ msgstr ""
 "[NavigationAgent] 是物理安全的。\n"
 "[b]注意：[/b]使用 [method set_target_location] 之后，必须在每个物理帧使用一"
 "次 [method get_next_location] 函数来更新 NavigationAgent 的内部路径逻辑。这个"
-"函数返回的向量位置应该用作该代理的父节点的下一次移动位置。"
+"函数返回的向量位置应该用作该代理的父节点的下一次移动位置。\n"
+"[b]注意：[/b]默认情况下，避障的大强度计算是在单独的线程中进行的。在不支持多线"
+"程的 HTML5 导出中，则会在主线程中进行，可能导致性能问题。"
 
 #: doc/classes/NavigationAgent.xml doc/classes/NavigationAgent2D.xml
 msgid ""
@@ -45867,7 +45902,6 @@ msgid "2D agent used in navigation for collision avoidance."
 msgstr "在导航中用于防撞的 2D 代理。"
 
 #: doc/classes/NavigationAgent2D.xml
-#, fuzzy
 msgid ""
 "2D agent that is used in navigation to reach a location while avoiding "
 "static and dynamic obstacles. The dynamic obstacles are avoided using RVO "
@@ -45894,7 +45928,9 @@ msgstr ""
 "[NavigationAgent2D] 是物理安全的。\n"
 "[b]注意：[/b]使用 [method set_target_location] 之后，必须在每个物理帧使用一"
 "次 [method get_next_location] 函数来更新 NavigationAgent 的内部路径逻辑。这个"
-"函数返回的向量位置应该用作该代理的父节点的下一次移动位置。"
+"函数返回的向量位置应该用作该代理的父节点的下一次移动位置。\n"
+"[b]注意：[/b]默认情况下，避障的大强度计算是在单独的线程中进行的。在不支持多线"
+"程的 HTML5 导出中，则会在主线程中进行，可能导致性能问题。"
 
 #: doc/classes/NavigationAgent2D.xml
 msgid ""
@@ -46763,7 +46799,6 @@ msgid "Server interface for low-level 3D navigation access."
 msgstr "访问底层 3D 导航的服务器接口。"
 
 #: doc/classes/NavigationServer.xml
-#, fuzzy
 msgid ""
 "NavigationServer is the server responsible for all 3D navigation. It handles "
 "several objects, namely maps, regions and agents.\n"
@@ -46805,6 +46840,8 @@ msgstr ""
 "的速度触发回调。\n"
 "[b]注意：[/b]防撞系统会忽略地区。直接使用修正后的速度可能会将代理推到可导航区"
 "域之外。这是防撞系统的缺陷，更复杂的情况可能需要用到物理引擎。\n"
+"[b]注意：[/b]默认情况下，避障的大强度计算是在单独的线程中进行的。在不支持多线"
+"程的 HTML5 导出中，则会在主线程中进行，可能导致性能问题。\n"
 "服务器会记录所有的调用，在同步阶段统一执行。这意味着你可以放心大胆地从任何线"
 "程中请求对地图进行任何修改。"
 
@@ -50536,9 +50573,9 @@ msgstr ""
 "[OccluderShape] 是 [Occluder] 节点所使用的资源，用于几何遮挡剔除。\n"
 "该多边形必须是凸多边形。多边形顶点的创建与删除可以在编辑器的检查器中进行，也"
 "可以通过调用 [code]set_polygon_points[/code] 实现。每一条边的顶点都可以通过在"
-"编辑器视窗中拖拽手柄设置。\n"
+"编辑器视口中拖拽手柄设置。\n"
 "另外，每一个多边形遮挡器都可以支持单个空洞。如果你在编辑器的检查器中为空洞添"
-"加至少三个顶点，就可以在编辑器视窗中拖拽空洞边缘顶点的句柄。\n"
+"加至少三个顶点，就可以在编辑器视口中拖拽空洞边缘顶点的句柄。\n"
 "一般而言，多边形以及空洞的边数越少，运行时系统的处理速度就越快，所以在大多数"
 "情况下你都只会设置 4 个顶点。"
 
@@ -50632,7 +50669,6 @@ msgstr ""
 "光的衰减（下降）曲线。在[b]检查器[/b]中，通过右键点击曲线，可以获得许多预设。"
 
 #: doc/classes/OmniLight.xml
-#, fuzzy
 msgid ""
 "The light's radius. Note that the effectively lit area may appear to be "
 "smaller depending on the [member omni_attenuation] in use. No matter the "
@@ -50641,9 +50677,11 @@ msgid ""
 "[b]Note:[/b] [member omni_range] is not affected by [member Spatial.scale] "
 "(the light's scale or its parent's scale)."
 msgstr ""
-"光的半径。请注意，有效的照明区域可能看起来更小，这取决于使用的 [member "
-"omni_attenuation]。无论使用何种 [member omni_attenuation]，光线都不会到达这个"
-"半径以外的地方。"
+"该灯光的半径。请注意，根据使用的 [member omni_attenuation]，有效照明区域可能"
+"看起来更小。无论使用 [member omni_attenuation] 为何值，光都不会到达此范围之外"
+"的任何东西。\n"
+"[b]注意：[/b][member omni_range] 不受 [member Spatial.scale] 的影响（无论是该"
+"灯光的缩放还是其父节点的缩放）。"
 
 #: doc/classes/OmniLight.xml
 msgid "See [enum ShadowDetail]."
@@ -51297,7 +51335,6 @@ msgid "Returns the audio driver name for the given index."
 msgstr "返回给定索引的音频驱动程序名称。"
 
 #: doc/classes/OS.xml
-#, fuzzy
 msgid ""
 "Returns the [i]global[/i] cache data directory according to the operating "
 "system's standards. On Linux, this path can be overridden by setting the "
@@ -51308,7 +51345,7 @@ msgid ""
 "Not to be confused with [method get_user_data_dir], which returns the "
 "[i]project-specific[/i] user data path."
 msgstr ""
-"根据操作系统的标准返回[i]全局[/i]缓存数据目录。在桌面平台上，可以通过在启动项"
+"根据操作系统的标准返回[i]全局[/i]缓存数据目录。在 Linux 上，可以通过在启动项"
 "目之前设置 [code]XDG_CACHE_HOME[/code] 环境变量来覆盖此路径。有关更多信息，请"
 "参阅文档中的 [url=$DOCS_URL/tutorials/io/data_paths.html]《Godot 项目中的文件"
 "路径》[/url]。另请参阅 [method get_config_dir] 和 [method get_data_dir]。\n"
@@ -51362,7 +51399,6 @@ msgstr ""
 "[/codeblock]"
 
 #: doc/classes/OS.xml
-#, fuzzy
 msgid ""
 "Returns the [i]global[/i] user configuration directory according to the "
 "operating system's standards. On Linux, this path can be overridden by "
@@ -51373,7 +51409,7 @@ msgid ""
 "Not to be confused with [method get_user_data_dir], which returns the "
 "[i]project-specific[/i] user data path."
 msgstr ""
-"根据操作系统的标准，返回[i]全局[/i]用户配置目录。在桌面平台上，这个路径可以在"
+"根据操作系统的标准，返回[i]全局[/i]用户配置目录。在 Linux 上，这个路径可以在"
 "启动项目前通过设置[code]XDG_CONFIG_HOME[/code]环境变量来覆盖。更多信息请参见"
 "文档中[url=$DOCS_URL/tutorials/io/data_paths.html]《Godot 项目中的文件路径》"
 "[/url]。另请参阅 [method get_cache_dir] 和 [method get_data_dir]。\n"
@@ -51398,7 +51434,6 @@ msgid ""
 msgstr "返回当前使用的视频驱动程序，使用[enum VideoDriver]中的一个值。"
 
 #: doc/classes/OS.xml
-#, fuzzy
 msgid ""
 "Returns the [i]global[/i] user data directory according to the operating "
 "system's standards. On Linux, this path can be overridden by setting the "
@@ -51409,7 +51444,7 @@ msgid ""
 "Not to be confused with [method get_user_data_dir], which returns the "
 "[i]project-specific[/i] user data path."
 msgstr ""
-"根据操作系统的标准，返回[i]全局[/i]用户数据目录。在桌面平台上，这个路径可以在"
+"根据操作系统的标准，返回[i]全局[/i]用户数据目录。在 Linux 上，这个路径可以在"
 "启动项目前通过设置[code]XDG_DATA_HOME[/code]环境变量来覆盖。更多信息请参见文"
 "档中[url=$DOCS_URL/tutorials/io/data_paths.html]《Godot 项目中的文件路径》[/"
 "url]。另请参阅 [method get_cache_dir] 和 [method get_config_dir]。\n"
@@ -53698,14 +53733,14 @@ msgstr ""
 "使用 [code]process_material[/code] 属性添加 [ParticlesMaterial] 来配置粒子外"
 "观和行为。或者，您可以添加一个将应用于所有粒子的 [ShaderMaterial]。\n"
 "[b]注意：[/b][Particles] 仅在使用 GLES3 渲染器时有效。如果使用 GLES2 渲染器，"
-"请改用 [CPUParticles]。您可以通过选择节点，单击 3D 编辑器视窗顶部的"
+"请改用 [CPUParticles]。您可以通过选择节点，单击 3D 编辑器视口顶部的"
 "[b]Particles[/b]菜单，然后选择[b]转换为 CPUParticles[/b]，将 [Particles] 转换"
 "为 [CPUParticles]。\n"
 "[b]注意：[/b]在 macOS 上，渲染 [Particles] 比 [CPUParticles] 要慢上很多，因为"
 "变换反馈是在 CPU 上实现的，而不是 GPU。以 macOS 为目标时，请考虑使用 "
 "[CPUParticles]。\n"
 "[b]注意：[/b]在处理粒子节点后，记得通过选择它来更新其 [member "
-"visibility_aabb]，单击 3D 编辑器视窗顶部的[b]Particles[/b]菜单，然后选择[b]生"
+"visibility_aabb]，单击 3D 编辑器视口顶部的[b]Particles[/b]菜单，然后选择[b]生"
 "成可见 AABB[/b]。否则，粒子可能会由于相机位置和角度的改变突然消失。"
 
 #: doc/classes/Particles.xml
@@ -53860,15 +53895,14 @@ msgid "Particle systems (2D)"
 msgstr "粒子系统（2D）"
 
 #: doc/classes/Particles2D.xml
-#, fuzzy
 msgid "2D Particles Demo"
-msgstr "2D 平台跳跃演示"
+msgstr "2D 粒子演示"
 
 #: doc/classes/Particles2D.xml
 msgid ""
 "2D Dodge The Creeps Demo (uses GPUParticles2D for the trail behind the "
 "player)"
-msgstr ""
+msgstr "2D Dodge The Creeps 演示（玩家身后的拖尾使用的是 GPUParticles2D）"
 
 #: doc/classes/Particles2D.xml
 msgid "Returns a rectangle containing the positions of all existing particles."
@@ -58119,7 +58153,7 @@ msgid ""
 msgstr ""
 "Popup 是基本的 [Control]，用于显示对话框和弹出窗口。默认情况下，它是一个子窗"
 "口和模态，参阅 [Control]，并具有自定义弹出行为的辅助程序。所有弹出方法都确保"
-"在视窗中正确放置。"
+"在视口中正确放置。"
 
 #: doc/classes/Popup.xml
 msgid "Popup (show the control in modal form)."
@@ -60422,7 +60456,7 @@ msgid ""
 "default window size. Stretch mode settings also use this as a reference when "
 "enabled."
 msgstr ""
-"设置游戏的主视窗高度。在桌面平台上，这是默认的窗口大小。当启用拉伸模式设置"
+"设置游戏的主视口高度。在桌面平台上，这是默认的窗口大小。当启用拉伸模式设置"
 "时，也使用此参数作为参考。"
 
 #: doc/classes/ProjectSettings.xml
@@ -60451,7 +60485,7 @@ msgid ""
 "default window size. Stretch mode settings also use this as a reference when "
 "enabled."
 msgstr ""
-"设置游戏的主视窗宽度。在桌面平台上，这是默认的窗口大小。当启用拉伸模式设置"
+"设置游戏的主视口宽度。在桌面平台上，这是默认的窗口大小。当启用拉伸模式设置"
 "时，也使用此参数作为参考。"
 
 #: doc/classes/ProjectSettings.xml
@@ -60585,7 +60619,7 @@ msgid ""
 "and is the recommended setting."
 msgstr ""
 "如果已启用，则会在将 [member Viewport.gui_disable_input] 设为 [code]false[/"
-"code] 禁用视区的 GUI 输入时，将当前的鼠标悬停及聚焦丢弃。\n"
+"code] 禁用视口的 GUI 输入时，将当前的鼠标悬停及聚焦丢弃。\n"
 "这样的行为能够帮助保持 GUI 状态的健壮，输入恢复时，无论当时发生了什么都不会产"
 "生意外的结果。\n"
 "如果已禁用，会使用旧有行为，除了禁用 GUI 输入本身不会进行额外操作。\n"
@@ -60596,8 +60630,8 @@ msgid ""
 "If [code]true[/code], swaps OK and Cancel buttons in dialogs on Windows and "
 "UWP to follow interface conventions."
 msgstr ""
-"如果为 [code]true[/code]，在Windows和UWP的对话框中交换确定和取消按钮，以遵循"
-"界面惯例。"
+"如果为 [code]true[/code]，在 Windows 和 UWP 的对话框中交换确定和取消按钮，以"
+"遵循界面惯例。"
 
 #: doc/classes/ProjectSettings.xml
 msgid ""
@@ -60639,9 +60673,9 @@ msgid ""
 "necessary for the internal logic of several [Control]s. The events assigned "
 "to the action can however be modified."
 msgstr ""
-"默认用于确认焦点按钮、菜单或列表项，或验证输入的[InputEventAction]。\n"
-"[b]注意：[/b]默认的[code]ui_*[/code]动作不能被删除，因为它们是几个[Control]的"
-"内部逻辑所必需的。但是，可以修改分配给该操作的事件。"
+"默认用于确认焦点按钮、菜单或列表项，或验证输入的 [InputEventAction]。\n"
+"[b]注意：[/b]默认的 [code]ui_*[/code] 动作是部分 [Control] 的内部逻辑所必需"
+"的，无法删除。但是可以修改分配给该动作的事件。"
 
 #: doc/classes/ProjectSettings.xml
 msgid ""
@@ -60650,9 +60684,9 @@ msgid ""
 "necessary for the internal logic of several [Control]s. The events assigned "
 "to the action can however be modified."
 msgstr ""
-"默认放弃一个模态或挂起的输入的[InputEventAction]。\n"
-"[b]注意：[/b]默认的[code]ui_*[/code]动作不能被删除，因为它们是几个[Control]的"
-"内部逻辑所必需的。但是，可以修改分配给该操作的事件。"
+"默认用于放弃模态或挂起的输入的 [InputEventAction]。\n"
+"[b]注意：[/b]默认的 [code]ui_*[/code] 动作是部分 [Control] 的内部逻辑所必需"
+"的，无法删除。但是可以修改分配给该动作的事件。"
 
 #: doc/classes/ProjectSettings.xml
 msgid ""
@@ -60661,9 +60695,9 @@ msgid ""
 "necessary for the internal logic of several [Control]s. The events assigned "
 "to the action can however be modified."
 msgstr ""
-"默认在UI中向下移动的[InputEventAction]。\n"
-"[b]注意：[/b]默认的[code]ui_*[/code]动作不能被删除，因为它们是几个[Control]的"
-"内部逻辑所必需的。但是，可以修改分配给该操作的事件。"
+"默认在 UI 中向下移动的 [InputEventAction]。\n"
+"[b]注意：[/b]默认的 [code]ui_*[/code] 动作是部分 [Control] 的内部逻辑所必需"
+"的，无法删除。但是可以修改分配给该动作的事件。"
 
 #: doc/classes/ProjectSettings.xml
 msgid ""
@@ -60676,8 +60710,8 @@ msgid ""
 msgstr ""
 "默认[InputEventAction]去[Control]的结束位置(例如[ItemList]或[Tree]中的最后一"
 "项)，匹配典型桌面UI系统中[constant KEY_END]的行为。\n"
-"[b]注意：[/b]默认的[code]ui_*[/code]动作不能被删除，因为它们是几个[Control]的"
-"内部逻辑所必需的。但是，可以修改分配给该操作的事件。"
+"[b]注意：[/b]默认的 [code]ui_*[/code] 动作是部分 [Control] 的内部逻辑所必需"
+"的，无法删除。但是可以修改分配给该动作的事件。"
 
 #: doc/classes/ProjectSettings.xml
 msgid ""
@@ -60689,8 +60723,8 @@ msgid ""
 msgstr ""
 "默认聚焦场景中的下一个[Control]的[InputEventAction]。焦点行为可以通过[member "
 "Control.focus_next]配置。\n"
-"[b]注意：[/b]默认的[code]ui_*[/code]动作不能被删除，因为它们是几个[Control]的"
-"内部逻辑所必需的。但是，可以修改分配给该操作的事件。"
+"[b]注意：[/b]默认的 [code]ui_*[/code] 动作是部分 [Control] 的内部逻辑所必需"
+"的，无法删除。但是可以修改分配给该动作的事件。"
 
 #: doc/classes/ProjectSettings.xml
 msgid ""
@@ -60702,8 +60736,8 @@ msgid ""
 msgstr ""
 "默认聚焦场景中的前一个[Control]的[InputEventAction]。焦点行为可以通过[member "
 "Control.focus_previous]配置。\n"
-"[b]注意：[/b]默认的[code]ui_*[/code]动作不能被删除，因为它们是几个[Control]的"
-"内部逻辑所必需的。但是，可以修改分配给该操作的事件。"
+"[b]注意：[/b]默认的 [code]ui_*[/code] 动作是部分 [Control] 的内部逻辑所必需"
+"的，无法删除。但是可以修改分配给该动作的事件。"
 
 #: doc/classes/ProjectSettings.xml
 msgid ""
@@ -60716,8 +60750,8 @@ msgid ""
 msgstr ""
 "默认的将进入[Control]的起始位置（例如[ItemList]或[Tree]中的第一个项目）时的"
 "[InputEventAction]，与典型的桌面UI系统中[constant KEY_HOME]的行为相匹配。\n"
-"[b]注意：[/b]默认的[code]ui_*[/code]动作不能被删除，因为它们对于几个[Control]"
-"的内部逻辑是必要的。然而，分配给动作的事件可以被修改。"
+"[b]注意：[/b]默认的 [code]ui_*[/code] 动作不能被删除，因为它们是几个 "
+"[Control] 的内部逻辑所必需的。然而，分配给动作的事件可以被修改。"
 
 #: doc/classes/ProjectSettings.xml
 msgid ""
@@ -60726,9 +60760,9 @@ msgid ""
 "necessary for the internal logic of several [Control]s. The events assigned "
 "to the action can however be modified."
 msgstr ""
-"默认在UI中向左移动的[InputEventAction]。\n"
-"[b]注意：[/b]默认的[code]ui_*[/code]动作不能被删除，因为它们是几个[Control]的"
-"内部逻辑所必需的。但是，可以修改分配给该操作的事件。"
+"默认在 UI 中向左移动的[InputEventAction]。\n"
+"[b]注意：[/b]默认的 [code]ui_*[/code] 动作是部分 [Control] 的内部逻辑所必需"
+"的，无法删除。但是可以修改分配给该动作的事件。"
 
 #: doc/classes/ProjectSettings.xml
 msgid ""
@@ -60742,8 +60776,8 @@ msgstr ""
 "默认的在 [Control]（例如 [ItemList] 或 [Tree]）中向下翻页的 "
 "[InputEventAction]，与典型桌面 UI 系统中 [constant KEY_PAGEDOWN] 的行为相匹"
 "配。\n"
-"[b]注意：[/b]默认的 [code]ui_*[/code] 动作不能被删除，因为它们是几个 "
-"[Control] 的内部逻辑所必需的。但是，可以修改分配给该操作的事件。"
+"[b]注意：[/b]默认的 [code]ui_*[/code] 动作是部分 [Control] 的内部逻辑所必需"
+"的，无法删除。但是可以修改分配给该动作的事件。"
 
 #: doc/classes/ProjectSettings.xml
 msgid ""
@@ -60757,8 +60791,8 @@ msgstr ""
 "默认的在 [Control]（例如 [ItemList] 或 [Tree]）中向上翻页的 "
 "[InputEventAction]，与典型桌面 UI 系统中 [constant KEY_PAGEUP] 的行为相匹"
 "配。\n"
-"[b]注意：[/b]默认的 [code]ui_*[/code] 动作不能被删除，因为它们是几个 "
-"[Control] 的内部逻辑所必需的。但是，可以修改分配给该操作的事件。"
+"[b]注意：[/b]默认的 [code]ui_*[/code] 动作是部分 [Control] 的内部逻辑所必需"
+"的，无法删除。但是可以修改分配给该动作的事件。"
 
 #: doc/classes/ProjectSettings.xml
 msgid ""
@@ -60767,9 +60801,9 @@ msgid ""
 "necessary for the internal logic of several [Control]s. The events assigned "
 "to the action can however be modified."
 msgstr ""
-"默认在UI中右移的[InputEventAction]。\n"
-"[b]注意：[/b]默认的[code]ui_*[/code]动作不能被删除，因为它们是几个[Control]的"
-"内部逻辑所必需的。但是，可以修改分配给该操作的事件。"
+"默认在 UI 中右移的[InputEventAction]。\n"
+"[b]注意：[/b]默认的 [code]ui_*[/code] 动作是部分 [Control] 的内部逻辑所必需"
+"的，无法删除。但是可以修改分配给该动作的事件。"
 
 #: doc/classes/ProjectSettings.xml
 msgid ""
@@ -60780,8 +60814,8 @@ msgid ""
 "to the action can however be modified."
 msgstr ""
 "默认选择[Control](例如[ItemList]或[Tree])中的一个项目[InputEventAction]。\n"
-"[b]注意：[/b]默认的[code]ui_*[/code]动作不能被删除，因为它们是几个[Control]的"
-"内部逻辑所必需的。但是，可以修改分配给该操作的事件。"
+"[b]注意：[/b]默认的 [code]ui_*[/code] 动作是部分 [Control] 的内部逻辑所必需"
+"的，无法删除。但是可以修改分配给该动作的事件。"
 
 #: doc/classes/ProjectSettings.xml
 msgid ""
@@ -60790,9 +60824,9 @@ msgid ""
 "necessary for the internal logic of several [Control]s. The events assigned "
 "to the action can however be modified."
 msgstr ""
-"默认在UI中向上移动[InputEventAction]。\n"
-"[b]注意：[/b]默认的[code]ui_*[/code]动作不能被删除，因为它们是几个[Control]的"
-"内部逻辑所必需的。但是，可以修改分配给该操作的事件。"
+"默认在 UI 中向上移动[InputEventAction]。\n"
+"[b]注意：[/b]默认的 [code]ui_*[/code] 动作是部分 [Control] 的内部逻辑所必需"
+"的，无法删除。但是可以修改分配给该动作的事件。"
 
 #: doc/classes/ProjectSettings.xml
 msgid ""
@@ -63204,7 +63238,6 @@ msgstr ""
 "的值通常会给出最好的结果。另见 [member rendering/quality/filters/use_fxaa]。"
 
 #: doc/classes/ProjectSettings.xml
-#, fuzzy
 msgid ""
 "If [code]true[/code], uses a fast post-processing filter to make banding "
 "significantly less visible in 3D. 2D rendering is [i]not[/i] affected by "
@@ -63224,13 +63257,18 @@ msgid ""
 "debanding at run-time, set [member Viewport.debanding] on the root "
 "[Viewport] instead."
 msgstr ""
-"如果为 [code]true[/code]，则使用快速后处理过滤器使条带明显不那么明显。在某些"
-"情况下，去带可能会引入稍微明显的抖动模式。建议仅在实际需要时启用去条带，因为"
-"抖动模式会使无损压缩的屏幕截图更大。\n"
+"如果为 [code]true[/code]，则使用一个快速的后期处理滤波器，使 3D 的带状现象明"
+"显减少。2D 渲染[i]不受[/i]去条带的影响，除非 [member Environment."
+"background_mode] 为 [constant Environment.BG_CANVAS]。此时 [member rendering/"
+"quality/intended_usage/framebuffer_allocation] 也必须设为 [b]3D[/b]。\n"
+"在某些情况下，去带可能会引入稍微明显的抖动模式。建议仅在实际需要时启用去条"
+"带，因为抖动模式会使无损压缩的屏幕截图更大。\n"
 "[b]注意：[/b]仅在 GLES3 后端可用。[member rendering/quality/depth/hdr] 也必须"
 "为 [code]true[/code] 才能使去色带有效。\n"
 "[b]注意：[/b]已知在移动平台上的去色带存在破坏渲染的问题。因此，建议在用于移动"
-"平台时禁用此选项。"
+"平台时禁用此选项。\n"
+"[b]注意：[/b]这个属性在项目启动时是只读的。要在运行时设置去条带，请在根 "
+"[Viewport] 上设置 [member Viewport.debanding]。"
 
 #: doc/classes/ProjectSettings.xml
 msgid ""
@@ -65372,6 +65410,13 @@ msgid ""
 "[code]offset[/code], and the character before [code]offset[/code] will be "
 "checked for the word boundary [code]\\b[/code]."
 msgstr ""
+"在文本中搜索编译后的模式。如果找到，则将首个匹配结果放在 [RegExMatch] 容器中"
+"返回，否则返回 [code]null[/code]。\n"
+"搜索的范围可以用 [code]offset[/code] 和 [code]end[/code] 指定。可用于在上一次"
+"成功找到后再次使用相同的 [code]subject[/code] 调用这个方法，继续寻找匹配。设"
+"置这些参数和传入缩短后的字符串是不同的。例如，起点 [code]^[/code] 不会受 "
+"[code]offset[/code] 影响，单词边界 [code]\\b[/code] 会检查 [code]offset[/"
+"code] 之前的字符。"
 
 #: modules/regex/doc_classes/RegEx.xml
 msgid ""
@@ -65386,9 +65431,15 @@ msgid ""
 "[code]offset[/code], and the character before [code]offset[/code] will be "
 "checked for the word boundary [code]\\b[/code]."
 msgstr ""
+"在文本中搜索编译后的模式。返回 [RegExMatch] 容器的数组，其中包含的是互不重叠"
+"的匹配结果。如果没有找到匹配，则返回空数组。\n"
+"搜索的范围可以用 [code]offset[/code] 和 [code]end[/code] 指定。可用于在上一次"
+"成功找到后再次使用相同的 [code]subject[/code] 调用这个方法，继续寻找匹配。设"
+"置这些参数和传入缩短后的字符串是不同的。例如，起点 [code]^[/code] 不会受 "
+"[code]offset[/code] 影响，单词边界 [code]\\b[/code] 会检查 [code]offset[/"
+"code] 之前的字符。"
 
 #: modules/regex/doc_classes/RegEx.xml
-#, fuzzy
 msgid ""
 "Searches the text for the compiled pattern and replaces it with the "
 "specified string. Escapes and backreferences such as [code]$1[/code] and "
@@ -65403,10 +65454,14 @@ msgid ""
 "[code]offset[/code], and the character before [code]offset[/code] will be "
 "checked for the word boundary [code]\\b[/code]."
 msgstr ""
-"搜索文本中的编译模式，并将其替换为指定的字符串。诸如 [code]$1[/code] 和 "
+"在文本中搜索编译后的模式，并将其替换为指定的字符串。诸如 [code]$1[/code] 和 "
 "[code]$name[/code] 等转义和反向引用会被展开和解决。默认情况下，只有第一个实例"
-"被替换，但可以对所有实例进行修改（全局替换）。可以指定要搜索的区域，而不需要"
-"修改开始和结束锚的位置。"
+"被替换，但可以对所有实例进行修改（全局替换）。\n"
+"搜索的范围可以用 [code]offset[/code] 和 [code]end[/code] 指定。可用于在上一次"
+"成功找到后再次使用相同的 [code]subject[/code] 调用这个方法，继续寻找匹配。设"
+"置这些参数和传入缩短后的字符串是不同的。例如，起点 [code]^[/code] 不会受 "
+"[code]offset[/code] 影响，单词边界 [code]\\b[/code] 会检查 [code]offset[/"
+"code] 之前的字符。"
 
 #: modules/regex/doc_classes/RegExMatch.xml
 msgid "Contains the results of a [RegEx] search."
@@ -65687,7 +65742,7 @@ msgstr ""
 "时，这个方法会被调用。它的行为可以通过覆盖脚本中的 [method "
 "_setup_local_to_scene] 进行定制。\n"
 "对于大多数资源，该方法不执行任何基本逻辑。[ViewportTexture] 执行自定义逻辑以"
-"正确设置本地视窗中的代理纹理和标志。"
+"正确设置本地视口中的代理纹理和标志。"
 
 #: doc/classes/Resource.xml
 msgid ""
@@ -68854,12 +68909,11 @@ msgid ""
 "quality/dynamic_fonts/use_oversampling[/code] in [ProjectSettings]. The "
 "property can however be overridden at runtime as needed."
 msgstr ""
-"为 [code]true[/code] 时启用字体过采样。这意味着根据视窗的缩放比例不同，"
-"[DynamicFont] 渲染的大小会比配置大小更高或更低。例如，如果视窗的缩放系数为 "
-"1.5，那么配置为 14 号大小的字体将会按照 21 号大小渲染（[code]14 * 1.5[/"
-"code]）。\n"
-"[b]注意：[/b]字体过采样仅在视窗拉伸模式为 [constant STRETCH_MODE_VIEWPORT] 且"
-"拉伸比例模式不是 [constant STRETCH_ASPECT_IGNORE] 时有效。\n"
+"为 [code]true[/code] 时启用字体过采样。这意味着根据视口的缩放比例不同，"
+"[DynamicFont] 渲染的大小会比配置大小更高或更低。例如，视口的缩放系数为 1.5 "
+"时，配置大小为 14 的字体将会当作大小为 21 渲染（[code]14 * 1.5[/code]）。\n"
+"[b]注意：[/b]只有在视口拉伸模式为 [constant STRETCH_MODE_VIEWPORT] 且拉伸比例"
+"模式不是 [constant STRETCH_ASPECT_IGNORE] 时，才会使用字体过采样。\n"
 "[b]注意：[/b]项目启动时会为活动的 [SceneTree] 自动设置该属性，取值为 "
 "[ProjectSettings] 的 [code]rendering/quality/dynamic_fonts/use_oversampling[/"
 "code]。不过运行时可以根据需要对该属性进行覆盖。"
@@ -68932,7 +68986,7 @@ msgstr "当节点的配置更改时发出。仅在 [code]tool[/code] 模式下�
 
 #: doc/classes/SceneTree.xml
 msgid "Emitted whenever a node is removed from the [SceneTree]."
-msgstr "当从 [SceneTree] 中删除节点时发出。"
+msgstr "当从 [SceneTree] 中移除节点时发出。"
 
 #: doc/classes/SceneTree.xml
 msgid "Emitted whenever a node is renamed."
@@ -68968,15 +69022,15 @@ msgstr "当 [SceneTree] 层次结构发生变化（移动或重命名子项等�
 
 #: doc/classes/SceneTree.xml
 msgid "Call a group with no flags (default)."
-msgstr "对组进行调用时，不使用标志（默认）。"
+msgstr "对分组进行调用时，不使用标志（默认）。"
 
 #: doc/classes/SceneTree.xml
 msgid "Call a group in reverse scene order."
-msgstr "对组进行调用时，使用逆场景序。"
+msgstr "对分组进行调用时，使用逆场景序。"
 
 #: doc/classes/SceneTree.xml
 msgid "Call a group immediately (calls are normally made on idle)."
-msgstr "对组进行调用时，立即执行（正常情况下是在空闲时调用的）。"
+msgstr "对分组进行调用时，立即执行（正常情况下是在空闲时调用的）。"
 
 #: doc/classes/SceneTree.xml
 msgid ""
@@ -68985,6 +69039,9 @@ msgid ""
 "call is unique or not. Therefore when the same method is called with "
 "different arguments, only the first call will be performed."
 msgstr ""
+"即便执行了多次调用，也只对分组进行一次调用。\n"
+"[b]注意：[/b]确定调用是否唯一时不考虑参数。因此，如果使用不同的参数调用了同一"
+"个方法，那么只会执行第一个调用。"
 
 #: doc/classes/SceneTree.xml
 msgid "No stretching."
@@ -71377,10 +71434,10 @@ msgstr ""
 msgid ""
 "Rotation part of the local transformation in degrees, specified in terms of "
 "YXZ-Euler angles in the format (X angle, Y angle, Z angle)."
-msgstr "旋转部分局部变换为度，按 YXZ-Euler 角格式指定（X 角、Y 角、Z 角）。"
+msgstr ""
+"局部变换的旋转部分，单位为度，以 YXZ 欧拉角的形式表示（X 角、Y 角、Z 角）。"
 
 #: doc/classes/Spatial.xml
-#, fuzzy
 msgid ""
 "Scale part of the local transformation.\n"
 "[b]Note:[/b] Mixed negative scales in 3D are not decomposable from the "
@@ -71392,7 +71449,9 @@ msgid ""
 msgstr ""
 "局部变换的缩放部分。\n"
 "[b]注意：[/b]3D 中，变换矩阵是无法分解出正负混合的缩放的。由于 Godot 中使用变"
-"换矩阵来表示缩放，得到的缩放值要么全正、要么全负。"
+"换矩阵来表示缩放，得到的缩放值要么全正、要么全负。\n"
+"[b]注意：[/b]并不是所有节点的外观都会被 [member scale] 属性缩放。例如，"
+"[Light] 的外观就不受 [member scale] 影响。"
 
 #: doc/classes/Spatial.xml
 msgid "Local space [Transform] of this node, with respect to the parent node."
@@ -73038,6 +73097,9 @@ msgid ""
 "[b]Note:[/b] [member spot_angle] is not affected by [member Spatial.scale] "
 "(the light's scale or its parent's scale)."
 msgstr ""
+"聚光灯的角度，单位为度。\n"
+"[b]注意：[/b][member spot_angle] 不受 [member Spatial.scale] 的影响（无论是该"
+"灯光的缩放还是其父节点的缩放）。"
 
 #: doc/classes/SpotLight.xml
 msgid "The spotlight's angular attenuation curve."
@@ -73048,7 +73110,6 @@ msgid "The spotlight's light energy attenuation curve."
 msgstr "聚光灯的光量衰减曲线。"
 
 #: doc/classes/SpotLight.xml
-#, fuzzy
 msgid ""
 "The maximal range that can be reached by the spotlight. Note that the "
 "effectively lit area may appear to be smaller depending on the [member "
@@ -73058,8 +73119,10 @@ msgid ""
 "(the light's scale or its parent's scale)."
 msgstr ""
 "聚光灯可以达到的最大范围。请注意，根据使用的 [member spot_attenuation]，有效"
-"照明区域可能看起来更小。无论使用[member spot_attenuation]，光都不会到达此范围"
-"之外的任何东西。"
+"照明区域可能看起来更小。无论 [member spot_attenuation] 为何值，光都不会到达此"
+"范围之外的任何东西。\n"
+"[b]注意：[/b][member spot_angle] 不受 [member Spatial.scale] 的影响（无论是该"
+"灯光的缩放还是其父节点的缩放）。"
 
 #: doc/classes/SpringArm.xml
 msgid "A helper node, mostly used in 3rd person cameras."
@@ -76689,7 +76752,7 @@ msgid ""
 "Centers the viewport on the line the editing cursor is at. This also resets "
 "the [member scroll_horizontal] value to [code]0[/code]."
 msgstr ""
-"将视区置于编辑光标所在的行上。这也会将 [member scroll_horizontal] 值重置为 "
+"将视口置于编辑光标所在的行上。这也会将 [member scroll_horizontal] 值重置为 "
 "[code]0[/code]。"
 
 #: doc/classes/TextEdit.xml
@@ -76723,7 +76786,7 @@ msgid ""
 "will center at the cursor position after the move occurs."
 msgstr ""
 "将光标移动到指定的 [code]column[/code] 索引处。\n"
-"如果 [code]adjust_viewport[/code] 设置为 [code]true[/code]，则移动发生后视窗"
+"如果 [code]adjust_viewport[/code] 设置为 [code]true[/code]，则移动发生后视口"
 "将以光标位置为中心。"
 
 #: doc/classes/TextEdit.xml
@@ -76735,7 +76798,7 @@ msgid ""
 "[code]line[/code] can be hidden using [method set_line_as_hidden]."
 msgstr ""
 "在指定的 [code]line[/code] 索引处移动光标。\n"
-"如果 [code]adjust_viewport[/code] 设置为 [code]true[/code]，则移动发生后视窗"
+"如果 [code]adjust_viewport[/code] 设置为 [code]true[/code]，则移动发生后视口"
 "将以光标位置为中心。\n"
 "如果 [code]can_be_hidden[/code] 设置为 [code]true[/code]，则可以使用 [method "
 "set_line_as_hidden] 隐藏指定的 [code]line[/code]。"
@@ -84329,16 +84392,16 @@ msgid ""
 "to be upside down. Enabling [member render_target_v_flip] will display the "
 "Viewport with the correct orientation."
 msgstr ""
-"Viewport 会在屏幕上创建不同的视图，或者是另一个视窗中的子视图。子代 2D 节点会"
+"Viewport 会在屏幕上创建不同的视图，或者是另一个视口中的子视图。子代 2D 节点会"
 "在其上显示，子代 3D 摄像机节点也会在其上渲染。\n"
-"另外，视窗可以有自己的 2D 或 3D 世界，所以它们不会与其他视窗共享其所绘制的内"
+"另外，视口可以有自己的 2D 或 3D 世界，所以它们不会与其他视口共享其所绘制的内"
 "容。\n"
-"如果视窗是 [ViewportContainer] 的子节点，它将自动占用其大小，否则必须手动设"
+"如果视口是 [ViewportContainer] 的子节点，它将自动占用其大小，否则必须手动设"
 "置。\n"
-"视窗也可以选择成为音频监听者，会根据它的 2D 或 3D 摄像机的子节点来产生位置音"
+"视口也可以选择成为音频监听者，会根据它的 2D 或 3D 摄像机的子节点来产生位置音"
 "频。\n"
-"另外，如果设备有多个屏幕，视窗可以被分配到不同的屏幕。\n"
-"最后，视窗也可以作为渲染目标，在这种情况下，除非相关的纹理被用于绘制，否则它"
+"另外，如果设备有多个屏幕，视口可以被分配到不同的屏幕。\n"
+"最后，视口也可以作为渲染目标，在这种情况下，除非相关的纹理被用于绘制，否则它"
 "们将不可见。\n"
 "[b]注意：[/b]默认情况下，Godot 3.x 中新创建的 Viewport 是上下颠倒的。启用 "
 "[member render_target_v_flip] 可以使该 Viewport 使用正确的朝向显示。"
@@ -84385,7 +84448,7 @@ msgstr "返回激活的 3D 相机。"
 
 #: doc/classes/Viewport.xml
 msgid "Returns the total transform of the viewport."
-msgstr "返回视窗的总的变换。"
+msgstr "返回视口的总的变换。"
 
 #: doc/classes/Viewport.xml
 msgid "Returns the topmost modal in the stack."
@@ -84399,7 +84462,7 @@ msgstr "返回该 [Viewport] 中鼠标的位置，使用该 [Viewport] 的坐标
 
 #: doc/classes/Viewport.xml
 msgid "Returns information about the viewport from the rendering pipeline."
-msgstr "返回渲染管道中关于视窗的信息。"
+msgstr "返回渲染管道中关于视口的信息。"
 
 #: doc/classes/Viewport.xml
 msgid "Returns the [enum ShadowAtlasQuadrantSubdiv] of the specified quadrant."
@@ -84420,7 +84483,7 @@ msgid ""
 "img.flip_y()\n"
 "[/codeblock]"
 msgstr ""
-"返回该视窗的纹理。\n"
+"返回该视口的纹理。\n"
 "[b]注意：[/b]由于 OpenGL 的工作方式，产生的 [ViewportTexture] 是垂直翻转的。"
 "你可以在 [method Texture.get_data] 的结果上使用 [method Image.flip_y] 来将其"
 "翻转回去，例如：\n"
@@ -84459,7 +84522,7 @@ msgid ""
 "Alternative to [constant Node.NOTIFICATION_DRAG_BEGIN] and [constant Node."
 "NOTIFICATION_DRAG_END] when you prefer polling the value."
 msgstr ""
-"如果该视区目前正在执行拖拽操作，则返回 [code]true[/code]。\n"
+"如果该视口目前正在执行拖拽操作，则返回 [code]true[/code]。\n"
 "如果你更倾向于对其进行轮询，那么就可以作为 [constant Node."
 "NOTIFICATION_DRAG_BEGIN] 和 [constant Node.NOTIFICATION_DRAG_END] 的替代品。"
 
@@ -84540,7 +84603,6 @@ msgstr ""
 "全局画布变换。"
 
 #: doc/classes/Viewport.xml
-#, fuzzy
 msgid ""
 "If [code]true[/code], uses a fast post-processing filter to make banding "
 "significantly less visible in 3D. 2D rendering is [i]not[/i] affected by "
@@ -84555,9 +84617,13 @@ msgid ""
 "[b]Note:[/b] Only available on the GLES3 backend. [member hdr] must also be "
 "[code]true[/code] for debanding to be effective."
 msgstr ""
-"如果为 [code]true[/code]，则使用一个快速的后期处理滤波器，使带状现象明显减"
-"少。在某些情况下，去带可能会引入稍微明显的抖动模式。建议只有在实际需要时才启"
-"用去带，因为抖动模式会使无损压缩的屏幕截图变大。\n"
+"如果为 [code]true[/code]，则使用一个快速的后期处理滤波器，使 3D 的带状现象明"
+"显减少。2D 渲染[i]不受[/i]去条带的影响，除非 [member Environment."
+"background_mode] 为 [constant Environment.BG_CANVAS]。此时 [member usage] 也"
+"必须设为 [constant USAGE_3D]。另请参阅 [member ProjectSettings.rendering/"
+"quality/filters/use_debanding]。\n"
+"在某些情况下，去条带可能会引入稍微明显的抖动图案。建议只有在实际需要时才启用"
+"去条带，因为抖动图案会使无损压缩的屏幕截图变大。\n"
 "[b]注意：[/b]仅在 GLES3 后端可用。[member hdr] 也必须是 [code]true[/code] 才"
 "能使去色带生效。"
 
@@ -84566,13 +84632,12 @@ msgid "The overlay mode for test rendered geometry in debug purposes."
 msgstr "在调试时，用于测试渲染的几何图形的叠加模式。"
 
 #: doc/classes/Viewport.xml
-#, fuzzy
 msgid ""
 "If [code]true[/code], the viewport will disable 3D rendering. To actually "
 "disable allocation of 3D buffers, set [member usage] instead."
 msgstr ""
-"如果为 [code]true[/code]，该视口将禁用 3D 渲染。对于实际禁用，使用 "
-"[code]usage[/code]。"
+"如果为 [code]true[/code]，该视口将禁用 3D 渲染。要实际禁用 3D 缓冲区的分配，"
+"请设置 [member usage]。"
 
 #: doc/classes/Viewport.xml
 msgid ""
@@ -84616,7 +84681,7 @@ msgid ""
 "[b]Note:[/b] Only available on the GLES3 backend."
 msgstr ""
 "如果为 [code]true[/code]，视口的渲染将获益于高动态范围算法。高动态范围允许视"
-"窗接收 0-1 范围以外的数值。在 Godot 中 HDR 默认使用半精度浮点数（16 位）。要"
+"口接收 0-1 范围以外的数值。在 Godot 中 HDR 默认使用半精度浮点数（16 位）。要"
 "使用全精度浮点数（32 位），请启用 [member use_32_bpc_depth]。\n"
 "[b]注意：[/b]需要将 [member usage] 设置为 [constant USAGE_3D] 或 [constant "
 "USAGE_3D_NO_EFFECTS]，因为 HDR 不支持 2D。\n"
@@ -84635,7 +84700,7 @@ msgid ""
 "require input in linear color space!"
 msgstr ""
 "如果为 [code]true[/code]，3D 渲染后的结果将不会应用线性到 sRGB 的颜色转换。当"
-"视口被用作渲染目标时，这点很重要，因为渲染结果会被用作另一个视窗中渲染的 3D "
+"视口被用作渲染目标时，这点很重要，因为渲染结果会被用作另一个视口中渲染的 3D "
 "物体的纹理。如果视口被用来创建不基于颜色的数据，噪声、高度图、采图等，这也很"
 "重要。当视口被用作 2D 对象的纹理时，或者视口是你的最终输出时，请不要启用这个"
 "功能。对于 GLES2 驱动来说，这将把 sRGB 输出转换为线性输出，这应该只用于需要线"
@@ -84725,7 +84790,7 @@ msgid ""
 msgstr ""
 "阴影图集的分辨率（用于全向光和聚光）。该值将四舍五入到最接近的 2 的幂。\n"
 "[b]注意：[/b]如果设置为 [code]0[/code]，点阴影和方向阴影[i]都[/i]将不可见。由"
-"于用户创建的视区默认值为 [code]0[/code]，因此必须手动将此值设置为大于 "
+"于用户创建的视口默认值为 [code]0[/code]，因此必须手动将此值设置为大于 "
 "[code]0[/code]（一般至少是 [code]256[/code]）。"
 
 #: doc/classes/Viewport.xml
@@ -84736,7 +84801,7 @@ msgid ""
 "Values around [code]0.5[/code] generally give the best results. See also "
 "[member fxaa]."
 msgstr ""
-"如果设置为大于 [code]0.0[/code] 的值，对比度适应性锐化将被应用到3D视窗中。这"
+"如果设置为大于 [code]0.0[/code] 的值，对比度适应性锐化将被应用到3D视口中。这"
 "具有较低的性能成本，可以用来恢复使用 FXAA 所损失的一些锐度。一般来说，"
 "[code]0.5[/code] 左右的数值可以得到最好的效果。另请参阅 [member fxaa]。"
 
@@ -84759,7 +84824,6 @@ msgid ""
 msgstr "如果为 [code]true[/code]，该视口应使其背景渲染为透明。"
 
 #: doc/classes/Viewport.xml
-#, fuzzy
 msgid ""
 "The viewport's rendering mode. This controls which buffers are allocated for "
 "the viewport (2D only, or 2D + 3D). 2D-only options can reduce memory usage "
@@ -84768,7 +84832,8 @@ msgid ""
 "USAGE_2D_NO_SAMPLING], [member hdr] will have no effect when enabled since "
 "HDR is not supported for 2D."
 msgstr ""
-"视区的渲染模式。\n"
+"该视口的渲染模式。控制的是为该视口分配哪些缓冲区（仅 2D 或者 2D + 3D）。仅 "
+"2D 的选项能够降低内存占用、略微提升性能，尤其是在低端设备上。\n"
 "[b]注意：[/b]如果设为 [constant USAGE_2D] 或 [constant "
 "USAGE_2D_NO_SAMPLING]，则启用 [member hdr] 不会生效，因为 2D 不支持 HDR。"
 
@@ -84783,7 +84848,7 @@ msgid ""
 "enable [member debanding] instead.\n"
 "[b]Note:[/b] Only available on the GLES3 backend."
 msgstr ""
-"如果为 [code]true[/code]，分配该视窗的帧缓冲时将使用完整浮点数精度（32 位）而"
+"如果为 [code]true[/code]，分配该视口的帧缓冲时将使用完整浮点数精度（32 位）而"
 "不是半浮点数精度（16 位）。仅在同时启用 [member hdr] 时有效。\n"
 "[b]注意：[/b]启用这个设置不会提升渲染质量。使用完整浮点数精度较慢，一般只有要"
 "求更高精度的高级着色器需要使用。如果是要减少条带效应，请启用 [member "
@@ -85015,7 +85080,7 @@ msgstr ""
 #: doc/classes/ViewportContainer.xml
 msgid ""
 "If [code]true[/code], the viewport will be scaled to the control's size."
-msgstr "为 [code]true[/code] 时视窗将被缩放到控件的大小。"
+msgstr "为 [code]true[/code] 时视口将被缩放到控件的大小。"
 
 #: doc/classes/ViewportContainer.xml
 msgid ""
@@ -85046,7 +85111,7 @@ msgid ""
 msgstr ""
 "将 [Viewport] 节点的内容显示为一个动态的 [Texture]。可以用来在同一个场景中混"
 "合控件、2D 和 3D元素。\n"
-"要通过代码创建 ViewportTexture，请使用目标视窗上的 [method Viewport."
+"要通过代码创建 ViewportTexture，请使用目标视口上的 [method Viewport."
 "get_texture] 方法。"
 
 #: doc/classes/ViewportTexture.xml
@@ -85402,6 +85467,8 @@ msgid ""
 "value will make the [VisualInstance] reliably draw on top of other "
 "[VisualInstance]s that are otherwise positioned at the same spot."
 msgstr ""
+"这个 [VisualInstance] 所使用的排序偏移量。调高后，该 [VisualInstance] 会稳定"
+"地绘制在同一位置的其他 [VisualInstance] 之上。"
 
 #: doc/classes/VisualInstance.xml
 msgid ""
@@ -85411,6 +85478,10 @@ msgid ""
 "The position based sorting instead allows to better control the drawing "
 "order when working with [Particles] and [CPUParticles]."
 msgstr ""
+"如果为 [code]true[/code]，则该对象会根据其 [AABB] 中心点排序。否则会根据其全"
+"局位置排序。\n"
+"对 3D 模型而言，根据 [AABB] 的中心点排序一般更为精确。使用 [Particles] 和 "
+"[CPUParticles] 时，根据位置排序能够更好地控制绘制顺序。"
 
 #: modules/visual_script/doc_classes/VisualScript.xml
 msgid "A script implemented in the Visual Script programming environment."
@@ -87417,10 +87488,10 @@ msgstr ""
 "VisualServer 是完全不透明的，它的内部结构的完全的具体实现不能被访问。\n"
 "VisualServer 可以用来完全绕过场景系统。\n"
 "可使用 [code]*_create[/code] 函数创建资源。\n"
-"所有的对象都被绘制到视窗中。你可以使用附在 [SceneTree] 上的 [Viewport]，或者"
+"所有的对象都被绘制到视口中。你可以使用附在 [SceneTree] 上的 [Viewport]，或者"
 "用 [method viewport_create] 自己创建一个。当使用自定义场景或画布时，需要使用 "
 "[method viewport_set_scenario] 或 [method viewport_attach_canvas] 将场景或画"
-"布附加到视窗上。\n"
+"布附加到视口上。\n"
 "在 3D 中，所有的视觉对象都必须与一个场景相关联。场景是世界的一个视觉表现。如"
 "果从一个正在运行的游戏中访问视觉服务，场景可以通过 [method Spatial."
 "get_world] 从场景树中的任何 [Spatial] 节点访问。另外，可以用 [method "
@@ -87431,7 +87502,7 @@ msgstr ""
 "一个实例。实例也必须使用 [method instance_set_scenario] 附加到场景中，以便可"
 "见。\n"
 "在 2D 中，所有可见对象都是某种形式的画布项目。为了可见，一个画布项需要是连接"
-"到视窗的画布的子项，或者它需要是最终连接到画布的另一个画布项的子项。"
+"到视口的画布的子项，或者它需要是最终连接到画布的另一个画布项的子项。"
 
 #: doc/classes/VisualServer.xml
 msgid "Sets images to be rendered in the window margin."
@@ -87660,7 +87731,7 @@ msgid ""
 "Sets the parent for the [CanvasItem]. The parent can be another canvas item, "
 "or it can be the root canvas that is attached to the viewport."
 msgstr ""
-"设置[CanvasItem]的父级。父级可以是另一个画布项目，也可以是连接到视窗的根画"
+"设置[CanvasItem]的父级。父级可以是另一个画布项目，也可以是连接到视口的根画"
 "布。"
 
 #: doc/classes/VisualServer.xml
@@ -89743,7 +89814,7 @@ msgid ""
 "[/codeblock]"
 msgstr ""
 "在两个纹理之间创建更新链，与 [ViewportTexture] 的原理类似。基础纹理为 "
-"[Viewport] 的纹理时，视区每新渲染一帧，代理纹理就会自动收到更新。\n"
+"[Viewport] 的纹理时，视口每新渲染一帧，代理纹理就会自动收到更新。\n"
 "例如，此处的代码会利用 VisualServer API 将一张通用的 [ImageTexture] 链接到 "
 "[Viewport] 的纹理输出上：\n"
 "[codeblock]\n"
@@ -89781,7 +89852,7 @@ msgstr "设置视图的相机。"
 
 #: doc/classes/VisualServer.xml
 msgid "Sets a viewport's canvas."
-msgstr "设置视窗的画布。"
+msgstr "设置视口的画布。"
 
 #: doc/classes/VisualServer.xml
 msgid ""
@@ -89804,18 +89875,18 @@ msgid ""
 "manually. For further optimization, see [method "
 "viewport_set_render_direct_to_screen]."
 msgstr ""
-"将视窗复制到屏幕上由 [code]rect[/code] 指定的区域。如果 [member Viewport."
-"render_direct_to_screen] 为 [code]true[/code]，那么视窗就不会使用帧缓冲，视窗"
-"的内容会直接渲染到屏幕上。然而，请注意，根视窗是最后绘制的，因此它将在屏幕上"
-"绘制。相应地，你就必须将根视窗设置为一个不覆盖你所附加的这个视窗的区域。\n"
-"例如，你可以用以下代码将根视窗设置为完全不渲染。\n"
+"将视口复制到屏幕上由 [code]rect[/code] 指定的区域。如果 [member Viewport."
+"render_direct_to_screen] 为 [code]true[/code]，那么视口就不会使用帧缓冲，视口"
+"的内容会直接渲染到屏幕上。然而，请注意，根视口是最后绘制的，因此它将在屏幕上"
+"绘制。相应地，你就必须将根视口设置为一个不覆盖你所附加的这个视口的区域。\n"
+"例如，你可以用以下代码将根视口设置为完全不渲染。\n"
 "[codeblock]\n"
 "func _ready():\n"
 "    get_viewport().set_attach_to_screen_rect(Rect2())\n"
 "    $Viewport.set_attach_to_screen_rect(Rect2(0, 0, 600, 600))\n"
 "[/codeblock]\n"
 "使用这个方法可以带来明显的优化，特别是在低端设备上。然而，它的代价是必须手动"
-"管理你的视窗。进一步的优化请参阅 [method "
+"管理你的视口。进一步的优化请参阅 [method "
 "viewport_set_render_direct_to_screen]。"
 
 #: doc/classes/VisualServer.xml
@@ -89826,32 +89897,32 @@ msgid ""
 "Once finished with your RID, you will want to free the RID using the "
 "VisualServer's [method free_rid] static method."
 msgstr ""
-"创建一个空视窗并将其添加到 VisualServer 中。可以用返回的RID来访问它。这个RID"
+"创建一个空视口并将其添加到 VisualServer 中。可以用返回的RID来访问它。这个RID"
 "将用于所有[code]viewport_*[/code] 的VisualServer函数。\n"
 "一旦你用完了RID，你要使用VisualServer的[method free_rid]静态方法释放RID。"
 
 #: doc/classes/VisualServer.xml
 msgid "Detaches the viewport from the screen."
-msgstr "将视窗从屏幕上分离。"
+msgstr "将视口从屏幕上分离。"
 
 #: doc/classes/VisualServer.xml
 msgid ""
 "Returns a viewport's render information. For options, see the [enum "
 "ViewportRenderInfo] constants."
-msgstr "返回视窗的渲染信息。有关选项，请参阅 [enum ViewportRenderInfo] 常量。"
+msgstr "返回视口的渲染信息。有关选项，请参阅 [enum ViewportRenderInfo] 常量。"
 
 #: doc/classes/VisualServer.xml
 msgid "Returns the viewport's last rendered frame."
-msgstr "返回视窗的最后渲染帧。"
+msgstr "返回视口的最后渲染帧。"
 
 #: doc/classes/VisualServer.xml
 msgid "Detaches a viewport from a canvas and vice versa."
-msgstr "从画布分离视窗，反之亦然。"
+msgstr "从画布分离视口，反之亦然。"
 
 #: doc/classes/VisualServer.xml
 msgid "If [code]true[/code], sets the viewport active, else sets it inactive."
 msgstr ""
-"如果为 [code]true[/code]，则将视窗设置为活动状态，否则将其设置为非活动状态。"
+"如果为 [code]true[/code]，则将视口设置为活动状态，否则将其设置为非活动状态。"
 
 #: doc/classes/VisualServer.xml
 msgid ""
@@ -89859,37 +89930,37 @@ msgid ""
 "[code]layer[/code] is the actual canvas layer, while [code]sublayer[/code] "
 "specifies the stacking order of the canvas among those in the same layer."
 msgstr ""
-"设置视窗画布的堆叠顺序。\n"
+"设置视口画布的堆叠顺序。\n"
 "[code]layer[/code] 是实际的画布层，而 [code]sublayer[/code] 则指定画布在同一"
 "层中的堆叠顺序。"
 
 #: doc/classes/VisualServer.xml
 msgid "Sets the transformation of a viewport's canvas."
-msgstr "设置视窗画布的变换。"
+msgstr "设置视口画布的变换。"
 
 #: doc/classes/VisualServer.xml
 msgid ""
 "Sets the clear mode of a viewport. See [enum ViewportClearMode] for options."
-msgstr "设置视窗的清除模式。可选项见 [enum ViewportClearMode]。"
+msgstr "设置视口的清除模式。可选项见 [enum ViewportClearMode]。"
 
 #: doc/classes/VisualServer.xml
 msgid ""
 "Sets the debug draw mode of a viewport. See [enum ViewportDebugDraw] for "
 "options."
-msgstr "设置视窗的调试绘图模式。可选项见 [enum ViewportDebugDraw]。"
+msgstr "设置视口的调试绘图模式。可选项见 [enum ViewportDebugDraw]。"
 
 #: doc/classes/VisualServer.xml
 msgid "If [code]true[/code], a viewport's 3D rendering is disabled."
-msgstr "如果为 [code]true[/code]，则视窗的 3D 渲染将禁用。"
+msgstr "如果为 [code]true[/code]，则视口的 3D 渲染将禁用。"
 
 #: doc/classes/VisualServer.xml
 msgid ""
 "If [code]true[/code], rendering of a viewport's environment is disabled."
-msgstr "如果为 [code]true[/code]，则禁用视窗环境的渲染。"
+msgstr "如果为 [code]true[/code]，则禁用视口环境的渲染。"
 
 #: doc/classes/VisualServer.xml
 msgid "Sets the viewport's global transformation matrix."
-msgstr "设置视窗的全局变换矩阵。"
+msgstr "设置视口的全局变换矩阵。"
 
 #: doc/classes/VisualServer.xml
 msgid ""
@@ -89898,13 +89969,13 @@ msgid ""
 "viewport_set_use_32_bpc_depth].\n"
 "[b]Note:[/b] Only available on the GLES3 backend."
 msgstr ""
-"如果为 [code]true[/code]，该视区会渲染至高动态范围（HDR）而不是标准动态范围"
+"如果为 [code]true[/code]，该视口会渲染至高动态范围（HDR）而不是标准动态范围"
 "（SDR）。另请参阅 [method viewport_set_use_32_bpc_depth]。\n"
 "[b]注意：[/b]仅在 GLES3 后端可用。"
 
 #: doc/classes/VisualServer.xml
 msgid "If [code]true[/code], the viewport's canvas is not rendered."
-msgstr "如果为 [code]true[/code]，则不渲染视窗的画布。"
+msgstr "如果为 [code]true[/code]，则不渲染视口的画布。"
 
 #: doc/classes/VisualServer.xml
 msgid "Currently unimplemented in Godot 3.x."
@@ -89916,7 +89987,7 @@ msgstr "设置抗锯齿模式。可选项见 [enum ViewportMSAA]。"
 
 #: doc/classes/VisualServer.xml
 msgid "Sets the viewport's parent to another viewport."
-msgstr "设置视窗的父视窗到另一个视窗。"
+msgstr "设置视口的父视口到另一个视口。"
 
 #: doc/classes/VisualServer.xml
 msgid ""
@@ -89933,12 +90004,12 @@ msgid ""
 "will be drawn, no automatic scaling is possible, even if your game scene is "
 "significantly larger than the window size."
 msgstr ""
-"如果为 [code]true[/code]，直接将视窗的内容渲染到屏幕上。这允许一个低级别的优"
-"化，你可以跳过绘制视窗到根视窗。虽然这种优化可以显著提高速度（特别是在旧设备"
-"上），但它是以牺牲可用性为代价的。当启用这个功能时，你不能从视窗或"
+"如果为 [code]true[/code]，直接将视口的内容渲染到屏幕上。这允许一个低级别的优"
+"化，你可以跳过绘制视口到根视口。虽然这种优化可以显著提高速度（特别是在旧设备"
+"上），但它是以牺牲可用性为代价的。当启用这个功能时，你不能从视口或"
 "[code]SCREEN_TEXTURE[/code]中读取。你也会失去某些窗口设置的好处，比如各种拉伸"
 "模式。另一个需要注意的后果是，在2D中，渲染是以窗口坐标进行的，所以如果你有一"
-"个两倍于窗口大小的视窗，并且你设置了这个，那么只有适合窗口的部分才会被绘制，"
+"个两倍于窗口大小的视口，并且你设置了这个，那么只有适合窗口的部分才会被绘制，"
 "没有自动缩放的可能，即使你的游戏场景明显大于窗口大小。"
 
 #: doc/classes/VisualServer.xml
@@ -89947,7 +90018,7 @@ msgid ""
 "The scenario contains information about the [enum ScenarioDebugMode], "
 "environment information, reflection atlas etc."
 msgstr ""
-"设置一个视窗的场景。\n"
+"设置视口的场景。\n"
 "场景包含 [enum ScenarioDebugMode] 的信息、环境信息、反射图集等。"
 
 #: doc/classes/VisualServer.xml
@@ -89971,31 +90042,31 @@ msgid ""
 "[code]0.5[/code] generally give the best results. See also [method "
 "viewport_set_use_fxaa]."
 msgstr ""
-"为视窗[code]viewport[/code]设定锐化强度[code]intensity[/code]。如果设置为大于"
-"[code]0.0[/code]的值，对比度适应性锐化将被应用到3D视窗中。这具有较低的性能成"
+"为视口[code]viewport[/code]设定锐化强度[code]intensity[/code]。如果设置为大于"
+"[code]0.0[/code]的值，对比度适应性锐化将被应用到3D视口中。这具有较低的性能成"
 "本，可以用来恢复使用FXAA时损失的一些锐度。一般来说，[code]0.5[/code]左右的值"
 "可以得到最好的效果。参阅[method viewport_set_use_fxaa]。"
 
 #: doc/classes/VisualServer.xml
 msgid "Sets the viewport's width and height."
-msgstr "设置视窗的宽度和高度。"
+msgstr "设置视口的宽度和高度。"
 
 #: doc/classes/VisualServer.xml
 msgid ""
 "If [code]true[/code], the viewport renders its background as transparent."
-msgstr "如果为 [code]true[/code]，视窗将其背景渲染为透明。"
+msgstr "如果为 [code]true[/code]，视口将其背景渲染为透明。"
 
 #: doc/classes/VisualServer.xml
 msgid ""
 "Sets when the viewport should be updated. See [enum ViewportUpdateMode] "
 "constants for options."
-msgstr "设置应更新视窗的时间。可选项请参阅 [enum ViewportUpdateMode] 。"
+msgstr "设置应更新视口的时间。可选项请参阅 [enum ViewportUpdateMode] 。"
 
 #: doc/classes/VisualServer.xml
 msgid ""
 "Sets the viewport's 2D/3D mode. See [enum ViewportUsage] constants for "
 "options."
-msgstr "设置视窗的 2D/3D 模式。选项见 [enum ViewportUsage] 常量。"
+msgstr "设置视口的 2D/3D 模式。选项见 [enum ViewportUsage] 常量。"
 
 #: doc/classes/VisualServer.xml
 msgid ""
@@ -90005,7 +90076,7 @@ msgid ""
 "on the same [Viewport] to set HDR to [code]true[/code].\n"
 "[b]Note:[/b] Only available on the GLES3 backend."
 msgstr ""
-"如果为 [code]true[/code]，分配该视区的帧缓冲时将使用完整浮点数精度（32 位）而"
+"如果为 [code]true[/code]，分配该视口的帧缓冲时将使用完整浮点数精度（32 位）而"
 "不是半浮点数精度（16 位）。只有在同一个 [Viewport] 上通过 [method "
 "viewport_set_use_32_bpc_depth] 将 HDR 设为 [code]true[/code] 时有效。\n"
 "[b]注意：[/b]仅在 GLES3 后端中可用。"
@@ -90015,7 +90086,7 @@ msgid ""
 "If [code]true[/code], the viewport uses augmented or virtual reality "
 "technologies. See [ARVRInterface]."
 msgstr ""
-"如果为 [code]true[/code]，则视窗使用增强或虚拟现实技术。见 [ARVRInterface]。"
+"如果为 [code]true[/code]，则视口使用增强或虚拟现实技术。见 [ARVRInterface]。"
 
 #: doc/classes/VisualServer.xml
 msgid ""
@@ -90042,14 +90113,14 @@ msgid ""
 "recovered by enabling contrast-adaptive sharpening (see [method "
 "viewport_set_sharpen_intensity])."
 msgstr ""
-"启用该视窗的快速近似抗锯齿。FXAA 是一种流行的屏幕空间抗锯齿方法，它速度快，但"
+"启用该视口的快速近似抗锯齿。FXAA 是一种流行的屏幕空间抗锯齿方法，它速度快，但"
 "会使图像看起来很模糊，特别是在低分辨率下。在 1440p 和 4K 等高分辨率下，它仍然"
 "可以工作得比较好。一些损失的锐度可以通过启用对比度适应性锐化来恢复（见 "
 "[method viewport_set_sharpen_intensity]）。"
 
 #: doc/classes/VisualServer.xml
 msgid "If [code]true[/code], the viewport's rendering is flipped vertically."
-msgstr "如果为 [code]true[/code]，则视窗的渲染垂直翻转。"
+msgstr "如果为 [code]true[/code]，则视口的渲染垂直翻转。"
 
 #: doc/classes/VisualServer.xml
 msgid ""
@@ -90440,33 +90511,33 @@ msgstr "优化阴影贴图的使用，提高有效分辨率。但可能会导致
 
 #: doc/classes/VisualServer.xml
 msgid "Do not update the viewport."
-msgstr "不要更新视窗。"
+msgstr "不要更新视口。"
 
 #: doc/classes/VisualServer.xml
 msgid "Update the viewport once then set to disabled."
-msgstr "更新一次视窗，然后设置为禁用。"
+msgstr "更新一次视口，然后设置为禁用。"
 
 #: doc/classes/VisualServer.xml
 msgid "Update the viewport whenever it is visible."
-msgstr "只要视窗是可见的，就更新视窗。"
+msgstr "只要视口是可见的，就更新视口。"
 
 #: doc/classes/VisualServer.xml
 msgid "Always update the viewport."
-msgstr "始终更新视窗。"
+msgstr "始终更新视口。"
 
 #: doc/classes/VisualServer.xml
 msgid "The viewport is always cleared before drawing."
-msgstr "在绘图之前，视窗总是被清空。"
+msgstr "在绘图之前，视口总是被清空。"
 
 #: doc/classes/VisualServer.xml
 msgid "The viewport is never cleared before drawing."
-msgstr "在绘图之前，视窗永远不会被清空。"
+msgstr "在绘图之前，视口永远不会被清空。"
 
 #: doc/classes/VisualServer.xml
 msgid ""
 "The viewport is cleared once, then the clear mode is set to [constant "
 "VIEWPORT_CLEAR_NEVER]."
-msgstr "视窗被清除一次，然后清除模式设置为 [constant VIEWPORT_CLEAR_NEVER]。"
+msgstr "视口被清除一次，然后清除模式设置为 [constant VIEWPORT_CLEAR_NEVER]。"
 
 #: doc/classes/VisualServer.xml
 msgid "Multisample antialiasing is disabled."
@@ -92375,7 +92446,7 @@ msgstr "使用给定的纹理作为此函数的参数。"
 
 #: doc/classes/VisualShaderNodeTexture.xml
 msgid "Use the current viewport's texture as the source."
-msgstr "使用当前视窗的纹理作为源。"
+msgstr "使用当前视口的纹理作为源。"
 
 #: doc/classes/VisualShaderNodeTexture.xml
 msgid ""

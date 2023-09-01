@@ -1,5 +1,6 @@
 //
-// Copyright (C) 2002-2005  3Dlabs Inc. Ltd.
+// Copyright (C) 2016 Google, Inc.
+//
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -14,7 +15,7 @@
 //    disclaimer in the documentation and/or other materials provided
 //    with the distribution.
 //
-//    Neither the name of 3Dlabs Inc. Ltd. nor the names of its
+//    Neither the name of Google Inc. nor the names of its
 //    contributors may be used to endorse or promote products derived
 //    from this software without specific prior written permission.
 //
@@ -30,15 +31,27 @@
 // LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
 // ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
-//
 
-#ifndef __OSINCLUDE_H
-#define __OSINCLUDE_H
+#ifndef _STAND_ALONE_RESOURCE_LIMITS_INCLUDED_
+#define _STAND_ALONE_RESOURCE_LIMITS_INCLUDED_
 
-namespace glslang {
+#include <string>
 
-void OS_DumpMemoryCounters();
+#include "../Include/ResourceLimits.h"
 
-} // end namespace glslang
+// Return pointer to user-writable Resource to pass through API in
+// future-proof way.
+extern TBuiltInResource* GetResources();
 
-#endif // __OSINCLUDE_H
+// These are the default resources for TBuiltInResources, used for both
+//  - parsing this string for the case where the user didn't supply one,
+//  - dumping out a template for user construction of a config file.
+extern const TBuiltInResource* GetDefaultResources();
+
+// Returns the DefaultTBuiltInResource as a human-readable string.
+std::string GetDefaultTBuiltInResourceString();
+
+// Decodes the resource limits from |config| to |resources|.
+void DecodeResourceLimits(TBuiltInResource* resources, char* config);
+
+#endif  // _STAND_ALONE_RESOURCE_LIMITS_INCLUDED_

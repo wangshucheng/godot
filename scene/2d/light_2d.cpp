@@ -412,6 +412,7 @@ void PointLight2D::set_texture(const Ref<Texture2D> &p_texture) {
 #endif
 
 		RS::get_singleton()->canvas_light_set_texture(_get_light(), texture->get_rid());
+		RS::get_singleton()->canvas_light_set_texture_filter(_get_light(), RSE::CanvasItemTextureFilter(get_texture_filter_in_tree()));
 	} else {
 		RS::get_singleton()->canvas_light_set_texture(_get_light(), RID());
 	}

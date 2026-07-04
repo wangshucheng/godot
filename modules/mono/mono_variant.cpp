@@ -47,7 +47,7 @@ MonoObject *variant_to_mono_object(MonoDomain *p_domain, const Variant &p_varian
 			return variant_to_mono_float(p_domain, (double)p_variant);
 		case Variant::STRING:
 		case Variant::STRING_NAME:
-			return variant_to_mono_string(p_domain, p_variant);
+			return reinterpret_cast<MonoObject *>(variant_to_mono_string(p_domain, p_variant));
 		case Variant::OBJECT: {
 			Object *obj = p_variant;
 			if (!obj) return nullptr;
@@ -55,7 +55,7 @@ MonoObject *variant_to_mono_object(MonoDomain *p_domain, const Variant &p_varian
 		}
 		default: {
 			String str = p_variant.operator String();
-			return variant_to_mono_string(p_domain, str);
+			return reinterpret_cast<MonoObject *>(variant_to_mono_string(p_domain, str));
 		}
 	}
 }
@@ -108,7 +108,7 @@ bool mono_object_to_bool(MonoObject *p_obj, bool *r_ok) {
 		if (r_ok) *r_ok = false;
 		return false;
 	}
-	char *val = mono_object_unbox(p_obj);
+	char *val = reinterpret_cast<char *>(mono_object_unbox(p_obj));
 	bool result = *(bool *)val;
 	if (r_ok) *r_ok = true;
 	return result;
@@ -120,7 +120,7 @@ int64_t mono_object_to_int(MonoObject *p_obj, bool *r_ok) {
 		return 0;
 	}
 	MonoClass *k = mono_object_get_class(p_obj);
-	char *val = mono_object_unbox(p_obj);
+	char *val = reinterpret_cast<char *>(mono_object_unbox(p_obj));
 	if (k == mono_class_int32) {
 		if (r_ok) *r_ok = true;
 		return *(int32_t *)val;
@@ -139,7 +139,7 @@ double mono_object_to_float(MonoObject *p_obj, bool *r_ok) {
 		return 0.0;
 	}
 	MonoClass *k = mono_object_get_class(p_obj);
-	char *val = mono_object_unbox(p_obj);
+	char *val = reinterpret_cast<char *>(mono_object_unbox(p_obj));
 	if (k == mono_class_single) {
 		if (r_ok) *r_ok = true;
 		return *(float *)val;
@@ -162,7 +162,7 @@ intptr_t mono_object_to_intptr(MonoObject *p_obj, bool *r_ok) {
 		if (r_ok) *r_ok = false;
 		return 0;
 	}
-	char *val = mono_object_unbox(p_obj);
+	char *val = reinterpret_cast<char *>(mono_object_unbox(p_obj));
 	if (r_ok) *r_ok = true;
 	return *(intptr_t *)val;
 }

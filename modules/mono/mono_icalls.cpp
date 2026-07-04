@@ -79,9 +79,8 @@ static MonoObject *godot_icall_Object_Call(intptr_t native_ptr, MonoString *p_me
 		}
 	}
 
-	Variant result;
 	Callable::CallError error;
-	obj->callp(method_name, args, argcount, result, error);
+	Variant result = obj->callp(method_name, args, argcount, error);
 
 	if (error.error != Callable::CallError::CALL_OK) {
 		printf("[Mono] Call error on %s: error=%d\n", String(method_name).utf8().get_data(), (int)error.error);

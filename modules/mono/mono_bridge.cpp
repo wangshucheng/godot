@@ -3,6 +3,7 @@
 #include "core/object/ref_counted.h"
 #include "core/error/error_macros.h"
 #include <cstdio>
+#include <cstdint>
 
 namespace mono_bridge {
 
@@ -12,12 +13,12 @@ static MonoClass *godot_node_class = nullptr;
 static MonoClass *system_intptr_class = nullptr;
 
 struct ObjectBinding {
-	MonoGCHandle gc_handle;
+	uint32_t gc_handle;
 	Object *native_ptr = nullptr;
 };
 
 static HashMap<Object *, ObjectBinding> native_to_managed;
-static HashMap<MonoGCHandle, Object *> managed_to_native;
+static HashMap<uint32_t, Object *> managed_to_native;
 
 void init(MonoDomain *p_domain) {
 	domain = p_domain;
@@ -71,7 +72,7 @@ void tie_native_ptr(MonoObject *p_cs_obj, Object *p_obj) {
 		mono_gchandle_free(native_to_managed[p_obj].gc_handle);
 	}
 
-	MonoGCHandle gch = mono_gchandle_new(p_cs_obj, false);
+	uint32_t gch = mono_gchandle_new(p_cs_obj, false);
 	ObjectBinding binding;
 	binding.gc_handle = gch;
 	binding.native_ptr = p_obj;

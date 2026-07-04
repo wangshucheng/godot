@@ -4,7 +4,6 @@
 #include "core/templates/hash_map.h"
 #include <mono/metadata/object.h>
 #include <mono/metadata/appdomain.h>
-#include <mono/metadata/gc-handle.h>
 
 namespace mono_bridge {
 

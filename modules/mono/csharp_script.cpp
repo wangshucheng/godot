@@ -78,8 +78,9 @@ Ref<Script> CSharpLanguage::make_template(const String &p_template, const String
 Vector<ScriptLanguage::ScriptTemplate> CSharpLanguage::get_built_in_templates(const StringName &p_object) {
 	Vector<ScriptTemplate> templates;
 	ScriptTemplate t;
+	t.inherit = p_object;
 	t.name = "C# Node";
-	t.extension = "cs";
+	t.description = "C# Script";
 	t.content = "using Godot;\n\npublic partial class _CLASS_ : _BASE_\n{\n    public override void _Ready()\n    {\n        GD.Print(\"Hello from C#!\");\n    }\n}\n";
 	templates.push_back(t);
 	return templates;

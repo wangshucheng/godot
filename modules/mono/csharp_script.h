@@ -1,8 +1,8 @@
 #pragma once
 
 #include "core/object/script_language.h"
-#include "core/object/script.h"
 #include "core/object/script_instance.h"
+#include "core/doc_data.h"
 #include "core/templates/hash_map.h"
 
 class CSharpLanguage;
@@ -21,6 +21,7 @@ public:
 	Ref<Script> get_base_script() const override { return Ref<Script>(); }
 	StringName get_global_name() const override { return StringName(); }
 	bool inherits_script(const Ref<Script> &p_script) const override { return false; }
+	StringName get_instance_base_type() const override { return native_base_name; }
 	ScriptInstance *instance_create(Object *p_this) override;
 	PlaceHolderScriptInstance *placeholder_instance_create(Object *p_this) override { return nullptr; }
 	bool has_source_code() const override { return true; }
@@ -39,6 +40,12 @@ public:
 	int get_member_line(const StringName &p_member) const override { return -1; }
 	const Variant get_rpc_config() const override { return Variant(); }
 	void get_members(HashSet<StringName> *p_members) override {}
+	StringName get_doc_class_name() const override { return class_name; }
+	Vector<DocData::ClassDoc> get_documentation() const override { return Vector<DocData::ClassDoc>(); }
+	String get_class_icon_path() const override { return String(); }
+	bool is_tool() const override { return false; }
+	bool is_valid() const override { return valid; }
+	bool is_abstract() const override { return false; }
 	ScriptLanguage *get_language() const override;
 	CSharpScript();
 };
@@ -54,6 +61,9 @@ public:
 	bool get(const StringName &p_name, Variant &r_ret) const override;
 	void get_property_list(List<PropertyInfo> *p_properties) const override {}
 	Variant::Type get_property_type(const StringName &p_name, bool *r_is_valid) const override { if (r_is_valid) *r_is_valid = false; return Variant::NIL; }
+	void validate_property(PropertyInfo &p_property) const override {}
+	bool property_can_revert(const StringName &p_name) const override { return false; }
+	bool property_get_revert(const StringName &p_name, Variant &r_ret) const override { return false; }
 	void get_method_list(List<MethodInfo> *p_list) const override {}
 	bool has_method(const StringName &p_method) const override;
 	int get_method_argument_count(const StringName &p_method, bool *r_is_valid = nullptr) const override { if (r_is_valid) *r_is_valid = false; return 0; }
@@ -95,16 +105,35 @@ public:
 	ScriptNameCasing preferred_file_name_casing() const override { return SCRIPT_NAME_CASING_PASCAL_CASE; }
 	bool handles_global_class_type(const String &p_type) const override { return false; }
 	String get_global_class_name(const String &p_path, String *r_base_type, String *r_icon_path, bool *r_is_abstract, bool *r_is_tool) const override { return ""; }
+
+	void auto_indent_code(String &p_code, int p_from_line, int p_to_line) const override {}
+	void add_global_constant(const StringName &p_variable, const Variant &p_value) override {}
+
 	String debug_get_error() const override { return ""; }
 	int debug_get_stack_level_count() const override { return 0; }
 	int debug_get_stack_level_line(int p_level) const override { return -1; }
 	String debug_get_stack_level_function(int p_level) const override { return ""; }
 	String debug_get_stack_level_source(int p_level) const override { return ""; }
+	void debug_get_stack_level_locals(int p_level, List<String> *p_locals, List<Variant> *p_values, int p_max_subitems = -1, int p_max_depth = -1) override {}
+	void debug_get_stack_level_members(int p_level, List<String> *p_members, List<Variant> *p_values, int p_max_subitems = -1, int p_max_depth = -1) override {}
+	void debug_get_globals(List<String> *p_globals, List<Variant> *p_values, int p_max_subitems = -1, int p_max_depth = -1) override {}
+	String debug_parse_stack_level_expression(int p_level, const String &p_expression, int p_max_subitems = -1, int p_max_depth = -1) override { return ""; }
 	Vector<StackInfo> debug_get_current_stack_info() override { return {}; }
+
 	void reload_all_scripts() override {}
 	void reload_scripts(const Array &p_scripts, bool p_soft_reload) override {}
 	void reload_tool_script(const Ref<Script> &p_script, bool p_soft_reload) override {}
 	void get_recognized_extensions(List<String> *p_extensions) const override;
+	void get_public_functions(List<MethodInfo> *p_functions) const override {}
+	void get_public_constants(List<Pair<String, Variant>> *p_constants) const override {}
+	void get_public_annotations(List<MethodInfo> *p_annotations) const override {}
+
+	void profiling_start() override {}
+	void profiling_stop() override {}
+	void profiling_set_save_native_calls(bool p_enable) override {}
+	int profiling_get_accumulated_data(ProfilingInfo *p_info_arr, int p_info_max) override { return 0; }
+	int profiling_get_frame_data(ProfilingInfo *p_info_arr, int p_info_max) override { return 0; }
+
 	CSharpLanguage();
 	~CSharpLanguage();
 };

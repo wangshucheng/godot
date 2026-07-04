@@ -1,5 +1,7 @@
 #include "mono_host.h"
 #include "mono_icalls.h"
+#include "mono_variant.h"
+#include "mono_bridge.h"
 #include "core/os/os.h"
 #include "core/io/dir_access.h"
 #include "core/io/file_access.h"
@@ -103,7 +105,6 @@ Error MonoHost::initialize() {
 
 	if (!DirAccess::exists(bcl_dir) || !FileAccess::exists(bcl_dir.path_join("mscorlib.dll"))) {
 		printf("[Mono] WARNING: mscorlib.dll not found at %s\n", bcl_dir.utf8().get_data());
-		printf("[Mono] Ensure the mono/ directory is present at the Godot source root or next to the executable.\n");
 	}
 
 	mono_set_dirs(assemblies_dir.utf8().get_data(), etc_dir.utf8().get_data());
@@ -118,12 +119,13 @@ Error MonoHost::initialize() {
 	domain = mono_jit_init_version("GodotMono", "v4.0.30319");
 	if (!domain) {
 		ERR_PRINT("[Mono] Failed to initialize JIT runtime (mono_jit_init_version returned NULL)");
-		ERR_PRINT("[Mono] This usually means mscorlib.dll was not found or could not be loaded.");
-		ERR_PRINT("[Mono] Ensure mono/lib/mono/4.5/mscorlib.dll exists relative to the Godot source root.");
 		return FAILED;
 	}
 
 	printf("[Mono] JIT domain created: %s\n", mono_domain_get_friendly_name(domain));
+
+	mono_bridge::init(domain);
+	mono_variant::cache_mono_corlib_classes();
 
 	if (!register_internal_calls()) {
 		return FAILED;
@@ -131,6 +133,10 @@ Error MonoHost::initialize() {
 
 	if (!load_corlib()) {
 		return FAILED;
+	}
+
+	if (!load_godotsharp()) {
+		printf("[Mono] Note: GodotSharp.dll not loaded (Phase 2 bindings will be limited).\n");
 	}
 
 	is_initialized = true;
@@ -163,6 +169,35 @@ bool MonoHost::load_corlib() {
 	return true;
 }
 
+MonoAssembly *MonoHost::load_assembly(const String &p_path) {
+	if (!FileAccess::exists(p_path)) {
+		return nullptr;
+	}
+	return mono_domain_assembly_open(domain, p_path.utf8().get_data());
+}
+
+bool MonoHost::load_godotsharp() {
+	String exe_dir = OS::get_singleton()->get_executable_path().get_base_dir();
+	String gs_path = exe_dir.path_join("GodotSharp.dll");
+	if (!FileAccess::exists(gs_path)) {
+		gs_path = exe_dir.path_join("mono").path_join("GodotSharp.dll");
+	}
+	if (!FileAccess::exists(gs_path)) {
+		return false;
+	}
+
+	godotsharp_assembly = mono_domain_assembly_open(domain, gs_path.utf8().get_data());
+	if (!godotsharp_assembly) {
+		printf("[Mono] Failed to open GodotSharp.dll\n");
+		return false;
+	}
+
+	MonoImage *img = mono_assembly_get_image(godotsharp_assembly);
+	mono_bridge::cache_godot_classes(img);
+	printf("[Mono] GodotSharp loaded successfully.\n");
+	return true;
+}
+
 bool MonoHost::load_assembly_and_run(const String &p_assembly_path) {
 	if (!is_initialized) {
 		ERR_PRINT("[Mono] Cannot load assembly - runtime not initialized");
@@ -179,8 +214,6 @@ bool MonoHost::load_assembly_and_run(const String &p_assembly_path) {
 	MonoAssembly *assembly = mono_domain_assembly_open(domain, p_assembly_path.utf8().get_data());
 	if (!assembly) {
 		ERR_PRINT("[Mono] Failed to load assembly!");
-		printf("[Mono] Check that the assembly targets .NET Framework 4.7.2 or compatible profile.\n");
-		printf("[Mono] .NET 6+ assemblies may not load with Mono 6.12.\n");
 		return false;
 	}
 
@@ -195,13 +228,16 @@ bool MonoHost::load_assembly_and_run(const String &p_assembly_path) {
 
 	MonoClass *main_class = nullptr;
 
-	main_class = mono_class_from_name(image, "HelloWorld", "Program");
-	if (!main_class) {
-		main_class = mono_class_from_name(image, "", "Program");
+	const char *namespaces[] = {"HelloMono", "HelloWorld", ""};
+	const char *class_names[] = {"Program", "MainClass"};
+
+	for (int ni = 0; ni < 3 && !main_class; ni++) {
+		for (int ci = 0; ci < 2 && !main_class; ci++) {
+			main_class = mono_class_from_name(image, namespaces[ni], class_names[ci]);
+		}
 	}
 
 	if (!main_class) {
-		printf("[Mono] Could not find Program class, searching for Main() via method desc...\n");
 		MonoMethodDesc *desc = mono_method_desc_new("*:Main()", false);
 		MonoMethod *main_method = mono_method_desc_search_in_image(desc, image);
 		mono_method_desc_free(desc);
@@ -211,7 +247,7 @@ bool MonoHost::load_assembly_and_run(const String &p_assembly_path) {
 			return false;
 		}
 
-		printf("[Mono] Found Main method, invoking...\n");
+		printf("[Mono] Found Main method via method desc, invoking...\n");
 
 		MonoObject *exc = nullptr;
 		mono_runtime_invoke(main_method, nullptr, nullptr, &exc);
@@ -221,7 +257,6 @@ bool MonoHost::load_assembly_and_run(const String &p_assembly_path) {
 			printf("[Mono] Exception during Main(): %s\n", exc_name ? exc_name : "(unknown)");
 			return false;
 		}
-
 		return true;
 	}
 
@@ -246,22 +281,6 @@ bool MonoHost::load_assembly_and_run(const String &p_assembly_path) {
 		const char *exc_name = mono_class_get_name(exc_class);
 		printf("[Mono] Exception in Main(): %s\n", exc_name ? exc_name : "(unknown)");
 
-		MonoProperty *msg_prop = mono_class_get_property_from_name(exc_class, "Message");
-		if (msg_prop) {
-			MonoMethod *msg_getter = mono_property_get_get_method(msg_prop);
-			if (msg_getter) {
-				MonoObject *msg_obj = mono_runtime_invoke(msg_getter, exc, nullptr, nullptr);
-				if (msg_obj) {
-					MonoString *msg_str = (MonoString *)msg_obj;
-					char *msg_utf8 = mono_string_to_utf8(msg_str);
-					if (msg_utf8) {
-						printf("[Mono] Exception message: %s\n", msg_utf8);
-						mono_free(msg_utf8);
-					}
-				}
-			}
-		}
-
 		MonoMethod *to_string_method = mono_class_get_method_from_name(exc_class, "ToString", 0);
 		if (to_string_method) {
 			MonoObject *to_str_obj = mono_runtime_invoke(to_string_method, exc, nullptr, nullptr);
@@ -269,12 +288,11 @@ bool MonoHost::load_assembly_and_run(const String &p_assembly_path) {
 				MonoString *to_str = (MonoString *)to_str_obj;
 				char *ts_utf8 = mono_string_to_utf8(to_str);
 				if (ts_utf8) {
-					printf("[Mono] Exception.ToString(): %s\n", ts_utf8);
+					printf("[Mono] Exception: %s\n", ts_utf8);
 					mono_free(ts_utf8);
 				}
 			}
 		}
-
 		return false;
 	}
 
@@ -287,6 +305,8 @@ void MonoHost::shutdown() {
 	}
 
 	printf("[Mono] Shutting down Mono runtime...\n");
+
+	mono_bridge::shutdown();
 
 	if (domain) {
 		mono_jit_cleanup(domain);

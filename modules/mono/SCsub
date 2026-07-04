@@ -72,6 +72,9 @@ mono_sources = [
     "register_types.cpp",
     "mono_host.cpp",
     "mono_icalls.cpp",
+    "mono_variant.cpp",
+    "mono_bridge.cpp",
+    "csharp_script.cpp",
     "utils/path_utils.cpp",
 ]
 

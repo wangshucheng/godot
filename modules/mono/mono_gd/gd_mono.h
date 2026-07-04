@@ -72,6 +72,11 @@ class GDMono {
 	int project_load_failure_count = 0;
 #endif
 
+#ifdef GD_MONO_STATIC_LINKING
+	// Static linking support - track static linker state
+	bool static_linker_initialized = false;
+#endif
+
 #ifdef TOOLS_ENABLED
 	bool _load_project_assembly();
 	void _try_load_project_assembly();
@@ -87,6 +92,12 @@ class GDMono {
 
 #ifdef TOOLS_ENABLED
 	gdmono::PluginCallbacks plugin_callbacks;
+#endif
+
+#ifdef GD_MONO_STATIC_LINKING
+	// Static linking initialization method
+	bool initialize_static_linker();
+	bool initialize_for_static();
 #endif
 
 protected:

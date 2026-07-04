@@ -37,6 +37,12 @@
 #include "../utils/path_utils.h"
 #include "gd_mono_cache.h"
 
+#ifdef GD_MONO_STATIC_LINKING
+#include "../host_bridge/mono_host_bridge.h"
+#include "../static_link/mono_gc_static.h"
+#include "../static_link/mono_threads_static.h"
+#endif
+
 #ifdef DEBUG_ENABLED
 #include "core/object/class_db.h"
 #endif
@@ -641,6 +647,13 @@ void GDMono::initialize() {
 
 	_init_godot_api_hashes();
 
+#ifdef GD_MONO_STATIC_LINKING
+	// Use static linking initialization path
+	initialize_for_static();
+	initialized = true;
+	return;
+#endif
+
 	godot_plugins_initialize_fn godot_plugins_initialize = nullptr;
 
 #if !defined(APPLE_EMBEDDED_ENABLED)
@@ -716,6 +729,99 @@ void GDMono::initialize() {
 
 	initialized = true;
 }
+
+#ifdef GD_MONO_STATIC_LINKING
+bool GDMono::initialize_for_static() {
+	print_verbose(".NET: Initializing static Mono runtime...");
+
+	// Set up host configuration
+	gdmono::GodotHostConfig host_config;
+	host_config.domain_name = "GodotEngine.RootDomain";
+	host_config.enable_debug = false;
+	host_config.assembly_search_paths = nullptr;
+	host_config.assembly_search_paths_count = 0;
+	host_config.config_dir = nullptr;
+	host_config.assertion_callback = nullptr;
+
+	// Initialize the embedded Mono runtime via Host Bridge
+	if (!gdmono::HostBridge::initialize_host(&host_config)) {
+		ERR_FAIL_V_MSG(false, ".NET: Failed to initialize static Mono runtime");
+	}
+
+	static_linker_initialized = true;
+	runtime_initialized = true;
+
+	// Get the plugin initialization function pointer
+	godot_plugins_initialize_fn godot_plugins_initialize = nullptr;
+
+#ifdef TOOLS_ENABLED
+	String plugins_path = GodotSharpDirs::get_api_assemblies_dir().path_join("GodotPlugins.dll");
+	int rc = gdmono::HostBridge::get_function_pointer(
+			plugins_path.utf8().get_data(),
+			"GodotPlugins.Main, GodotPlugins",
+			"InitializeFromEngine",
+			nullptr,
+			nullptr,
+			(void **)&godot_plugins_initialize);
+	if (rc != 0 || godot_plugins_initialize == nullptr) {
+		ERR_FAIL_V_MSG(false, ".NET: Failed to get GodotPlugins initialization function pointer");
+	}
+#else
+	String assembly_name = Path::get_csharp_project_name();
+	String assembly_path = GodotSharpDirs::get_api_assemblies_dir().path_join(assembly_name + ".dll");
+
+	int rc = gdmono::HostBridge::get_function_pointer(
+			assembly_path.utf8().get_data(),
+			"GodotPlugins.Game.Main, " + assembly_name.utf8().get_data(),
+			"InitializeFromGameProject",
+			nullptr,
+			nullptr,
+			(void **)&godot_plugins_initialize);
+	if (rc != 0 || godot_plugins_initialize == nullptr) {
+		ERR_FAIL_V_MSG(false, ".NET: Failed to get GodotPlugins initialization function pointer");
+	}
+#endif
+
+	// Get interop function table
+	int32_t interop_funcs_size = 0;
+	const void **interop_funcs = godotsharp::get_runtime_interop_funcs(interop_funcs_size);
+
+	GDMonoCache::ManagedCallbacks managed_callbacks{};
+
+	void *godot_dll_handle = nullptr;
+
+#if defined(UNIX_ENABLED) && !defined(MACOS_ENABLED) && !defined(APPLE_EMBEDDED_ENABLED)
+	godot_dll_handle = dlopen(nullptr, RTLD_NOW);
+#endif
+
+#ifdef TOOLS_ENABLED
+	gdmono::PluginCallbacks plugin_callbacks_res;
+	bool init_ok = godot_plugins_initialize(godot_dll_handle,
+			Engine::get_singleton()->is_editor_hint(),
+			&plugin_callbacks_res, &managed_callbacks,
+			interop_funcs, interop_funcs_size);
+	ERR_FAIL_COND_MSG(!init_ok, ".NET: GodotPlugins initialization failed");
+
+	plugin_callbacks = plugin_callbacks_res;
+#else
+	bool init_ok = godot_plugins_initialize(godot_dll_handle, &managed_callbacks,
+			interop_funcs, interop_funcs_size);
+	ERR_FAIL_COND_MSG(!init_ok, ".NET: GodotPlugins initialization failed");
+#endif
+
+	GDMonoCache::update_godot_api_cache(managed_callbacks);
+
+	print_verbose(".NET: GodotPlugins initialized (static linking)");
+
+	_on_core_api_assembly_loaded();
+
+#ifdef TOOLS_ENABLED
+	_try_load_project_assembly();
+#endif
+
+	return true;
+}
+#endif // GD_MONO_STATIC_LINKING
 
 #ifdef TOOLS_ENABLED
 void GDMono::_try_load_project_assembly() {
@@ -839,12 +945,19 @@ GDMono::GDMono() {
 GDMono::~GDMono() {
 	finalizing_scripts_domain = true;
 
+#ifdef GD_MONO_STATIC_LINKING
+	if (static_linker_initialized) {
+		gdmono::HostBridge::shutdown_host();
+		static_linker_initialized = false;
+	}
+#else
 	if (hostfxr_dll_handle) {
 		OS::get_singleton()->close_dynamic_library(hostfxr_dll_handle);
 	}
 	if (coreclr_dll_handle) {
 		OS::get_singleton()->close_dynamic_library(coreclr_dll_handle);
 	}
+#endif
 
 	finalizing_scripts_domain = false;
 	runtime_initialized = false;

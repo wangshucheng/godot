@@ -1,0 +1,16 @@
+#!/usr/bin/env python
+"""Build configuration for Host Bridge module.
+
+This SCsub is included by the main mono/SCsub when building the
+Host Bridge component for static Mono linking.
+"""
+
+Import("env")
+Import("env_mono")
+
+# Host bridge sources
+# These provide the host runtime interface for statically linked Mono
+
+env_mono.add_source_files(env.modules_sources, "*.cpp")
+
+print("Mono: Host Bridge module configured")

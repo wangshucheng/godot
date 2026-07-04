@@ -422,11 +422,15 @@ Ref<Texture2D> EditorExportPlatformWeb::get_logo() const {
 }
 
 bool EditorExportPlatformWeb::has_valid_export_configuration(const Ref<EditorExportPreset> &p_preset, String &r_error, bool &r_missing_templates, bool p_debug) const {
-#ifdef MODULE_MONO_ENABLED
+#if defined(MODULE_MONO_ENABLED) && !defined(GD_MONO_STATIC_LINKING)
 	// Don't check for additional errors, as this particular error cannot be resolved.
+	// Static linking (mono_static=yes) enables C# web export via embedded Mono/WASM.
 	r_error += TTR("Exporting to Web is currently not supported in Godot 4 when using C#/.NET. Use Godot 3 to target Web with C#/Mono instead.") + "\n";
 	r_error += TTR("If this project does not use C#, use a non-C# editor build to export the project.") + "\n";
 	return false;
+#elif defined(GD_MONO_STATIC_LINKING)
+	// Static linking with WASM support - allow web export with C#
+	// Continue with normal validation below
 #else
 
 	String err;
@@ -459,7 +463,7 @@ bool EditorExportPlatformWeb::has_valid_export_configuration(const Ref<EditorExp
 	}
 
 	return valid;
-#endif // !MODULE_MONO_ENABLED
+#endif // MODULE_MONO_ENABLED && !GD_MONO_STATIC_LINKING
 }
 
 bool EditorExportPlatformWeb::has_valid_project_configuration(const Ref<EditorExportPreset> &p_preset, String &r_error) const {

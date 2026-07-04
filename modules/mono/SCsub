@@ -19,6 +19,11 @@ env_mono.add_source_files(env.modules_sources, "glue/*.cpp")
 env_mono.add_source_files(env.modules_sources, "mono_gd/*.cpp")
 env_mono.add_source_files(env.modules_sources, "utils/*.cpp")
 
+# Static linking additional sources
+if env.get("mono_static", False):
+    env_mono.add_source_files(env.modules_sources, "static_link/*.cpp")
+    env_mono.add_source_files(env.modules_sources, "host_bridge/*.cpp")
+
 if env.editor_build:
     env_mono.add_source_files(env.modules_sources, "editor/*.cpp")
     SConscript("editor/script_templates/SCsub")

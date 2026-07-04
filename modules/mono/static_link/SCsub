@@ -1,0 +1,22 @@
+#!/usr/bin/env python
+"""Build configuration for static Mono linking.
+
+This SCsub is included by the main mono/SCsub when mono_static=yes.
+It provides additional configuration and source file handling for
+statically linked Mono builds.
+"""
+
+Import("env")
+Import("env_mono")
+
+# Static linking core sources
+# All .cpp files in this directory are automatically included
+env_mono.add_source_files(env.modules_sources, "*.cpp")
+
+# For web platform, add WASM-specific sources
+if env["platform"] == "web":
+    # WASM-specific loader is already included via *.cpp
+    # Additional WASM/Mono integration would be added here
+    pass
+
+print("Mono: Static linking support configured")

@@ -1,24 +1,80 @@
-#!/usr/bin/env python
-from misc.utility.scons_hints import *
-
-import build_scripts.mono_configure as mono_configure
-
 Import("env")
 Import("env_modules")
 
 env_mono = env_modules.Clone()
 
-# Configure Mono
+mono_root = "#mono"
+env_mono.Prepend(CPPPATH=[
+    mono_root + "/include/mono-2.0",
+    mono_root + "/include",
+])
 
-mono_configure.configure(env, env_mono)
+if env["platform"] == "windows":
+    env_mono.Append(CPPDEFINES=[
+        ("MONO_JIT_MODE", 1),
+        ("_CRT_SECURE_NO_WARNINGS", 1),
+    ])
 
-# Add sources
+    mono_lib_path = mono_root + "/libs/windows/x64"
 
-env_mono.add_source_files(env.modules_sources, "*.cpp")
-env_mono.add_source_files(env.modules_sources, "glue/*.cpp")
-env_mono.add_source_files(env.modules_sources, "mono_gd/*.cpp")
-env_mono.add_source_files(env.modules_sources, "utils/*.cpp")
+    if env.msvc:
+        env.Append(LIBPATH=[mono_lib_path])
+        env.Append(LINKFLAGS=[
+            "mono-2.0-sgen.lib",
+            "MonoPosixHelper.lib",
+            "oldnames.lib",
+        ])
+    else:
+        env.Prepend(LIBPATH=[mono_lib_path])
+        env.Append(LIBS=[
+            "mono-2.0-sgen",
+            "MonoPosixHelper",
+            "ws2_32",
+            "psapi",
+            "version",
+            "winmm",
+            "bcrypt",
+            "ole32",
+            "aut32",
+            "advapi32",
+            "user32",
+            "shell32",
+            "oldnames",
+        ])
 
-if env.editor_build:
-    env_mono.add_source_files(env.modules_sources, "editor/*.cpp")
-    SConscript("editor/script_templates/SCsub")
+elif env["platform"] in ["x11", "linuxbsd"]:
+    env_mono.Append(CPPDEFINES=[
+        ("MONO_JIT_MODE", 1),
+    ])
+    mono_lib_path = mono_root + "/libs/linux/x64"
+    env.Prepend(LIBPATH=[mono_lib_path])
+    env.Append(LIBS=["mono-2.0", "pthread", "dl", "m", "rt"])
+
+elif env["platform"] == "macos":
+    env_mono.Append(CPPDEFINES=[
+        ("MONO_JIT_MODE", 1),
+    ])
+    mono_lib_path = mono_root + "/libs/macos/universal"
+    env.Prepend(LIBPATH=[mono_lib_path])
+    env.Append(LIBS=["mono-2.0"])
+
+elif env["platform"] == "web":
+    env_mono.Append(CPPDEFINES=[
+        ("MONO_STATIC", 1),
+        ("MONO_AOT_MODE", 1),
+        ("WEB_ENABLED", 1),
+    ])
+    mono_lib_path = mono_root + "/libs/web/wasm"
+    env.Prepend(LIBPATH=[mono_lib_path])
+    print("[Mono] WASM platform: Full AOT mode (placeholder for Phase 4)")
+
+mono_sources = [
+    "register_types.cpp",
+    "mono_host.cpp",
+    "mono_icalls.cpp",
+    "utils/path_utils.cpp",
+]
+
+env_mono.add_source_files(env.modules_sources, mono_sources)
+
+print("[Mono] Configured for platform: " + env["platform"])

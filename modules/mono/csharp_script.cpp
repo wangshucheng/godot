@@ -1,7 +1,9 @@
 #include "csharp_script.h"
 #include "mono_host.h"
 #include "mono_bridge.h"
+#include "mono_gc_bridge.h"
 #include "mono_variant.h"
+#include "core/object/object.h"
 #include <mono/metadata/object.h>
 #include <mono/metadata/assembly.h>
 #include <cstdio>
@@ -49,7 +51,13 @@ Variant CSharpInstance::callp(const StringName &p_method, const Variant **p_args
 	return Variant();
 }
 
-void CSharpInstance::notification(int p_notification, bool p_reversed) {}
+void CSharpInstance::notification(int p_notification, bool p_reversed) {
+	if (p_notification == Object::NOTIFICATION_PREDELETE) {
+		if (owner) {
+			mono_gc_bridge::notify_native_destroyed(owner);
+		}
+	}
+}
 ScriptLanguage *CSharpInstance::get_language() { return CSharpLanguage::get_singleton(); }
 
 CSharpLanguage::CSharpLanguage() { singleton = this; }

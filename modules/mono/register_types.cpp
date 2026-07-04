@@ -65,7 +65,6 @@ void uninitialize_mono_module(ModuleInitializationLevel p_level) {
 		csharp_lang = nullptr;
 	}
 	if (mono_host) {
-		mono_bridge::shutdown();
 		mono_host->shutdown();
 		memdelete(mono_host);
 		mono_host = nullptr;

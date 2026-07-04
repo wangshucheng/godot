@@ -2,6 +2,7 @@
 #include "mono_icalls.h"
 #include "mono_variant.h"
 #include "mono_bridge.h"
+#include "mono_gc_bridge.h"
 #include "core/os/os.h"
 #include "core/io/dir_access.h"
 #include "core/io/file_access.h"
@@ -125,6 +126,7 @@ Error MonoHost::initialize() {
 	printf("[Mono] JIT domain created: %s\n", mono_domain_get_friendly_name(domain));
 
 	mono_bridge::init(domain);
+	mono_gc_bridge::init(domain);
 	mono_variant::cache_mono_corlib_classes();
 
 	if (!register_internal_calls()) {
@@ -307,6 +309,7 @@ void MonoHost::shutdown() {
 	printf("[Mono] Shutting down Mono runtime...\n");
 
 	mono_bridge::shutdown();
+	mono_gc_bridge::shutdown();
 
 	if (domain) {
 		mono_jit_cleanup(domain);

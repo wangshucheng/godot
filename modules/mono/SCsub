@@ -74,6 +74,7 @@ mono_sources = [
     "mono_icalls.cpp",
     "mono_variant.cpp",
     "mono_bridge.cpp",
+    "mono_gc_bridge.cpp",
     "csharp_script.cpp",
     "utils/path_utils.cpp",
 ]

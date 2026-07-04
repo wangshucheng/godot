@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.CompilerServices;
+using System.Runtime.ConstrainedExecution;
 
 namespace Godot {
     internal static class Bridge {
@@ -19,9 +20,12 @@ namespace Godot {
         internal static extern object godot_icall_Object_Call(IntPtr nativePtr, string method, object[] args);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        internal static extern IntPtr godot_icall_Object_Ctor(string className);
+        internal static extern IntPtr godot_icall_Object_Ctor(object thisObj);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern IntPtr godot_icall_Node_GetNode(IntPtr nativePtr, string path);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern bool godot_icall_Object_IsInstanceValid(IntPtr nativePtr);
     }
 }

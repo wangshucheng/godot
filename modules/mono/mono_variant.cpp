@@ -1,4 +1,6 @@
 #include "mono_variant.h"
+#include "mono_bridge.h"
+#include "mono_gc_bridge.h"
 #include "core/object/object.h"
 #include "core/string/ustring.h"
 #include <mono/metadata/object.h>
@@ -35,6 +37,28 @@ MonoClass *get_intptr_class() {
 	return mono_class_intptr;
 }
 
+static MonoClassField *find_nativeptr_field(MonoClass *p_klass) {
+	for (MonoClass *k = p_klass; k; k = mono_class_get_parent(k)) {
+		MonoClassField *field = mono_class_get_field_from_name(k, "NativePtr");
+		if (field) return field;
+	}
+	return nullptr;
+}
+
+static Object *extract_godot_object(MonoObject *p_obj) {
+	if (!p_obj) return nullptr;
+	MonoClass *godot_obj_class = mono_bridge::get_godot_object_class();
+	if (!godot_obj_class) return nullptr;
+	MonoClass *klass = mono_object_get_class(p_obj);
+	if (!mono_class_is_subclass_of(klass, godot_obj_class, true)) return nullptr;
+	MonoClassField *field = find_nativeptr_field(klass);
+	if (!field) return nullptr;
+	intptr_t ptr_val = 0;
+	mono_field_get_value(p_obj, field, &ptr_val);
+	if (ptr_val == 0) return nullptr;
+	return (Object *)ptr_val;
+}
+
 MonoObject *variant_to_mono_object(MonoDomain *p_domain, const Variant &p_variant) {
 	switch (p_variant.get_type()) {
 		case Variant::NIL:
@@ -51,7 +75,14 @@ MonoObject *variant_to_mono_object(MonoDomain *p_domain, const Variant &p_varian
 		case Variant::OBJECT: {
 			Object *obj = p_variant;
 			if (!obj) return nullptr;
-			return variant_to_mono_intptr(p_domain, (intptr_t)obj);
+			MonoClass *godot_node_class = mono_bridge::get_godot_node_class();
+			MonoClass *target_class = godot_node_class ? godot_node_class : mono_bridge::get_godot_object_class();
+			if (obj->is_class("Node") && godot_node_class) {
+				target_class = godot_node_class;
+			} else {
+				target_class = mono_bridge::get_godot_object_class();
+			}
+			return mono_bridge::managed_get_or_create(obj, target_class);
 		}
 		default: {
 			String str = p_variant.operator String();
@@ -70,6 +101,8 @@ Variant mono_object_to_variant(MonoObject *p_obj) {
 	if (klass == mono_class_double) return mono_object_to_float(p_obj);
 	if (klass == mono_class_intptr) return (int64_t)mono_object_to_intptr(p_obj);
 	if (klass == mono_class_string) return mono_object_to_native_string(p_obj);
+	Object *godot_obj = extract_godot_object(p_obj);
+	if (godot_obj) return Variant(godot_obj);
 	bool ok;
 	int64_t i = mono_object_to_int(p_obj, &ok);
 	if (ok) return i;

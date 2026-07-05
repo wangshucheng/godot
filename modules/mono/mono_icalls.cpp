@@ -2,6 +2,7 @@
 #include "mono_variant.h"
 #include "mono_bridge.h"
 #include "mono_gc_bridge.h"
+#include "mono_callable.h"
 #include "core/os/os.h"
 #include "core/object/class_db.h"
 #include "core/object/object.h"
@@ -148,6 +149,130 @@ static intptr_t godot_icall_Object_Ctor(MonoObject *p_this_obj) {
 	return (intptr_t)obj;
 }
 
+static intptr_t godot_icall_Callable_CreateFromDelegate(MonoObject *p_delegate) {
+	if (!p_delegate) return 0;
+
+	CallableCustomMono *custom = memnew(CallableCustomMono);
+	uint32_t gchandle = mono_gchandle_new(p_delegate, false);
+	custom->set_delegate(gchandle, get_domain());
+
+	Callable *callable = memnew(Callable(custom));
+	return (intptr_t)callable;
+}
+
+static MonoObject *godot_icall_Callable_Call(intptr_t p_callable_ptr, MonoArray *p_args) {
+	if (p_callable_ptr == 0) return nullptr;
+	Callable *callable = (Callable *)p_callable_ptr;
+	if (!callable->is_valid()) return nullptr;
+
+	int argcount = 0;
+	const Variant **args = nullptr;
+	if (p_args) {
+		argcount = (int)mono_array_length(p_args);
+		if (argcount > 0) {
+			args = (const Variant **)alloca(sizeof(const Variant *) * argcount);
+			for (int i = 0; i < argcount; i++) {
+				MonoObject *arg = mono_array_get(p_args, MonoObject *, i);
+				Variant *v = (Variant *)alloca(sizeof(Variant));
+				*v = mono_object_to_variant(arg);
+				args[i] = v;
+			}
+		}
+	}
+
+	Callable::CallError error;
+	Variant result;
+	callable->callp(args, argcount, result, error);
+
+	if (error.error == Callable::CallError::CALL_OK) {
+		return variant_to_mono_object(get_domain(), result);
+	}
+	return nullptr;
+}
+
+static void godot_icall_Callable_Free(intptr_t p_callable_ptr) {
+	if (p_callable_ptr == 0) return;
+	Callable *callable = (Callable *)p_callable_ptr;
+	memdelete(callable);
+}
+
+static bool godot_icall_Object_Connect(intptr_t p_native_ptr, MonoString *p_signal, intptr_t p_callable_ptr, int p_flags) {
+	if (p_native_ptr == 0 || p_callable_ptr == 0) return false;
+	Object *obj = (Object *)p_native_ptr;
+	if (!mono_gc_bridge::is_native_alive(obj)) return false;
+
+	char *signal_utf8 = mono_string_to_utf8(p_signal);
+	StringName signal_name(signal_utf8);
+	mono_free(signal_utf8);
+
+	Callable *callable = (Callable *)p_callable_ptr;
+	Error err = obj->connect(signal_name, *callable, (uint32_t)p_flags);
+	return err == OK;
+}
+
+static void godot_icall_Object_Disconnect(intptr_t p_native_ptr, MonoString *p_signal, intptr_t p_callable_ptr) {
+	if (p_native_ptr == 0 || p_callable_ptr == 0) return;
+	Object *obj = (Object *)p_native_ptr;
+	if (!mono_gc_bridge::is_native_alive(obj)) return;
+
+	char *signal_utf8 = mono_string_to_utf8(p_signal);
+	StringName signal_name(signal_utf8);
+	mono_free(signal_utf8);
+
+	Callable *callable = (Callable *)p_callable_ptr;
+	obj->disconnect(signal_name, *callable);
+}
+
+static bool godot_icall_Object_IsConnected(intptr_t p_native_ptr, MonoString *p_signal, intptr_t p_callable_ptr) {
+	if (p_native_ptr == 0 || p_callable_ptr == 0) return false;
+	Object *obj = (Object *)p_native_ptr;
+	if (!mono_gc_bridge::is_native_alive(obj)) return false;
+
+	char *signal_utf8 = mono_string_to_utf8(p_signal);
+	StringName signal_name(signal_utf8);
+	mono_free(signal_utf8);
+
+	Callable *callable = (Callable *)p_callable_ptr;
+	return obj->is_connected(signal_name, *callable);
+}
+
+static void godot_icall_Object_EmitSignal(intptr_t p_native_ptr, MonoString *p_signal, MonoArray *p_args) {
+	if (p_native_ptr == 0) return;
+	Object *obj = (Object *)p_native_ptr;
+	if (!mono_gc_bridge::is_native_alive(obj)) return;
+
+	char *signal_utf8 = mono_string_to_utf8(p_signal);
+	StringName signal_name(signal_utf8);
+	mono_free(signal_utf8);
+
+	int argcount = 0;
+	const Variant **args = nullptr;
+	if (p_args) {
+		argcount = (int)mono_array_length(p_args);
+		if (argcount > 0) {
+			args = (const Variant **)alloca(sizeof(const Variant *) * argcount);
+			for (int i = 0; i < argcount; i++) {
+				MonoObject *arg = mono_array_get(p_args, MonoObject *, i);
+				Variant *v = (Variant *)alloca(sizeof(Variant));
+				*v = mono_object_to_variant(arg);
+				args[i] = v;
+			}
+		}
+	}
+
+	obj->emit_signalp(signal_name, args, argcount);
+}
+
+static bool godot_icall_Object_HasSignal(intptr_t p_native_ptr, MonoString *p_signal) {
+	if (p_native_ptr == 0) return false;
+	Object *obj = (Object *)p_native_ptr;
+	if (!mono_gc_bridge::is_native_alive(obj)) return false;
+	char *signal_utf8 = mono_string_to_utf8(p_signal);
+	StringName signal_name(signal_utf8);
+	mono_free(signal_utf8);
+	return obj->has_signal(signal_name);
+}
+
 static void godot_icall_Console_WriteLine_raw(MonoString *message) {
 	if (message == nullptr) {
 		printf("\n");
@@ -164,6 +289,20 @@ static void godot_icall_Console_WriteLine_raw(MonoString *message) {
 	fflush(stdout);
 }
 
+static intptr_t godot_icall_Object_InstantiateFromNative(MonoString *p_class_name) {
+	if (!p_class_name) return 0;
+	char *name_utf8 = mono_string_to_utf8(p_class_name);
+	if (!name_utf8 || name_utf8[0] == '\0') {
+		if (name_utf8) mono_free(name_utf8);
+		return 0;
+	}
+	StringName class_name(name_utf8);
+	mono_free(name_utf8);
+	Object *obj = ClassDB::instantiate(class_name);
+	if (!obj) return 0;
+	return (intptr_t)obj;
+}
+
 void godot_register_icalls() {
 	mono_add_internal_call("Godot.Bridge::godot_icall_GD_Print", (const void *)godot_icall_GD_Print);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Object_Free", (const void *)godot_icall_Object_Free);
@@ -173,6 +312,15 @@ void godot_register_icalls() {
 	mono_add_internal_call("Godot.Bridge::godot_icall_Object_Call", (const void *)godot_icall_Object_Call);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Object_Ctor", (const void *)godot_icall_Object_Ctor);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Node_GetNode", (const void *)godot_icall_Node_GetNode);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Callable_CreateFromDelegate", (const void *)godot_icall_Callable_CreateFromDelegate);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Callable_Call", (const void *)godot_icall_Callable_Call);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Callable_Free", (const void *)godot_icall_Callable_Free);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Object_Connect", (const void *)godot_icall_Object_Connect);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Object_Disconnect", (const void *)godot_icall_Object_Disconnect);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Object_IsConnected", (const void *)godot_icall_Object_IsConnected);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Object_EmitSignal", (const void *)godot_icall_Object_EmitSignal);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Object_HasSignal", (const void *)godot_icall_Object_HasSignal);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Object_InstantiateFromNative", (const void *)godot_icall_Object_InstantiateFromNative);
 	mono_add_internal_call("HelloWorld.ConsoleBridge::godot_icall_Console_WriteLine", (const void *)godot_icall_Console_WriteLine_raw);
-	printf("[Mono] Registered internal calls (with GC bridge).\n");
+	printf("[Mono] Registered internal calls (signals + callable).\n");
 }

@@ -109,12 +109,14 @@ Error MonoHost::initialize() {
 	}
 
 	mono_set_dirs(assemblies_dir.utf8().get_data(), etc_dir.utf8().get_data());
-	mono_set_assemblies_path(bcl_dir.utf8().get_data());
+
+	String search_path = bcl_dir + String(";") + exe_dir;
+	mono_set_assemblies_path(search_path.utf8().get_data());
 
 #ifdef WINDOWS_ENABLED
-	SetEnvironmentVariableA("MONO_PATH", bcl_dir.utf8().get_data());
+	SetEnvironmentVariableA("MONO_PATH", search_path.utf8().get_data());
 #else
-	setenv("MONO_PATH", bcl_dir.utf8().get_data(), 1);
+	setenv("MONO_PATH", search_path.utf8().get_data(), 1);
 #endif
 
 	domain = mono_jit_init_version("GodotMono", "v4.0.30319");

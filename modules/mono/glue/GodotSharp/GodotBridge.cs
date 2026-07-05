@@ -1,6 +1,5 @@
 using System;
 using System.Runtime.CompilerServices;
-using System.Runtime.ConstrainedExecution;
 
 namespace Godot {
     internal static class Bridge {
@@ -27,5 +26,32 @@ namespace Godot {
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern bool godot_icall_Object_IsInstanceValid(IntPtr nativePtr);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern IntPtr godot_icall_Callable_CreateFromDelegate(Delegate del);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern object godot_icall_Callable_Call(IntPtr callablePtr, object[] args);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Callable_Free(IntPtr callablePtr);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern bool godot_icall_Object_Connect(IntPtr nativePtr, string signal, IntPtr callablePtr, int flags);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Object_Disconnect(IntPtr nativePtr, string signal, IntPtr callablePtr);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern bool godot_icall_Object_IsConnected(IntPtr nativePtr, string signal, IntPtr callablePtr);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Object_EmitSignal(IntPtr nativePtr, string signal, object[] args);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern bool godot_icall_Object_HasSignal(IntPtr nativePtr, string signal);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern IntPtr godot_icall_Object_InstantiateFromNative(string className);
     }
 }

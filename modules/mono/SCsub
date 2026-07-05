@@ -9,6 +9,20 @@ env_mono.Prepend(CPPPATH=[
     mono_root + "/include",
 ])
 
+mono_sources = [
+    "register_types.cpp",
+    "mono_host.cpp",
+    "mono_icalls.cpp",
+    "mono_variant.cpp",
+    "mono_callable.cpp",
+    "mono_bridge.cpp",
+    "mono_gc_bridge.cpp",
+    "csharp_script.cpp",
+    "mono_aot.cpp",
+    "mono_aot_modules.cpp",
+    "utils/path_utils.cpp",
+]
+
 if env["platform"] == "windows":
     env_mono.Append(CPPDEFINES=[
         ("MONO_JIT_MODE", 1),
@@ -16,17 +30,16 @@ if env["platform"] == "windows":
     ])
 
     mono_lib_path = mono_root + "/libs/windows/x64"
+    env_mono.Prepend(LIBPATH=[mono_lib_path])
 
     if env.msvc:
-        env.Append(LIBPATH=[mono_lib_path])
-        env.Append(LINKFLAGS=[
+        env_mono.Append(LINKFLAGS=[
             "mono-2.0-sgen.lib",
             "MonoPosixHelper.lib",
             "oldnames.lib",
         ])
     else:
-        env.Prepend(LIBPATH=[mono_lib_path])
-        env.Append(LIBS=[
+        env_mono.Append(LIBS=[
             "mono-2.0-sgen",
             "MonoPosixHelper",
             "ws2_32",
@@ -47,38 +60,60 @@ elif env["platform"] in ["x11", "linuxbsd"]:
         ("MONO_JIT_MODE", 1),
     ])
     mono_lib_path = mono_root + "/libs/linux/x64"
-    env.Prepend(LIBPATH=[mono_lib_path])
-    env.Append(LIBS=["mono-2.0", "pthread", "dl", "m", "rt"])
+    env_mono.Prepend(LIBPATH=[mono_lib_path])
+    env_mono.Append(LIBS=["mono-2.0", "pthread", "dl", "m", "rt"])
 
 elif env["platform"] == "macos":
     env_mono.Append(CPPDEFINES=[
         ("MONO_JIT_MODE", 1),
     ])
     mono_lib_path = mono_root + "/libs/macos/universal"
-    env.Prepend(LIBPATH=[mono_lib_path])
-    env.Append(LIBS=["mono-2.0"])
+    env_mono.Prepend(LIBPATH=[mono_lib_path])
+    env_mono.Append(LIBS=["mono-2.0"])
 
 elif env["platform"] == "web":
     env_mono.Append(CPPDEFINES=[
         ("MONO_STATIC", 1),
         ("MONO_AOT_MODE", 1),
         ("WEB_ENABLED", 1),
+        ("DISABLE_SOCKET", 1),
+        ("MONO_SINGLE_THREAD", 1),
     ])
-    mono_lib_path = mono_root + "/libs/web/wasm"
-    env.Prepend(LIBPATH=[mono_lib_path])
-    print("[Mono] WASM platform: Full AOT mode (placeholder for Phase 4)")
 
-mono_sources = [
-    "register_types.cpp",
-    "mono_host.cpp",
-    "mono_icalls.cpp",
-    "mono_variant.cpp",
-    "mono_callable.cpp",
-    "mono_bridge.cpp",
-    "mono_gc_bridge.cpp",
-    "csharp_script.cpp",
-    "utils/path_utils.cpp",
-]
+    mono_lib_path = mono_root + "/libs/web/wasm"
+    env_mono.Prepend(LIBPATH=[mono_lib_path])
+
+    env_mono.Append(LIBS=[
+        "mono-2.0",
+        "monoruntime",
+        "monosgen-2.0",
+        "mono-profiler-aot",
+    ])
+
+    wasm_threads = env.get("wasm_threads", False)
+    if wasm_threads:
+        env_mono.Append(CPPDEFINES=[("MONO_WASM_THREADS", 1)])
+        env_mono.Append(LINKFLAGS=[
+            "-s", "PROXY_TO_PTHREAD=1",
+            "-s", "PTHREAD_POOL_SIZE=4",
+            "-s", "SHARED_MEMORY=1",
+        ])
+    else:
+        env_mono.Append(LINKFLAGS=[
+            "-s", "PROXY_TO_PTHREAD=0",
+            "-s", "PTHREAD_POOL_SIZE=0",
+        ])
+
+    wasm_memory = env.get("wasm_memory_size", 256)
+    env_mono.Append(LINKFLAGS=[
+        "-s", "ALLOW_MEMORY_GROWTH=1",
+        "-s", ("TOTAL_MEMORY=%dMB" % wasm_memory),
+        "-s", "EXPORT_NAME=GodotMono",
+        "-s", "FILESYSTEM=0",
+    ])
+
+    print("[Mono] WASM platform: Full AOT mode configured (threads=%s, memory=%dMB)"
+          % ("yes" if wasm_threads else "no", wasm_memory))
 
 env_mono.add_source_files(env.modules_sources, mono_sources)
 

@@ -1,8 +1,10 @@
 using System;
 using System.Runtime.CompilerServices;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Godot {
+    [Preserve(AllMembers = true)]
     public class SignalAwaiter : INotifyCompletion {
         private readonly Object _source;
         private readonly string _signal;
@@ -21,7 +23,7 @@ namespace Godot {
             if (!ok) {
                 _callable.Dispose();
                 _callable = null;
-                _exception = new InvalidOperationException($"Failed to connect to signal '{signal}'");
+                _exception = new InvalidOperationException("Failed to connect to signal '" + signal + "'");
                 _isCompleted = true;
             }
         }
@@ -36,7 +38,12 @@ namespace Godot {
             if (_continuation != null) {
                 var cont = _continuation;
                 _continuation = null;
-                cont();
+                var ctx = SynchronizationContext.Current;
+                if (ctx != null && ctx is GodotSynchronizationContext) {
+                    ctx.Post(_ => cont(), null);
+                } else {
+                    cont();
+                }
             }
         }
 
@@ -56,11 +63,5 @@ namespace Godot {
             if (_exception != null) throw _exception;
             return _result;
         }
-    }
-
-    [Flags]
-    public enum ConnectFlags {
-        Deferred = 1,
-        OneShot = 4,
     }
 }

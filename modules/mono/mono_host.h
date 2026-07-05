@@ -22,6 +22,8 @@ public:
 	MonoAssembly *load_assembly(const String &p_path);
 	bool load_godotsharp();
 
+	void pump_sync_context();
+
 	static MonoHost *get_singleton() { return singleton; }
 
 	MonoDomain *get_domain() const { return domain; }
@@ -32,9 +34,11 @@ private:
 	MonoDomain *domain = nullptr;
 	MonoAssembly *corlib_assembly = nullptr;
 	MonoAssembly *godotsharp_assembly = nullptr;
+	MonoMethod *sync_context_pump_method = nullptr;
 
 	static MonoHost *singleton;
 
 	bool load_corlib();
 	bool register_internal_calls();
+	void cache_sync_context_method();
 };

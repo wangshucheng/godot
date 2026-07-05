@@ -4,20 +4,30 @@
 #include "core/object/script_instance.h"
 #include "core/doc_data.h"
 #include "core/templates/hash_map.h"
+#include <mono/metadata/object.h>
+#include <mono/metadata/appdomain.h>
 
 class CSharpLanguage;
 
 class CSharpScript : public Script {
 	GDCLASS(CSharpScript, Script);
 	friend class CSharpLanguage;
+	friend class CSharpInstance;
 
 	String source;
 	String class_name;
 	StringName native_base_name;
 	bool valid = false;
 
+	MonoClass *mono_class = nullptr;
+	MonoImage *mono_image = nullptr;
+	HashMap<StringName, MonoMethod *> method_cache;
+
+	void resolve_mono_class();
+	MonoMethod *get_method(const StringName &p_method, int p_argcount = -1);
+
 public:
-	bool can_instantiate() const override { return valid; }
+	bool can_instantiate() const override { return valid && mono_class != nullptr; }
 	Ref<Script> get_base_script() const override { return Ref<Script>(); }
 	StringName get_global_name() const override { return StringName(); }
 	bool inherits_script(const Ref<Script> &p_script) const override { return false; }
@@ -26,17 +36,17 @@ public:
 	PlaceHolderScriptInstance *placeholder_instance_create(Object *p_this) override { return nullptr; }
 	bool has_source_code() const override { return true; }
 	String get_source_code() const override { return source; }
-	void set_source_code(const String &p_code) override { source = p_code; }
+	void set_source_code(const String &p_code) override { source = p_code; valid = false; mono_class = nullptr; mono_image = nullptr; method_cache.clear(); }
 	Error reload(bool p_keep_state = false) override;
 	bool has_script_signal(const StringName &p_signal) const override { return false; }
 	void get_script_signal_list(List<MethodInfo> *r_signals) const override {}
 	bool get_property_default_value(const StringName &p_property, Variant &r_value) const override { return false; }
-	void get_script_method_list(List<MethodInfo> *p_list) const override {}
+	void get_script_method_list(List<MethodInfo> *r_list) const override;
 	bool has_method(const StringName &p_method) const override;
-	int get_script_method_argument_count(const StringName &p_method, bool *r_is_valid = nullptr) const override { if (r_is_valid) *r_is_valid = false; return 0; }
+	int get_script_method_argument_count(const StringName &p_method, bool *r_is_valid = nullptr) const override;
 	MethodInfo get_method_info(const StringName &p_method) const override { return MethodInfo(); }
-	Variant callp(const StringName &p_method, const Variant **p_args, int p_argcount, Callable::CallError &r_error) override { r_error.error = Callable::CallError::CALL_ERROR_INVALID_METHOD; return Variant(); }
-	void get_script_property_list(List<PropertyInfo> *p_list) const override {}
+	Variant callp(const StringName &p_method, const Variant **p_args, int p_argcount, Callable::CallError &r_error) override;
+	void get_script_property_list(List<PropertyInfo> *r_list) const override {}
 	int get_member_line(const StringName &p_member) const override { return -1; }
 	const Variant get_rpc_config() const override { return Variant(); }
 	void get_members(HashSet<StringName> *p_members) override {}
@@ -51,25 +61,31 @@ public:
 };
 
 class CSharpInstance : public ScriptInstance {
+	friend class CSharpScript;
+
 	Object *owner = nullptr;
 	Ref<CSharpScript> script;
-	void *mono_gchandle = nullptr;
+	MonoObject *mono_object = nullptr;
+	uint32_t gchandle = 0;
+
+	MonoObject *invoke_method(MonoMethod *p_method, const Variant **p_args, int p_argcount, Variant &r_result, Callable::CallError &r_error);
+	MonoMethod *find_method(const StringName &p_method, int p_argcount = -1);
 
 public:
 	Object *get_owner() override { return owner; }
 	bool set(const StringName &p_name, const Variant &p_value) override;
 	bool get(const StringName &p_name, Variant &r_ret) const override;
 	void get_property_list(List<PropertyInfo> *p_properties) const override {}
-	Variant::Type get_property_type(const StringName &p_name, bool *r_is_valid) const override { if (r_is_valid) *r_is_valid = false; return Variant::NIL; }
+	Variant::Type get_property_type(const StringName &p_name, bool *r_is_valid) const override;
 	void validate_property(PropertyInfo &p_property) const override {}
 	bool property_can_revert(const StringName &p_name) const override { return false; }
 	bool property_get_revert(const StringName &p_name, Variant &r_ret) const override { return false; }
-	void get_method_list(List<MethodInfo> *p_list) const override {}
+	void get_method_list(List<MethodInfo> *p_list) const override;
 	bool has_method(const StringName &p_method) const override;
-	int get_method_argument_count(const StringName &p_method, bool *r_is_valid = nullptr) const override { if (r_is_valid) *r_is_valid = false; return 0; }
+	int get_method_argument_count(const StringName &p_method, bool *r_is_valid = nullptr) const override;
 	Variant callp(const StringName &p_method, const Variant **p_args, int p_argcount, Callable::CallError &r_error) override;
 	void notification(int p_notification, bool p_reversed = false) override;
-	String to_string(bool *r_valid) override { if (r_valid) *r_valid = false; return "<CSharpScript>"; }
+	String to_string(bool *r_valid) override;
 	Ref<Script> get_script() const override { return script; }
 	ScriptLanguage *get_language() override;
 	CSharpInstance(const Ref<CSharpScript> &p_script, Object *p_owner);
@@ -79,16 +95,22 @@ public:
 class CSharpLanguage : public ScriptLanguage {
 	static CSharpLanguage *singleton;
 	int lang_idx = -1;
+	HashMap<String, MonoAssembly *> loaded_assemblies;
+	MonoAssembly *scripts_assembly = nullptr;
+
 public:
 	static CSharpLanguage *get_singleton() { return singleton; }
 	void set_language_index(int p_idx) { lang_idx = p_idx; }
+
+	MonoAssembly *load_scripts_assembly();
+	MonoAssembly *get_scripts_assembly() const { return scripts_assembly; }
 
 	String get_name() const override { return "C#"; }
 	String get_type() const override { return "CSharpScript"; }
 	String get_extension() const override { return "cs"; }
 	void init() override;
 	void finish() override;
-	void frame() override {}
+	void frame() override;
 	Vector<String> get_reserved_words() const override { return {}; }
 	bool is_control_flow_keyword(const String &p_keyword) const override { return false; }
 	Vector<String> get_comment_delimiters() const override { return {"//", ""}; }
@@ -120,8 +142,8 @@ public:
 	String debug_parse_stack_level_expression(int p_level, const String &p_expression, int p_max_subitems = -1, int p_max_depth = -1) override { return ""; }
 	Vector<StackInfo> debug_get_current_stack_info() override { return {}; }
 
-	void reload_all_scripts() override {}
-	void reload_scripts(const Array &p_scripts, bool p_soft_reload) override {}
+	void reload_all_scripts() override;
+	void reload_scripts(const Array &p_scripts, bool p_soft_reload) override;
 	void reload_tool_script(const Ref<Script> &p_script, bool p_soft_reload) override {}
 	void get_recognized_extensions(List<String> *p_extensions) const override;
 	void get_public_functions(List<MethodInfo> *p_functions) const override {}

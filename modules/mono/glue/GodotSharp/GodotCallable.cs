@@ -2,6 +2,7 @@ using System;
 using System.Runtime.CompilerServices;
 
 namespace Godot {
+    [Preserve(AllMembers = true)]
     public class Callable : IDisposable {
         internal IntPtr NativePtr;
         private bool disposed = false;
@@ -11,6 +12,18 @@ namespace Godot {
         }
 
         private static Action<object[]> CreateWrapper(Delegate del) {
+            if (del is Action simpleAction) {
+                return (args) => {
+                    try { simpleAction(); }
+                    catch (Exception e) { LogException(e); }
+                };
+            }
+            if (del is Action<object[]> arrayAction) {
+                return (args) => {
+                    try { arrayAction(args ?? new object[0]); }
+                    catch (Exception e) { LogException(e); }
+                };
+            }
             return (args) => {
                 try {
                     int paramCount = del.Method.GetParameters().Length;
@@ -20,15 +33,22 @@ namespace Godot {
                         del.DynamicInvoke(new object[] { args });
                     } else {
                         object[] passArgs = new object[paramCount];
-                        for (int i = 0; i < paramCount && i < args.Length; i++) {
+                        int copyCount = paramCount;
+                        if (args != null && args.Length < copyCount) copyCount = args.Length;
+                        for (int i = 0; i < copyCount; i++) {
                             passArgs[i] = args[i];
                         }
                         del.DynamicInvoke(passArgs);
                     }
                 } catch (Exception e) {
-                    Console.WriteLine($"[Godot] Exception in signal callback: {e}");
+                    LogException(e);
                 }
             };
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void LogException(Exception e) {
+            GD.PrintErr("Exception in signal callback: " + e.GetType().Name + ": " + e.Message);
         }
 
         public static Callable From(Action action) {
@@ -39,7 +59,12 @@ namespace Godot {
         }
 
         public static Callable From<T>(Action<T> action) {
-            Action<object[]> wrapper = CreateWrapper(action);
+            Action<object[]> wrapper = (args) => {
+                try {
+                    T arg = args != null && args.Length > 0 && args[0] is T tval ? tval : default(T);
+                    action(arg);
+                } catch (Exception e) { LogException(e); }
+            };
             IntPtr ptr = Bridge.godot_icall_Callable_CreateFromDelegate(wrapper);
             if (ptr == IntPtr.Zero) throw new InvalidOperationException("Failed to create Callable.");
             return new Callable(ptr);

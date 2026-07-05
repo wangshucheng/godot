@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<linker>
+  <assembly fullname="GodotSharp">
+    <type fullname="Godot.Object" preserve="all" />
+    <type fullname="Godot.Node" preserve="all" />
+    <type fullname="Godot.SceneTree" preserve="all" />
+    <type fullname="Godot.InputEvent" preserve="all" />
+    <type fullname="Godot.Resource" preserve="all" />
+    <type fullname="Godot.PackedScene" preserve="all" />
+    <type fullname="Godot.GD" preserve="all" />
+    <type fullname="Godot.Callable" preserve="all" />
+    <type fullname="Godot.SignalAwaiter" preserve="all" />
+    <type fullname="Godot.GodotSynchronizationContext" preserve="all" />
+    <type fullname="Godot.Platform" preserve="all" />
+    <type fullname="Godot.Tasking" preserve="all" />
+    <type fullname="Godot.Runtime" preserve="all" />
+    <type fullname="Godot.Bridge" preserve="all" />
+    <type fullname="Godot.PreserveAttribute" preserve="all" />
+    <type fullname="Godot.Vector2" preserve="all" />
+    <type fullname="Godot.Vector3" preserve="all" />
+    <type fullname="Godot.Color" preserve="all" />
+    <type fullname="Godot.Rect2" preserve="all" />
+    <type fullname="Godot.Input" preserve="all" />
+    <type fullname="Godot.Key" preserve="all" />
+    <type fullname="Godot.MouseButton" preserve="all" />
+    <type fullname="Godot.ConnectFlags" preserve="all" />
+  </assembly>
+
+  <assembly fullname="HelloMono">
+    <type fullname="HelloMono.Program" preserve="all" />
+    <type fullname="HelloMono.ConsoleBridge" preserve="all" />
+  </assembly>
+
+  <assembly fullname="mscorlib">
+    <type fullname="System.Object" preserve="all" />
+    <type fullname="System.String" preserve="all" />
+    <type fullname="System.Int32" preserve="all" />
+    <type fullname="System.Boolean" preserve="all" />
+    <type fullname="System.Single" preserve="all" />
+    <type fullname="System.Double" preserve="all" />
+    <type fullname="System.Void" preserve="all" />
+    <type fullname="System.IntPtr" preserve="all" />
+    <type fullname="System.Delegate" preserve="all" />
+    <type fullname="System.Action" preserve="all" />
+    <type fullname="System.Action`1" preserve="all" />
+    <type fullname="System.MulticastDelegate" preserve="all" />
+    <type fullname="System.Runtime.CompilerServices.INotifyCompletion" preserve="all" />
+    <type fullname="System.Threading.SynchronizationContext" preserve="all" />
+    <type fullname="System.Threading.SendOrPostCallback" preserve="all" />
+    <type fullname="System.Threading.Tasks.Task" preserve="all" />
+    <type fullname="System.Threading.Tasks.Task`1" preserve="all" />
+    <type fullname="System.Collections.Generic.List`1" preserve="all" />
+    <type fullname="System.Collections.Generic.Dictionary`2" preserve="all" />
+    <type fullname="System.Collections.Generic.Queue`1" preserve="all" />
+    <type fullname="System.Reflection.MethodInfo" preserve="all" />
+    <type fullname="System.Reflection.ParameterInfo" preserve="all" />
+    <type fullname="System.Array" preserve="all" />
+    <type fullname="System.Exception" preserve="all" />
+    <type fullname="System.IDisposable" preserve="all" />
+    <type fullname="System.FlagsAttribute" preserve="all" />
+  </assembly>
+</linker>

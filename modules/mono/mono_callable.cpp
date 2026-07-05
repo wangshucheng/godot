@@ -4,6 +4,10 @@
 #include "core/object/object.h"
 #include <mono/metadata/appdomain.h>
 #include <mono/metadata/exception.h>
+#include <mono/metadata/object.h>
+#include <mono/metadata/delegate.h>
+#include <mono/metadata/metadata.h>
+#include <mono/metadata/loader.h>
 #include <cstdio>
 #include <cstring>
 #include <cstdarg>
@@ -52,8 +56,8 @@ ObjectID CallableCustomMono::get_object() const {
 }
 
 int CallableCustomMono::get_argument_count(bool &r_is_valid) const {
-	r_is_valid = false;
-	return 0;
+	r_is_valid = true;
+	return param_count;
 }
 
 bool CallableCustomMono::is_valid() const {
@@ -74,24 +78,22 @@ void CallableCustomMono::call(const Variant **p_arguments, int p_argcount, Varia
 		return;
 	}
 
-	MonoClass *del_class = mono_object_get_class(delegate);
-	MonoMethod *invoke_method = mono_get_delegate_invoke(del_class);
-	if (!invoke_method) {
-		r_call_error.error = Callable::CallError::CALL_ERROR_INVALID_METHOD;
-		return;
-	}
-
-	MonoClass *obj_class = mono_get_object_class();
-	MonoArray *args_array = mono_array_new(domain, obj_class, p_argcount);
-	for (int i = 0; i < p_argcount; i++) {
-		MonoObject *arg = variant_to_mono_object(domain, *p_arguments[i]);
-		mono_array_setref(args_array, i, arg);
-	}
-
-	void *invoke_params[1] = { &args_array };
-
 	MonoObject *exc = nullptr;
-	MonoObject *result = mono_runtime_invoke(invoke_method, delegate, invoke_params, &exc);
+	MonoObject *result = nullptr;
+
+	if (p_argcount == 0) {
+		void *params[1] = { nullptr };
+		result = mono_runtime_delegate_invoke((MonoDelegate *)delegate, params, &exc);
+	} else {
+		MonoClass *obj_class = mono_get_object_class();
+		MonoArray *args_array = mono_array_new(domain, obj_class, p_argcount);
+		for (int i = 0; i < p_argcount; i++) {
+			MonoObject *arg = variant_to_mono_object(domain, *p_arguments[i]);
+			mono_array_setref(args_array, i, arg);
+		}
+		void *params[1] = { args_array };
+		result = mono_runtime_delegate_invoke((MonoDelegate *)delegate, params, &exc);
+	}
 
 	if (exc) {
 		char *exc_msg = mono_string_to_utf8(mono_object_to_string(exc, nullptr));
@@ -116,6 +118,18 @@ Error CallableCustomMono::rpc(int p_peer_id, const Variant **p_arguments, int p_
 void CallableCustomMono::set_delegate(uint32_t p_gchandle, MonoDomain *p_domain) {
 	gchandle = p_gchandle;
 	domain = p_domain;
+	param_count = 0;
+	invoke_method = nullptr;
+
+	MonoObject *delegate = mono_gchandle_get_target(gchandle);
+	if (!delegate) return;
+
+	MonoClass *del_class = mono_object_get_class(delegate);
+	invoke_method = mono_get_delegate_invoke(del_class);
+	if (invoke_method) {
+		MonoMethodSignature *sig = mono_method_signature(invoke_method);
+		param_count = mono_signature_get_param_count(sig);
+	}
 }
 
 CallableCustomMono::CallableCustomMono() {}

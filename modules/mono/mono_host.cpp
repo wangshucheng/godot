@@ -3,6 +3,7 @@
 #include "mono_variant.h"
 #include "mono_bridge.h"
 #include "mono_gc_bridge.h"
+#include "mono_aot.h"
 #include "core/os/os.h"
 #include "core/io/dir_access.h"
 #include "core/io/file_access.h"
@@ -119,13 +120,24 @@ Error MonoHost::initialize() {
 	setenv("MONO_PATH", search_path.utf8().get_data(), 1);
 #endif
 
+#ifdef MONO_AOT_MODE
+	domain = mono_jit_init_version("GodotMonoAOT", "v4.0.30319");
+	if (!domain) {
+		ERR_PRINT("[Mono] Failed to initialize AOT runtime (mono_jit_init_version returned NULL)");
+		return FAILED;
+	}
+	printf("[Mono] AOT domain created: %s\n", mono_domain_get_friendly_name(domain));
+#else
 	domain = mono_jit_init_version("GodotMono", "v4.0.30319");
 	if (!domain) {
 		ERR_PRINT("[Mono] Failed to initialize JIT runtime (mono_jit_init_version returned NULL)");
 		return FAILED;
 	}
-
 	printf("[Mono] JIT domain created: %s\n", mono_domain_get_friendly_name(domain));
+#endif
+
+	mono_aot_init();
+	mono_aot_register_modules();
 
 	mono_bridge::init(domain);
 	mono_gc_bridge::init(domain);
@@ -142,6 +154,23 @@ Error MonoHost::initialize() {
 	if (!load_godotsharp()) {
 		printf("[Mono] Note: GodotSharp.dll not loaded (Phase 2 bindings will be limited).\n");
 	}
+
+	if (godotsharp_assembly) {
+		MonoImage *img = mono_assembly_get_image(godotsharp_assembly);
+		MonoClass *runtime_class = mono_class_from_name(img, "Godot", "Runtime");
+		if (runtime_class) {
+			MonoMethod *init_method = mono_class_get_method_from_name(runtime_class, "Initialize", 0);
+			if (init_method) {
+				MonoObject *exc = nullptr;
+				mono_runtime_invoke(init_method, nullptr, nullptr, &exc);
+				if (exc) {
+					printf("[Mono] WARNING: Exception in Runtime.Initialize().\n");
+				}
+			}
+		}
+	}
+
+	cache_sync_context_method();
 
 	is_initialized = true;
 	printf("[Mono] Mono runtime initialized successfully.\n");
@@ -198,6 +227,7 @@ bool MonoHost::load_godotsharp() {
 
 	MonoImage *img = mono_assembly_get_image(godotsharp_assembly);
 	mono_bridge::cache_godot_classes(img);
+	mono_variant::cache_godot_math_classes(img);
 	printf("[Mono] GodotSharp loaded successfully.\n");
 	return true;
 }
@@ -303,6 +333,40 @@ bool MonoHost::load_assembly_and_run(const String &p_assembly_path) {
 	return true;
 }
 
+void MonoHost::cache_sync_context_method() {
+	sync_context_pump_method = nullptr;
+
+	if (!godotsharp_assembly) {
+		return;
+	}
+
+	MonoImage *img = mono_assembly_get_image(godotsharp_assembly);
+	if (!img) return;
+
+	MonoClass *sync_ctx_class = mono_class_from_name(img, "Godot", "GodotSynchronizationContext");
+	if (!sync_ctx_class) {
+		printf("[Mono] GodotSynchronizationContext class not found (sync context pumping disabled).\n");
+		return;
+	}
+
+	sync_context_pump_method = mono_class_get_method_from_name(sync_ctx_class, "Pump", 0);
+	if (sync_context_pump_method) {
+		printf("[Mono] GodotSynchronizationContext.Pump() cached for main thread pumping.\n");
+	}
+}
+
+void MonoHost::pump_sync_context() {
+	if (!sync_context_pump_method) return;
+
+	MonoObject *exc = nullptr;
+	mono_runtime_invoke(sync_context_pump_method, nullptr, nullptr, &exc);
+	if (exc) {
+		MonoClass *exc_class = mono_object_get_class(exc);
+		const char *exc_name = exc_class ? mono_class_get_name(exc_class) : "(unknown)";
+		printf("[Mono] Exception in SyncContext.Pump(): %s\n", exc_name ? exc_name : "(unknown)");
+	}
+}
+
 void MonoHost::shutdown() {
 	if (!is_initialized) {
 		return;
@@ -312,6 +376,9 @@ void MonoHost::shutdown() {
 
 	mono_bridge::shutdown();
 	mono_gc_bridge::shutdown();
+	mono_aot_shutdown();
+
+	sync_context_pump_method = nullptr;
 
 	if (domain) {
 		mono_jit_cleanup(domain);

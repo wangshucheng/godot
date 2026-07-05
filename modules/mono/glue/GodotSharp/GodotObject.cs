@@ -2,17 +2,46 @@ using System;
 using System.Collections.Generic;
 
 namespace Godot {
+    [Flags]
+    public enum ConnectFlags {
+        None = 0,
+        Deferred = 1,
+        Persist = 2,
+        OneShot = 4,
+        ReferenceCounted = 8
+    }
+
+    [Preserve(AllMembers = true)]
     public class Object : IDisposable {
         internal IntPtr NativePtr;
+        internal uint _bridgeGCHandle;
         private bool disposed = false;
+        private bool _isNativeWrapper;
         private readonly Dictionary<(string signal, Delegate callback), Callable> _connectedCallables = new Dictionary<(string, Delegate), Callable>();
 
         public Object() {
-            NativePtr = Bridge.godot_icall_Object_Ctor(this);
+            _bridgeGCHandle = 0;
+            _isNativeWrapper = false;
+            if (NativePtr == IntPtr.Zero) {
+                NativePtr = Bridge.godot_icall_Object_Ctor(this);
+            }
         }
 
-        internal Object(IntPtr nativePtr) {
+        internal Object(IntPtr nativePtr) : this(nativePtr, true) {
+        }
+
+        internal Object(IntPtr nativePtr, bool isWrapper) {
             NativePtr = nativePtr;
+            _bridgeGCHandle = 0;
+            _isNativeWrapper = isWrapper;
+            if (isWrapper && nativePtr != IntPtr.Zero) {
+                Bridge.godot_icall_Object_BindNativePtr(this, nativePtr);
+            }
+        }
+
+        internal void AssignNativePtr(IntPtr nativePtr, uint gcHandle = 0) {
+            NativePtr = nativePtr;
+            _bridgeGCHandle = gcHandle;
         }
 
         public bool IsInstanceValid() {
@@ -41,16 +70,16 @@ namespace Godot {
             return Bridge.godot_icall_Object_Call(NativePtr, method, args);
         }
 
-        public void Connect(string signal, Action callback, int flags = 0) {
-            ConnectImpl(signal, callback, flags);
+        public void Connect(string signal, Action callback, ConnectFlags flags = ConnectFlags.None) {
+            ConnectImpl(signal, callback, (int)flags);
         }
 
-        public void Connect<T>(string signal, Action<T> callback, int flags = 0) {
-            ConnectImpl(signal, callback, flags);
+        public void Connect<T>(string signal, Action<T> callback, ConnectFlags flags = ConnectFlags.None) {
+            ConnectImpl(signal, callback, (int)flags);
         }
 
-        public void Connect(string signal, Delegate callback, int flags = 0) {
-            ConnectImpl(signal, callback, flags);
+        public void Connect(string signal, Delegate callback, ConnectFlags flags = ConnectFlags.None) {
+            ConnectImpl(signal, callback, (int)flags);
         }
 
         private void ConnectImpl(string signal, Delegate callback, int flags) {
@@ -114,6 +143,7 @@ namespace Godot {
                 _connectedCallables.Clear();
                 Bridge.godot_icall_Object_Free(NativePtr);
                 NativePtr = IntPtr.Zero;
+                _bridgeGCHandle = 0;
                 disposed = true;
             }
         }
@@ -125,7 +155,9 @@ namespace Godot {
 
         protected virtual void Dispose(bool disposing) {
             if (!disposed) {
-                Free();
+                if (disposing) {
+                    Free();
+                }
                 disposed = true;
             }
         }

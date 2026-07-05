@@ -2,6 +2,7 @@ using System;
 using System.Runtime.CompilerServices;
 
 namespace Godot {
+    [Preserve(AllMembers = true)]
     internal static class Bridge {
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern void godot_icall_GD_Print(string message);
@@ -22,7 +23,40 @@ namespace Godot {
         internal static extern IntPtr godot_icall_Object_Ctor(object thisObj);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Object_BindNativePtr(object thisObj, IntPtr nativePtr);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern IntPtr godot_icall_Node_GetNode(IntPtr nativePtr, string path);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern IntPtr godot_icall_Node_GetParent(IntPtr nativePtr);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern IntPtr godot_icall_Node_GetChild(IntPtr nativePtr, int idx);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Node_GetChildCount(IntPtr nativePtr);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Node_AddChild(IntPtr nativePtr, IntPtr childPtr, bool readable);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Node_RemoveChild(IntPtr nativePtr, IntPtr childPtr);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Node_QueueFree(IntPtr nativePtr);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Node_SetProcess(IntPtr nativePtr, bool enable);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Node_SetPhysicsProcess(IntPtr nativePtr, bool enable);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Node_SetProcessInput(IntPtr nativePtr, bool enable);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern IntPtr godot_icall_Node_GetTree(IntPtr nativePtr);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern bool godot_icall_Object_IsInstanceValid(IntPtr nativePtr);
@@ -53,5 +87,23 @@ namespace Godot {
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern IntPtr godot_icall_Object_InstantiateFromNative(string className);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern IntPtr godot_icall_ResourceLoader_Load(string path);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern IntPtr godot_icall_PackedScene_Instantiate(IntPtr scenePtr);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Platform_GetRuntimeInfo();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern bool godot_icall_Input_IsKeyPressed(int keyCode);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern bool godot_icall_Input_IsMouseButtonPressed(int button);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern object godot_icall_Input_GetMousePosition();
     }
 }

@@ -1,0 +1,111 @@
+#!/usr/bin/env python
+
+Import("env")
+Import("env_modules")
+
+env_mono = env_modules.Clone()
+
+mono_enabled = env.get("module_mono_new_enabled", True)
+mono_static = env.get("mono_new_static", True)
+mono_stub = env.get("mono_new_stub", False)
+mono_prefix = env.get("mono_new_prefix", "")
+mono_web = env.get("mono_new_web_support", False)
+
+if not mono_enabled:
+    Return()
+
+def get_platform_lib_subdir(env):
+    plat = env["platform"]
+    arch = env.get("arch", "x86_64")
+    if plat == "windows":
+        return "windows/" + arch
+    elif plat == "macos":
+        return "macos/" + arch
+    elif plat == "web":
+        return "web/wasm32"
+    elif plat == "linuxbsd" or plat == "linux":
+        return "linux/" + arch
+    elif plat == "android":
+        return "android/" + arch
+    elif plat == "ios":
+        return "ios/" + arch
+    else:
+        return plat + "/" + arch
+
+if mono_prefix:
+    mono_lib_path = mono_prefix + "/lib"
+    mono_inc_path = mono_prefix + "/include/mono-2.0"
+else:
+    mono_lib_base = "#modules/mono_new/thirdparty/mono/lib"
+    mono_lib_platform = mono_lib_base + "/" + get_platform_lib_subdir(env)
+    mono_inc_path = "#modules/mono_new/thirdparty/mono/include/mono-2.0"
+
+    import os
+    _plat_path = env.Dir(mono_lib_platform).abspath
+    if os.path.isdir(_plat_path):
+        mono_lib_path = mono_lib_platform
+    else:
+        mono_lib_path = mono_lib_base
+
+env_mono.add_source_files(env.modules_sources, "*.cpp")
+env_mono.add_source_files(env.modules_sources, "mono_gd/*.cpp")
+env_mono.add_source_files(env.modules_sources, "mono_gd/interop/*.cpp")
+env_mono.add_source_files(env.modules_sources, "mono_runtime/*.cpp")
+env_mono.add_source_files(env.modules_sources, "utils/*.cpp")
+env_mono.add_source_files(env.modules_sources, "glue/*.cpp")
+env_mono.add_source_files(env.modules_sources, "glue/glue_cpp/*.cpp")
+env_mono.add_source_files(env.modules_sources, "platform/*.cpp")
+
+if env.editor_build:
+    env_mono.add_source_files(env.modules_sources, "editor/*.cpp")
+
+env_mono.Append(CPPPATH=[mono_inc_path])
+env_mono.Append(CPPPATH=["#modules/mono_new/"])
+
+if mono_stub:
+    env_mono.add_source_files(env.modules_sources, "thirdparty/mono/stub/*.cpp")
+    env_mono.Append(CPPDEFINES=["MONO_STUB"])
+    env_mono.Append(CPPDEFINES=["MONO_STUB_BUILD"])
+    env_mono.Append(CPPDEFINES=["MONO_STATIC"])
+    if env["platform"] == "windows" and env.msvc:
+        env.Append(LINKFLAGS=["psapi.lib", "ws2_32.lib", "winmm.lib", "version.lib", "iphlpapi.lib", "oleaut32.lib", "advapi32.lib", "user32.lib", "shell32.lib", "ole32.lib", "bcrypt.lib"])
+    elif env["platform"] == "windows":
+        env.Append(LIBS=["psapi", "ws2_32", "winmm", "version", "iphlpapi", "oleaut32", "advapi32", "user32", "shell32", "ole32", "bcrypt"])
+elif mono_static:
+    if env["platform"] == "windows":
+        if env.msvc:
+            import os
+            mono_lib_abs = os.path.join(env.Dir(mono_lib_path).abspath, "mono-2.0-sgen.lib")
+            if not os.path.isfile(mono_lib_abs):
+                mono_lib_abs = os.path.join(env.Dir("#").abspath, "modules", "mono_new", "thirdparty", "mono", "lib", "mono-2.0-sgen.lib")
+            env.Append(LINKFLAGS=[mono_lib_abs, "psapi.lib", "ws2_32.lib", "winmm.lib", "version.lib", "iphlpapi.lib", "oleaut32.lib", "advapi32.lib", "user32.lib", "shell32.lib", "ole32.lib", "bcrypt.lib"])
+        else:
+            env.Append(LIBS=["mono-2.0-sgen", "psapi", "ws2_32", "winmm", "version", "iphlpapi", "oleaut32", "advapi32", "user32", "shell32", "ole32", "bcrypt"])
+            env.Append(LIBPATH=[mono_lib_path])
+    elif env["platform"] == "web":
+        env.Append(LIBS=["monosgen-2.0"])
+        env.Append(LIBPATH=[mono_lib_path])
+        env_mono.Append(CPPDEFINES=["MONO_Web"])
+        env_mono.Append(CPPDEFINES=["DISABLE_THREADS"])
+        env_mono.Append(CPPFLAGS=["-s", "ALLOW_MEMORY_GROWTH=1"])
+    elif env["platform"] == "macos":
+        env.Append(LIBS=["mono-2.0-sgen", "pthread", "m", "dl"])
+        env.Append(LIBPATH=[mono_lib_path])
+        env.Append(LINKFLAGS=["-framework", "CoreFoundation", "-framework", "Foundation"])
+    else:
+        env.Append(LIBS=["mono-2.0-sgen", "pthread", "m", "dl", "rt"])
+        env.Append(LIBPATH=[mono_lib_path])
+
+    env_mono.Append(CPPDEFINES=["MONO_STATIC"])
+    env_mono.Append(CPPDEFINES=["MONO_STATIC_BUILD"])
+    env_mono.Append(CPPDEFINES=["MONO_PINVOKE_REDUCED"])
+else:
+    if env.msvc:
+        env.Append(LIBS=["mono-2.0"])
+        env.Append(LIBPATH=[mono_lib_path])
+
+if env["platform"] == "web" and mono_web:
+    env_mono.Append(CPPDEFINES=["WEB_ENABLED"])
+    env_mono.Append(CPPDEFINES=["UNIX_ENABLED"])
+    env_mono.Append(CPPDEFINES=["MONO_Web"])
+    env_mono.Append(CPPDEFINES=["MONO_DLL_IMPORT="])

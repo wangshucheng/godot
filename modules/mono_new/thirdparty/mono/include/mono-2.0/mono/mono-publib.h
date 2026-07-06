@@ -111,7 +111,7 @@ MONO_API char* mono_get_runtime_build_info(void);
 /* Domain functions */
 MONO_API MonoDomain* mono_domain_get(void);
 MONO_API MonoDomain* mono_domain_create_appdomain(char *friendly_name, char *configuration_file);
-MONO_API void mono_domain_set(MonoDomain *domain, int force);
+MONO_API int mono_domain_set(MonoDomain *domain, int force);
 MONO_API int mono_domain_set_internal(MonoDomain *domain);
 MONO_API MonoImage* mono_get_corlib(void);
 MONO_API void mono_domain_unload(MonoDomain *domain);

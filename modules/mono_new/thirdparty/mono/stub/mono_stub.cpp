@@ -20,7 +20,7 @@ const char* mono_get_assemblies_path(void) { return ""; }
 
 void* mono_domain_get(void) { return (void*)0x1; }
 void* mono_domain_create_appdomain(char* friendly_name, char* config) { return (void*)0x2; }
-int mono_domain_set(void* domain, int force) { return 1; }
+void mono_domain_set(void* domain, int force) {}
 int mono_domain_set_internal(void* domain) { return 1; }
 void* mono_domain_get_image(void* domain) { return (void*)0x3; }
 void mono_domain_unload(void* domain) {}

@@ -273,9 +273,112 @@
 /* Version number of package */
 #define VERSION "6.12.0"
 
+#elif defined(__EMSCRIPTEN__)
+
+/* WebAssembly / Emscripten configuration */
+#include <stdint.h>
+
+#define ENABLE_ILGEN 1
+
+/* GC configuration */
+#define HAVE_SGEN_GC 1
+#define DEFAULT_GC_NAME "Included SGen (simple)"
+#define HAVE_MOVING_COLLECTOR 1
+#define HAVE_WRITE_BARRIERS 1
+#define HAVE_CONC_GC_AS_DEFAULT 0
+
+/* Disable JIT, use interpreter */
+#define DISABLE_JIT 1
+#undef DISABLE_INTERPRETER
+
+/* Disable features for WASM */
+#define DISABLE_APPDOMAINS 1
+#define DISABLE_ATTACH 1
+#define DISABLE_CLEANUP 1
+#define DISABLE_COM 1
+#define DISABLE_DESKTOP_LOADER 1
+#define DISABLE_GAC 1
+#define DISABLE_LOGGING 1
+#define DISABLE_MDB 1
+#define DISABLE_REMOTING 1
+#define DISABLE_SECURITY 1
+#define DISABLE_REFLECTION_EMIT_SAVE 1
+#define DISABLE_CRASH_REPORTING 1
+#define DISABLE_ICALL_TABLES 0
+#undef DISABLE_THREADS
+#define DISABLE_CFGDIR_CONFIG 1
+
+/* String of disabled features */
+#define DISABLED_FEATURES "ssa,com,jit,reflection_emit_save,simd,ssa_backend,full_messages,remoting,perf_counters,attach,dbghelp,sgen_marksweep_conc,sgen_split_nursery,sgen_gc_bridge,sgen_debug_helpers,security,appdomains,cleanup,mdb,gac"
+
+/* Have standard headers */
+#define HAVE_STDINT_H 1
+#define HAVE_STDLIB_H 1
+#define HAVE_STRING_H 1
+#define HAVE_STRINGS_H 1
+#define HAVE_MEMORY_H 1
+#define HAVE_INTTYPES_H 1
+#define HAVE_SYS_TYPES_H 1
+#define HAVE_SYS_STAT_H 1
+#define HAVE_SIGNAL_H 1
+#define HAVE_COMPLEX_H 1
+
+/* C library functions */
+#define HAVE_STRTOK_R 1
+#define HAVE_SIGNAL 1
+#define HAVE_GETADDRINFO 1
+#define HAVE_GETNAMEINFO 1
+#define HAVE_INET_NTOP 1
+#define HAVE_INET_PTON 1
+#define HAVE_ACCESS 1
+#define HAVE_CRYPT_RNG 1
+
+/* No /dev/random on WASM */
+#define NAME_DEV_RANDOM ""
+
+/* Platform defines */
+#define HOST_WASM32 1
+#define TARGET_WASM32 1
+#define TARGET_BYTE_ORDER 1234 /* Little endian */
+
+/* Architecture */
+#define MONO_ARCHITECTURE "wasm32"
+
+/* Sizes for wasm32 */
+#define SIZEOF_INT 4
+#define SIZEOF_LONG 4
+#define SIZEOF_LONG_LONG 8
+#define SIZEOF_VOID_P 4
+#define SIZEOF_REGISTER 4
+
+/* Thread local storage */
+#define MONO_KEYWORD_THREAD __thread
+
+/* Zero length arrays */
+#define MONO_ZERO_LEN_ARRAY 0
+
+/* Package info */
+#define PACKAGE "mono"
+#define PACKAGE_BUGREPORT "https://github.com/mono/mono/issues/new"
+#define PACKAGE_NAME "mono"
+#define PACKAGE_STRING "mono 6.12.0"
+#define PACKAGE_TARNAME "mono"
+#define PACKAGE_URL ""
+#define PACKAGE_VERSION "6.12.0"
+#define VERSION "6.12.0"
+
+/* Corlib version */
+#define MONO_CORLIB_VERSION "1A5E0066-58DC-428A-B21C-0AD6CDAE2789"
+
+/* No symlinks on WASM */
+#define HOST_NO_SYMLINKS 1
+
+/* STDC headers available */
+#define STDC_HEADERS 1
+
 #else
 
-/* Not building under MSVC, use autogen.sh generated config.h */
+/* Not building under MSVC or Emscripten, use autogen.sh generated config.h */
 #include "cygconfig.h"
 
 #endif

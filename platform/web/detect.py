@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -13,10 +14,19 @@ from emscripten_helpers import (
     get_template_zip_path,
     run_closure_compiler,
 )
+from SCons.Subst import quote_spaces
 from SCons.Util import WhereIs
 
 from methods import get_compiler_version, print_error, print_info, print_warning
 from platform_methods import validate_arch
+
+WINPATHSEP_RE = re.compile(r"\\([^\"'\\]|$)")
+
+
+def tempfile_arg_esc_func(arg):
+    arg = quote_spaces(arg)
+    # Emscripten (emcc/em++) uses UNIX-style path separators, convert Windows backslashes to forward slashes
+    return WINPATHSEP_RE.sub(r"/\1", arg)
 
 if TYPE_CHECKING:
     from SCons.Script.SConscript import SConsEnvironment
@@ -114,8 +124,9 @@ def configure(env: "SConsEnvironment"):
     cc_semver = (cc_version["major"], cc_version["minor"], cc_version["patch"])
 
     # Minimum emscripten requirements.
-    if cc_semver < (4, 0, 0):
-        print_error("The minimum Emscripten version to build Godot is 4.0.0, detected: %s.%s.%s" % cc_semver)
+    # TEMPORARY: Lowered version requirement for testing with Emscripten 3.1.39
+    if cc_semver < (3, 1, 0):
+        print_error("The minimum Emscripten version to build Godot is 3.1.0, detected: %s.%s.%s" % cc_semver)
         sys.exit(255)
 
     env.Append(LIBEMITTER=[library_emitter])
@@ -240,6 +251,14 @@ def configure(env: "SConsEnvironment"):
     # Use POSIX-style paths, required with TempFileMunge.
     env["ARCOM_POSIX"] = env["ARCOM"].replace("$TARGET", "$TARGET.posix").replace("$SOURCES", "$SOURCES.posix")
     env["ARCOM"] = "${TEMPFILE('$ARCOM_POSIX','$ARCOMSTR')}"
+
+    # Also use TempFileMunge for link commands on Windows to avoid "command line too long" error.
+    if os.name == "nt":
+        env["TEMPFILESUFFIX"] = ".rsp"
+        env["TEMPFILEARGESCFUNC"] = tempfile_arg_esc_func
+        # Save original link command before wrapping with TEMPFILE
+        env["_LINKCOM_ORIG"] = env["LINKCOM"]
+        env["LINKCOM"] = "${TEMPFILE('$_LINKCOM_ORIG','$LINKCOMSTR')}"
 
     # All intermediate files are just object files.
     env["OBJPREFIX"] = ""

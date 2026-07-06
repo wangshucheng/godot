@@ -11,10 +11,14 @@ mono_stub = env.get("mono_new_stub", False)
 mono_prefix = env.get("mono_new_prefix", "")
 mono_web = env.get("mono_new_web_support", False)
 
-# For Web platform, default to stub mode since we don't have WASM Mono static lib yet
+# For Web platform, check if WASM static libs exist; if not, fall back to stub
 if env["platform"] == "web" and not mono_stub and not mono_prefix:
-    mono_stub = True
-    mono_static = False
+    import os
+    _web_lib_path = env.Dir("#modules/mono_new/thirdparty/mono/wasm").abspath
+    _main_lib = os.path.join(_web_lib_path, "libmini.a")
+    if not os.path.isfile(_main_lib):
+        mono_stub = True
+        mono_static = False
 
 if not mono_enabled:
     Return()
@@ -27,7 +31,7 @@ def get_platform_lib_subdir(env):
     elif plat == "macos":
         return "macos/" + arch
     elif plat == "web":
-        return "web/wasm32"
+        return "../wasm"  # Use thirdparty/mono/wasm for WASM libs
     elif plat == "linuxbsd" or plat == "linux":
         return "linux/" + arch
     elif plat == "android":
@@ -41,20 +45,24 @@ if mono_prefix:
     mono_lib_path = mono_prefix + "/lib"
     mono_inc_path = mono_prefix + "/include/mono-2.0"
 else:
-    mono_lib_base = "#modules/mono_new/thirdparty/mono/lib"
-    mono_lib_platform = mono_lib_base + "/" + get_platform_lib_subdir(env)
-    mono_inc_path = "#modules/mono_new/thirdparty/mono/include/mono-2.0"
-
-    import os
-    _plat_path = env.Dir(mono_lib_platform).abspath
-    if os.path.isdir(_plat_path):
-        mono_lib_path = mono_lib_platform
+    if env["platform"] == "web":
+        mono_lib_path = "#modules/mono_new/thirdparty/mono/wasm"
+        mono_inc_path = "#modules/mono_new/thirdparty/mono/include/mono-2.0"
     else:
-        mono_lib_path = mono_lib_base
+        mono_lib_base = "#modules/mono_new/thirdparty/mono/lib"
+        mono_lib_platform = mono_lib_base + "/" + get_platform_lib_subdir(env)
+        mono_inc_path = "#modules/mono_new/thirdparty/mono/include/mono-2.0"
 
-    system_mono_lib = "C:/Program Files/Mono/lib"
-    if os.path.isdir(system_mono_lib) and not mono_stub:
-        mono_lib_path = system_mono_lib
+        import os
+        _plat_path = env.Dir(mono_lib_platform).abspath
+        if os.path.isdir(_plat_path):
+            mono_lib_path = mono_lib_platform
+        else:
+            mono_lib_path = mono_lib_base
+
+        system_mono_lib = "C:/Program Files/Mono/lib"
+        if os.path.isdir(system_mono_lib) and not mono_stub:
+            mono_lib_path = system_mono_lib
 
 env_mono.add_source_files(env.modules_sources, "*.cpp")
 env_mono.add_source_files(env.modules_sources, "mono_gd/*.cpp")
@@ -72,6 +80,7 @@ if env.editor_build:
 
 env_mono.Append(CPPPATH=[mono_inc_path])
 env_mono.Append(CPPPATH=["#modules/mono_new/"])
+env_mono.Append(CPPPATH=["#modules/mono_new/platform/"])
 
 if mono_stub:
     env_mono.add_source_files(env.modules_sources, "thirdparty/mono/stub/*.cpp")
@@ -99,11 +108,37 @@ elif mono_static:
             env.Append(LIBS=["mono-2.0-sgen", "psapi", "ws2_32", "winmm", "version", "iphlpapi", "oleaut32", "advapi32", "user32", "shell32", "ole32", "bcrypt"])
             env.Append(LIBPATH=[mono_lib_path])
     elif env["platform"] == "web":
-        env.Append(LIBS=["monosgen-2.0"])
+        # Link Mono WASM static libraries in dependency order
+        mono_wasm_libs = [
+            "mini",
+            "mono-ee-interp",
+            "monoruntimesgen",
+            "mono-ilgen",
+            "mono-icall-table",
+            "monoruntime-support",
+            "monoruntime-config",
+            "monosgen",
+            "mono-dbg",
+            "monoutils",
+            "monomath",
+            "eglib",
+            "z",
+        ]
         env.Append(LIBPATH=[mono_lib_path])
+        for lib in mono_wasm_libs:
+            env.Append(LIBS=[lib])
         env_mono.Append(CPPDEFINES=["MONO_Web"])
         env_mono.Append(CPPDEFINES=["DISABLE_THREADS"])
-        env_mono.Append(CPPFLAGS=["-s", "ALLOW_MEMORY_GROWTH=1"])
+        env_mono.Append(CPPDEFINES=["HAVE_SGEN_GC"])
+        # Emscripten linker flags for Mono WASM
+        env.Append(LINKFLAGS=[
+            "-s", "ALLOW_MEMORY_GROWTH=1",
+            "-s", "EXPORTED_RUNTIME_METHODS=['ccall','cwrap','stringToUTF8','UTF8ToString']",
+            "-s", "ERROR_ON_UNDEFINED_SYMBOLS=0",
+            "-s", "WARN_ON_UNDEFINED_SYMBOLS=0",
+            "-Wl,--allow-multiple-definition",
+            "--no-entry",
+        ])
     elif env["platform"] == "macos":
         env.Append(LIBS=["mono-2.0-sgen", "pthread", "m", "dl"])
         env.Append(LIBPATH=[mono_lib_path])
@@ -120,8 +155,10 @@ else:
         env.Append(LIBS=["mono-2.0"])
         env.Append(LIBPATH=[mono_lib_path])
 
-if env["platform"] == "web" and mono_web:
+if env["platform"] == "web":
     env_mono.Append(CPPDEFINES=["WEB_ENABLED"])
     env_mono.Append(CPPDEFINES=["UNIX_ENABLED"])
     env_mono.Append(CPPDEFINES=["MONO_Web"])
     env_mono.Append(CPPDEFINES=["MONO_DLL_IMPORT="])
+    if mono_web:
+        env_mono.Append(CPPDEFINES=["MONO_WEB_FULL"])

@@ -151,6 +151,9 @@ VariantTypeManaged variant_type_to_managed(Variant::Type p_type);
 MonoObject *variant_to_mono_object(MonoDomain *p_domain, const Variant &p_variant);
 Variant mono_object_to_variant(MonoObject *p_obj, VariantTypeManaged p_hint_type = VariantTypeManaged::Nil);
 
+void *get_native_object(MonoObject *p_managed);
+MonoObject *get_managed_wrapper(MonoDomain *p_domain, Object *p_native);
+
 void variant_register_icalls();
 
 }

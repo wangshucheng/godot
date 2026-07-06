@@ -64,10 +64,12 @@ static void* mono_wasm_realloc(void *ptr, size_t size) {
 }
 
 void register_bcallbacks() {
+#ifndef MONO_STUB
 	mono_wasm_register_malloc(mono_wasm_malloc);
 	mono_wasm_register_calloc(mono_wasm_calloc);
 	mono_wasm_register_free(mono_wasm_free);
 	mono_wasm_register_realloc(mono_wasm_realloc);
+#endif
 }
 
 }

@@ -11,6 +11,11 @@ mono_stub = env.get("mono_new_stub", False)
 mono_prefix = env.get("mono_new_prefix", "")
 mono_web = env.get("mono_new_web_support", False)
 
+# For Web platform, default to stub mode since we don't have WASM Mono static lib yet
+if env["platform"] == "web" and not mono_stub and not mono_prefix:
+    mono_stub = True
+    mono_static = False
+
 if not mono_enabled:
     Return()
 
@@ -47,6 +52,10 @@ else:
     else:
         mono_lib_path = mono_lib_base
 
+    system_mono_lib = "C:/Program Files/Mono/lib"
+    if os.path.isdir(system_mono_lib) and not mono_stub:
+        mono_lib_path = system_mono_lib
+
 env_mono.add_source_files(env.modules_sources, "*.cpp")
 env_mono.add_source_files(env.modules_sources, "mono_gd/*.cpp")
 env_mono.add_source_files(env.modules_sources, "mono_gd/interop/*.cpp")
@@ -54,7 +63,9 @@ env_mono.add_source_files(env.modules_sources, "mono_runtime/*.cpp")
 env_mono.add_source_files(env.modules_sources, "utils/*.cpp")
 env_mono.add_source_files(env.modules_sources, "glue/*.cpp")
 env_mono.add_source_files(env.modules_sources, "glue/glue_cpp/*.cpp")
-env_mono.add_source_files(env.modules_sources, "platform/*.cpp")
+
+if env["platform"] == "web":
+    env_mono.add_source_files(env.modules_sources, "platform/mono_platform_web.cpp")
 
 if env.editor_build:
     env_mono.add_source_files(env.modules_sources, "editor/*.cpp")
@@ -65,12 +76,17 @@ env_mono.Append(CPPPATH=["#modules/mono_new/"])
 if mono_stub:
     env_mono.add_source_files(env.modules_sources, "thirdparty/mono/stub/*.cpp")
     env_mono.Append(CPPDEFINES=["MONO_STUB"])
-    env_mono.Append(CPPDEFINES=["MONO_STUB_BUILD"])
+    env_mono.Append(CPPDEFINES=["MONO_STATIC_BUILD"])
     env_mono.Append(CPPDEFINES=["MONO_STATIC"])
-    if env["platform"] == "windows" and env.msvc:
-        env.Append(LINKFLAGS=["psapi.lib", "ws2_32.lib", "winmm.lib", "version.lib", "iphlpapi.lib", "oleaut32.lib", "advapi32.lib", "user32.lib", "shell32.lib", "ole32.lib", "bcrypt.lib"])
-    elif env["platform"] == "windows":
-        env.Append(LIBS=["psapi", "ws2_32", "winmm", "version", "iphlpapi", "oleaut32", "advapi32", "user32", "shell32", "ole32", "bcrypt"])
+    if env["platform"] == "windows":
+        if env.msvc:
+            env.Append(LINKFLAGS=["psapi.lib", "ws2_32.lib", "winmm.lib", "version.lib", "iphlpapi.lib", "oleaut32.lib", "advapi32.lib", "user32.lib", "shell32.lib", "ole32.lib", "bcrypt.lib"])
+        else:
+            env.Append(LIBS=["psapi", "ws2_32", "winmm", "version", "iphlpapi", "oleaut32", "advapi32", "user32", "shell32", "ole32", "bcrypt"])
+    elif env["platform"] == "web":
+        env_mono.Append(CPPDEFINES=["MONO_Web"])
+        env_mono.Append(CPPDEFINES=["DISABLE_THREADS"])
+        env_mono.Append(CPPDEFINES=["UNIX_ENABLED"])
 elif mono_static:
     if env["platform"] == "windows":
         if env.msvc:

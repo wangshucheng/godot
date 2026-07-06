@@ -1,11 +1,101 @@
 #include "gd_mono_interop_variant.h"
 
+#include "../../mono_runtime/gd_mono.h"
 #include "../../utils/mono_logger.h"
+
+#include "core/object/object.h"
+#include "core/os/os.h"
+#include "core/os/keyboard.h"
+#include "core/input/input.h"
+#include "core/math/random_pcg.h"
+#include "core/io/resource_loader.h"
+#include "core/templates/hash_map.h"
+#include "core/variant/variant.h"
+#include "core/variant/callable.h"
+#include "core/variant/dictionary.h"
+#include "core/variant/array.h"
+#include "core/error/error_list.h"
+#include "core/templates/rid.h"
+#include "core/string/node_path.h"
+#include "core/math/math_funcs.h"
+#include "scene/main/node.h"
 
 #include <mono/mono-publib.h>
 #include <cstring>
 
 namespace GDMonoInterop {
+
+static MonoClass *godot_object_class = nullptr;
+static MonoClassField *native_instance_field = nullptr;
+
+static String capitalize_first(const String &s) {
+	if (s.is_empty()) return s;
+	String result = s;
+	result = result.substr(0, 1).to_upper() + result.substr(1);
+	return result;
+}
+
+static MonoImage *get_godot_sharp_image() {
+	GDMono *gdmono = GDMono::get_singleton();
+	if (gdmono && gdmono->get_godotsharp_image()) {
+		return gdmono->get_godotsharp_image();
+	}
+	return mono_get_corlib();
+}
+
+static void ensure_native_instance_field() {
+	if (godot_object_class && native_instance_field)
+		return;
+	MonoImage *image = get_godot_sharp_image();
+	if (!image) return;
+	godot_object_class = mono_class_from_name(image, "Godot", "GodotObject");
+	if (!godot_object_class) return;
+	native_instance_field = mono_class_get_field_from_name(godot_object_class, "nativeInstance");
+	if (!native_instance_field)
+		native_instance_field = mono_class_get_field_from_name(godot_object_class, "_nativeInstance");
+}
+
+void *get_native_object(MonoObject *p_managed) {
+	if (!p_managed) return nullptr;
+	ensure_native_instance_field();
+	if (!native_instance_field) return nullptr;
+	void *ptr = nullptr;
+	mono_field_get_value(p_managed, native_instance_field, &ptr);
+	return ptr;
+}
+
+MonoObject *get_managed_wrapper(MonoDomain *p_domain, Object *p_native) {
+	if (!p_native) return nullptr;
+	ObjectID oid = p_native->get_instance_id();
+
+	GDMono *gdmono = GDMono::get_singleton();
+	if (gdmono) {
+		MonoObject *cached = gdmono->get_cached_managed_object(oid);
+		if (cached) return cached;
+	}
+
+	ensure_native_instance_field();
+	if (!godot_object_class) return nullptr;
+	String class_name = p_native->get_class();
+	MonoImage *image = get_godot_sharp_image();
+	MonoClass *cls = mono_class_from_name(image, "Godot", capitalize_first(class_name).utf8().get_data());
+	if (!cls)
+		cls = godot_object_class;
+	if (!cls) return nullptr;
+	MonoObject *obj = mono_object_new(p_domain, cls);
+	if (!obj) return nullptr;
+	mono_runtime_object_init(obj);
+	if (native_instance_field) {
+		void *native_ptr = p_native;
+		mono_field_set_value(obj, native_instance_field, &native_ptr);
+	}
+
+	if (gdmono) {
+		gdmono->cache_managed_object(oid, obj);
+	}
+
+	return obj;
+}
 
 namespace EnumUtil {
 	const char *GetTypeName(VariantTypeManaged p_type);
@@ -102,7 +192,7 @@ MonoObject *variant_to_mono_object(MonoDomain *p_domain, const Variant &p_varian
 
 		case Variant::STRING: {
 			String str = p_variant;
-			return mono_string_new(p_domain, str.utf8().get_data());
+			return (MonoObject *)mono_string_new(p_domain, str.utf8().get_data());
 		}
 
 		case Variant::VECTOR2: {
@@ -112,7 +202,6 @@ MonoObject *variant_to_mono_object(MonoDomain *p_domain, const Variant &p_varian
 			if (!cls) return nullptr;
 			MonoObject *obj = mono_object_new(p_domain, cls);
 			if (!obj) return nullptr;
-			MonoVTable *vtable = mono_class_vtable(p_domain, cls);
 			void *raw = mono_object_unbox(obj);
 			memcpy(raw, &mvec, sizeof(MonoVector2));
 			return obj;
@@ -311,9 +400,81 @@ MonoObject *variant_to_mono_object(MonoDomain *p_domain, const Variant &p_varian
 
 		case Variant::OBJECT: {
 			Object *obj_ptr = p_variant;
-			if (!obj_ptr)
-				return nullptr;
-			return nullptr;
+			if (!obj_ptr) return nullptr;
+			return get_managed_wrapper(p_domain, obj_ptr);
+		}
+
+		case Variant::CALLABLE: {
+			Callable callable = p_variant;
+			MonoClass *cls = mono_class_from_name(image, "Godot", "Callable");
+			if (!cls) return nullptr;
+			MonoObject *obj = mono_object_new(p_domain, cls);
+			if (!obj) return nullptr;
+			mono_runtime_object_init(obj);
+			MonoClassField *field = mono_class_get_field_from_name(cls, "nativeCallable");
+			if (!field) field = mono_class_get_field_from_name(cls, "_nativeCallable");
+			if (field) {
+				void *callable_ptr = memnew(Callable(callable));
+				mono_field_set_value(obj, field, &callable_ptr);
+			}
+			return obj;
+		}
+
+		case Variant::SIGNAL: {
+			Signal signal = p_variant;
+			MonoClass *cls = mono_class_from_name(image, "Godot", "Signal");
+			if (!cls) return nullptr;
+			MonoObject *obj = mono_object_new(p_domain, cls);
+			if (!obj) return nullptr;
+			mono_runtime_object_init(obj);
+			MonoClassField *field = mono_class_get_field_from_name(cls, "nativeSignal");
+			if (!field) field = mono_class_get_field_from_name(cls, "_nativeSignal");
+			if (field) {
+				void *signal_ptr = memnew(Signal(signal));
+				mono_field_set_value(obj, field, &signal_ptr);
+			}
+			return obj;
+		}
+
+		case Variant::ARRAY: {
+			Array arr = p_variant;
+			int count = arr.size();
+			MonoClass *obj_cls = mono_get_object_class();
+			MonoArray *mono_arr = mono_array_new(p_domain, obj_cls, count);
+			if (!mono_arr) return nullptr;
+			for (int i = 0; i < count; i++) {
+				MonoObject *elem = variant_to_mono_object(p_domain, arr[i]);
+				if (elem) {
+					MonoObject **slot = (MonoObject **)mono_array_addr_with_size(mono_arr, sizeof(MonoObject *), i);
+					if (slot) *slot = elem;
+				}
+			}
+			return (MonoObject *)mono_arr;
+		}
+
+		case Variant::DICTIONARY: {
+			Dictionary dict = p_variant;
+			MonoClass *cls = mono_class_from_name(image, "Godot", "Dictionary");
+			if (!cls) return nullptr;
+			MonoObject *obj = mono_object_new(p_domain, cls);
+			if (!obj) return nullptr;
+			mono_runtime_object_init(obj);
+			Array keys = dict.keys();
+			for (int i = 0; i < keys.size(); i++) {
+				Variant key = keys[i];
+				Variant val = dict[key];
+				MonoObject *m_key = variant_to_mono_object(p_domain, key);
+				MonoObject *m_val = variant_to_mono_object(p_domain, val);
+				if (m_key && m_val) {
+					MonoMethod *add_method = mono_class_get_method_from_name(cls, "Add", 2);
+					if (add_method) {
+						void *args[2] = { m_key, m_val };
+						MonoObject *exc = nullptr;
+						mono_runtime_invoke(add_method, obj, args, &exc);
+					}
+				}
+			}
+			return obj;
 		}
 
 		default:
@@ -402,6 +563,10 @@ Variant mono_object_to_variant(MonoObject *p_obj, VariantTypeManaged p_hint_type
 			MonoPlane *mp = (MonoPlane *)mono_object_unbox(p_obj);
 			return Plane(mp->x, mp->y, mp->z, mp->d);
 		}
+		if (strcmp(class_name, "GodotObject") == 0 || mono_class_is_subclass_of(cls, godot_object_class, false)) {
+			Object *native = (Object *)get_native_object(p_obj);
+			if (native) return Variant(native);
+		}
 	}
 
 	return Variant();
@@ -429,9 +594,60 @@ static MonoObject *icall_GD_PrintErr(MonoString *p_msg) {
 	return nullptr;
 }
 
-static MonoString *icall_GodotString_ToMonoString(const String *p_str) {
-	if (!p_str) return mono_string_empty(mono_domain_get());
-	return mono_string_new(mono_domain_get(), p_str->utf8().get_data());
+static int64_t icall_GD_Randi() {
+	return Math::rand();
+}
+
+static double icall_GD_Randf() {
+	return Math::randf();
+}
+
+static MonoObject *icall_GD_Load(MonoString *p_path) {
+	if (!p_path) return nullptr;
+	char *utf8 = mono_string_to_utf8(p_path);
+	if (!utf8) return nullptr;
+	String path = String::utf8(utf8);
+	mono_free(utf8);
+	Ref<Resource> res = ResourceLoader::load(path);
+	GDMono *gdmono = GDMono::get_singleton();
+	if (!gdmono) return nullptr;
+	if (res.is_null()) return nullptr;
+	return get_managed_wrapper(gdmono->get_scripts_domain(), res.ptr());
+}
+
+static mono_bool icall_Object_EmitSignal(void *p_native_ptr, MonoString *p_signal, MonoArray *p_args) {
+	if (!p_native_ptr || !p_signal) return false;
+	Object *obj = (Object *)p_native_ptr;
+	String signal_str = String::utf8(mono_string_to_utf8(p_signal));
+	StringName signal_name(signal_str);
+	GDMono *gdmono = GDMono::get_singleton();
+	if (!gdmono) return false;
+	MonoDomain *domain = gdmono->get_scripts_domain();
+	int argcount = p_args ? mono_array_length(p_args) : 0;
+	Vector<Variant> args;
+	args.resize(argcount);
+	Vector<const Variant *> argptrs;
+	argptrs.resize(argcount);
+	for (int i = 0; i < argcount; i++) {
+		MonoObject *arg = mono_array_get(p_args, MonoObject *, i);
+		args.write[i] = arg ? mono_object_to_variant(arg) : Variant();
+		argptrs.write[i] = &args.write[i];
+	}
+	Error err = obj->emit_signalp(signal_name, (const Variant **)argptrs.ptr(), argcount);
+	return err == OK;
+}
+
+static mono_bool icall_Input_IsKeyPressed(int64_t p_key) {
+	return Input::get_singleton()->is_key_pressed((Key)p_key);
+}
+
+static mono_bool icall_Input_IsActionPressed(MonoString *p_action) {
+	if (!p_action) return false;
+	char *utf8 = mono_string_to_utf8(p_action);
+	if (!utf8) return false;
+	StringName action(String::utf8(utf8));
+	mono_free(utf8);
+	return Input::get_singleton()->is_action_pressed(action);
 }
 
 void variant_register_icalls() {
@@ -439,7 +655,12 @@ void variant_register_icalls() {
 
 	mono_add_internal_call("Godot.GD::godot_icall_GD_Print", (const void *)icall_GD_Print);
 	mono_add_internal_call("Godot.GD::godot_icall_GD_PrintErr", (const void *)icall_GD_PrintErr);
-	mono_add_internal_call("Godot.GD::godot_string_new", (const void *)icall_GodotString_ToMonoString);
+	mono_add_internal_call("Godot.GD::godot_icall_GD_Randi", (const void *)icall_GD_Randi);
+	mono_add_internal_call("Godot.GD::godot_icall_GD_Randf", (const void *)icall_GD_Randf);
+	mono_add_internal_call("Godot.GD::godot_icall_GD_Load", (const void *)icall_GD_Load);
+	mono_add_internal_call("Godot.GodotObject::godot_icall_Object_EmitSignal", (const void *)icall_Object_EmitSignal);
+	mono_add_internal_call("Godot.Input::godot_icall_Input_IsKeyPressed", (const void *)icall_Input_IsKeyPressed);
+	mono_add_internal_call("Godot.Input::godot_icall_Input_IsActionPressed", (const void *)icall_Input_IsActionPressed);
 
 	MonoLogger::log("Mono interop icalls registered");
 }

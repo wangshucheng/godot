@@ -2,11 +2,20 @@
 #define CSHARP_SCRIPT_H
 
 #include "core/object/script_language.h"
+#include "core/io/resource_loader.h"
 #include "core/string/ustring.h"
 
 #include <mono/mono-publib.h>
 
 class GDMonoClass;
+
+class ResourceFormatLoaderCSharpScript : public ResourceFormatLoader {
+public:
+	virtual Ref<Resource> load(const String &p_path, const String &p_original_path = "", Error *r_error = nullptr, bool p_use_sub_threads = false, float *r_progress = nullptr, CacheMode p_cache_mode = CACHE_MODE_REUSE) override;
+	virtual void get_recognized_extensions(List<String> *p_extensions) const override;
+	virtual bool handles_type(const String &p_type) const override;
+	virtual String get_resource_type(const String &p_path) const override;
+};
 
 class CSharpScript : public Script {
 	GDCLASS(CSharpScript, Script);
@@ -66,6 +75,7 @@ class CSharpInstance : public ScriptInstance {
 	Ref<CSharpScript> script;
 	MonoObject *mono_object = nullptr;
 	GDMonoClass *mono_class = nullptr;
+	bool ready_called = false;
 
 public:
 	virtual bool set(const StringName &p_name, const Variant &p_value) override;
@@ -95,8 +105,11 @@ public:
 
 class CSharpLanguage : public ScriptLanguage {
 	StringName type_name = "C#";
+	static CSharpLanguage *singleton;
 
 public:
+	static CSharpLanguage *get_singleton() { return singleton; }
+
 	virtual String get_name() const override;
 	virtual void init() override;
 	virtual String get_type() const override;
@@ -134,6 +147,7 @@ public:
 	virtual void profiling_set_save_native_calls(bool p_enable) override;
 	virtual int profiling_get_accumulated_data(ProfilingInfo *p_info_arr, int p_info_max) override;
 	virtual int profiling_get_frame_data(ProfilingInfo *p_info_arr, int p_info_max) override;
+	virtual void frame() override;
 
 	CSharpLanguage();
 	~CSharpLanguage();

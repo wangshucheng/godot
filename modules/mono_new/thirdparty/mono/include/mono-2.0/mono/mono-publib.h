@@ -47,6 +47,7 @@ MONO_BEGIN_DECLS
 typedef struct _MonoClass MonoClass;
 typedef struct _MonoDomain MonoDomain;
 typedef struct _MonoField MonoField;
+typedef MonoField MonoClassField;
 typedef struct _MonoImage MonoImage;
 typedef struct _MonoMethod MonoMethod;
 typedef struct _MonoProperty MonoProperty;
@@ -75,6 +76,8 @@ typedef struct _MonoThreadsSync MonoThreadsSync;
 typedef struct _MonoInternalThread MonoInternalThread;
 typedef struct _MonoThreadStartInfo MonoThreadStartInfo;
 typedef struct _MonoThreadHandle MonoThreadHandle;
+
+typedef uint32_t mono_gchandle;
 
 /* Heap objects - all GC heap objects use MonoObject as the base type for
    C++ compatibility with the Mono embedding API pattern where MonoObject**
@@ -222,6 +225,25 @@ MONO_API MonoMethod* mono_lookup_internal_call(const char *name);
 /* Assembly loading */
 MONO_API void mono_assembly_setrootdir(const char *root_dir);
 MONO_API void mono_set_dirs(const char *assembly_dir, const char *config_dir);
+
+/* GC handle functions */
+MONO_API mono_gchandle mono_gchandle_new(MonoObject *obj, mono_bool pinned);
+MONO_API mono_gchandle mono_gchandle_new_weakref(MonoObject *obj, mono_bool track_resurrection);
+MONO_API MonoObject* mono_gchandle_get_target(mono_gchandle gchandle);
+MONO_API void mono_gchandle_free(mono_gchandle gchandle);
+
+/* Array functions */
+MONO_API MonoArray* mono_array_new(MonoDomain *domain, MonoClass *eclass, uintptr_t n);
+MONO_API uintptr_t mono_array_length(MonoArray *array);
+MONO_API void mono_array_setref(MonoArray *array, uintptr_t index, MonoObject *value);
+MONO_API void* mono_array_addr_with_size(MonoArray *array, int size, uintptr_t idx);
+#define mono_array_get(arr,type,index) (*(type*)mono_array_addr_with_size((arr),sizeof(type),(index)))
+
+/* Domain functions */
+MONO_API MonoAssembly* mono_domain_get_corlib(MonoDomain *domain);
+
+/* Exception functions */
+MONO_API void mono_print_unhandled_exception(MonoObject *exc);
 
 MONO_END_DECLS
 

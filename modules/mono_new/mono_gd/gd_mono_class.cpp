@@ -45,5 +45,15 @@ GDMonoClass::GDMonoClass(const String &p_namespace, const String &p_class, MonoI
 	}
 }
 
+GDMonoClass::GDMonoClass(MonoClass *p_raw_class) {
+	mono_class = p_raw_class;
+	if (mono_class) {
+		mono_image = mono_class_get_image(mono_class);
+		namespace_name = mono_class_get_namespace(mono_class);
+		class_name = mono_class_get_name(mono_class);
+		valid = true;
+	}
+}
+
 GDMonoClass::~GDMonoClass() {
 }

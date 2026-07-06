@@ -7,13 +7,13 @@
 #include <mono/mono-publib.h>
 
 class GDMonoClass {
+public:
 	MonoClass *mono_class = nullptr;
 	MonoImage *mono_image = nullptr;
 	String namespace_name;
 	String class_name;
 	bool valid = false;
 
-public:
 	_FORCE_INLINE_ MonoClass *get_raw_class() { return mono_class; }
 	_FORCE_INLINE_ bool is_valid() const { return valid; }
 
@@ -23,6 +23,7 @@ public:
 	MonoField *get_field(const StringName &p_name);
 
 	GDMonoClass(const String &p_namespace, const String &p_class, MonoImage *p_image = nullptr);
+	GDMonoClass(MonoClass *p_raw_class);
 	~GDMonoClass();
 };
 

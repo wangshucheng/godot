@@ -29,17 +29,25 @@ if env["platform"] == "windows":
         ("_CRT_SECURE_NO_WARNINGS", 1),
     ])
 
-    mono_lib_path = mono_root + "/libs/windows/x64"
+    import os
+    mono_install_lib = "C:/Program Files/Mono/lib"
+    local_mono_lib = mono_root + "/libs/windows/x64"
+    
+    if os.path.isdir(mono_install_lib):
+        mono_lib_path = mono_install_lib
+    else:
+        mono_lib_path = local_mono_lib
+    
+    env.Prepend(LIBPATH=[mono_lib_path])
     env_mono.Prepend(LIBPATH=[mono_lib_path])
 
     if env.msvc:
-        env_mono.Append(LINKFLAGS=[
+        env.Append(LINKFLAGS=[
             "mono-2.0-sgen.lib",
             "MonoPosixHelper.lib",
-            "oldnames.lib",
         ])
     else:
-        env_mono.Append(LIBS=[
+        env.Append(LIBS=[
             "mono-2.0-sgen",
             "MonoPosixHelper",
             "ws2_32",
@@ -48,10 +56,6 @@ if env["platform"] == "windows":
             "winmm",
             "bcrypt",
             "ole32",
-            "aut32",
-            "advapi32",
-            "user32",
-            "shell32",
             "oldnames",
         ])
 

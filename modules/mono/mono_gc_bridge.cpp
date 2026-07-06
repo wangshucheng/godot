@@ -44,6 +44,7 @@ static void set_gchandle_field(MonoObject *p_cs_obj, uint32_t p_gch) {
 void init(MonoDomain *p_domain) {
 	domain = p_domain;
 	printf("[Mono] GC bridge initialized.\n");
+	fflush(stdout);
 }
 
 void shutdown() {
@@ -54,6 +55,7 @@ void shutdown() {
 	managed_to_native.clear();
 	domain = nullptr;
 	printf("[Mono] GC bridge shut down.\n");
+	fflush(stdout);
 }
 
 uint32_t tie_managed_to_native(MonoObject *p_cs_obj, Object *p_native_obj, bool p_weak) {

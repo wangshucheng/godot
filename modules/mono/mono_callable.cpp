@@ -5,7 +5,6 @@
 #include <mono/metadata/appdomain.h>
 #include <mono/metadata/exception.h>
 #include <mono/metadata/object.h>
-#include <mono/metadata/delegate.h>
 #include <mono/metadata/metadata.h>
 #include <mono/metadata/loader.h>
 #include <cstdio>
@@ -83,7 +82,7 @@ void CallableCustomMono::call(const Variant **p_arguments, int p_argcount, Varia
 
 	if (p_argcount == 0) {
 		void *params[1] = { nullptr };
-		result = mono_runtime_delegate_invoke((MonoDelegate *)delegate, params, &exc);
+		result = mono_runtime_delegate_invoke((MonoObject *)delegate, params, &exc);
 	} else {
 		MonoClass *obj_class = mono_get_object_class();
 		MonoArray *args_array = mono_array_new(domain, obj_class, p_argcount);
@@ -92,7 +91,7 @@ void CallableCustomMono::call(const Variant **p_arguments, int p_argcount, Varia
 			mono_array_setref(args_array, i, arg);
 		}
 		void *params[1] = { args_array };
-		result = mono_runtime_delegate_invoke((MonoDelegate *)delegate, params, &exc);
+		result = mono_runtime_delegate_invoke((MonoObject *)delegate, params, &exc);
 	}
 
 	if (exc) {

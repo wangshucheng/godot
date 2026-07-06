@@ -4,8 +4,12 @@
 #include "core/object/script_instance.h"
 #include "core/doc_data.h"
 #include "core/templates/hash_map.h"
-#include <mono/metadata/object.h>
-#include <mono/metadata/appdomain.h>
+
+typedef struct _MonoClass MonoClass;
+typedef struct _MonoObject MonoObject;
+typedef struct _MonoImage MonoImage;
+typedef struct _MonoAssembly MonoAssembly;
+typedef struct _MonoMethod MonoMethod;
 
 class CSharpLanguage;
 
@@ -17,7 +21,8 @@ class CSharpScript : public Script {
 	String source;
 	String class_name;
 	StringName native_base_name;
-	bool valid = false;
+	bool mono_class_valid = false;
+	bool source_valid = false;
 
 	MonoClass *mono_class = nullptr;
 	MonoImage *mono_image = nullptr;
@@ -25,9 +30,12 @@ class CSharpScript : public Script {
 
 	void resolve_mono_class();
 	MonoMethod *get_method(const StringName &p_method, int p_argcount = -1);
+	String _parse_base_class() const;
+	String _parse_namespace() const;
 
 public:
-	bool can_instantiate() const override { return valid && mono_class != nullptr; }
+	void set_class_name(const String &p_name) { class_name = p_name; }
+	bool can_instantiate() const override { return mono_class != nullptr; }
 	Ref<Script> get_base_script() const override { return Ref<Script>(); }
 	StringName get_global_name() const override { return StringName(); }
 	bool inherits_script(const Ref<Script> &p_script) const override { return false; }
@@ -36,7 +44,7 @@ public:
 	PlaceHolderScriptInstance *placeholder_instance_create(Object *p_this) override { return nullptr; }
 	bool has_source_code() const override { return true; }
 	String get_source_code() const override { return source; }
-	void set_source_code(const String &p_code) override { source = p_code; valid = false; mono_class = nullptr; mono_image = nullptr; method_cache.clear(); }
+	void set_source_code(const String &p_code) override { source = p_code; mono_class = nullptr; mono_image = nullptr; method_cache.clear(); mono_class_valid = false; }
 	Error reload(bool p_keep_state = false) override;
 	bool has_script_signal(const StringName &p_signal) const override { return false; }
 	void get_script_signal_list(List<MethodInfo> *r_signals) const override {}
@@ -50,13 +58,18 @@ public:
 	int get_member_line(const StringName &p_member) const override { return -1; }
 	const Variant get_rpc_config() const override { return Variant(); }
 	void get_members(HashSet<StringName> *p_members) override {}
+	bool is_tool() const override { return false; }
+	bool is_valid() const override { return source_valid; }
+	bool is_abstract() const override { return false; }
+	ScriptLanguage *get_language() const override;
+
+#ifdef TOOLS_ENABLED
 	StringName get_doc_class_name() const override { return class_name; }
 	Vector<DocData::ClassDoc> get_documentation() const override { return Vector<DocData::ClassDoc>(); }
 	String get_class_icon_path() const override { return String(); }
-	bool is_tool() const override { return false; }
-	bool is_valid() const override { return valid; }
-	bool is_abstract() const override { return false; }
-	ScriptLanguage *get_language() const override;
+#endif
+
+	static void _bind_methods() {}
 	CSharpScript();
 };
 
@@ -104,6 +117,7 @@ public:
 
 	MonoAssembly *load_scripts_assembly();
 	MonoAssembly *get_scripts_assembly() const { return scripts_assembly; }
+	void reload_all_pending_scripts();
 
 	String get_name() const override { return "C#"; }
 	String get_type() const override { return "CSharpScript"; }
@@ -113,9 +127,9 @@ public:
 	void frame() override;
 	Vector<String> get_reserved_words() const override { return {}; }
 	bool is_control_flow_keyword(const String &p_keyword) const override { return false; }
-	Vector<String> get_comment_delimiters() const override { return {"//", ""}; }
-	Vector<String> get_doc_comment_delimiters() const override { return {"///", ""}; }
-	Vector<String> get_string_delimiters() const override { return {"\"", "'"}; }
+	Vector<String> get_comment_delimiters() const override { return {"/* */", "//"}; }
+	Vector<String> get_doc_comment_delimiters() const override { return {"/** */", "///"}; }
+	Vector<String> get_string_delimiters() const override { return {"\" \"", "' '", "@\" \"", "\"\"\" \"\"\""}; }
 	bool is_using_templates() override { return true; }
 	Ref<Script> make_template(const String &p_template, const String &p_class_name, const String &p_base_class_name) const override;
 	Vector<ScriptTemplate> get_built_in_templates(const StringName &p_object) override;
@@ -159,3 +173,6 @@ public:
 	CSharpLanguage();
 	~CSharpLanguage();
 };
+
+void register_csharp_resource_loader();
+void unregister_csharp_resource_loader();

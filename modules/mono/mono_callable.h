@@ -1,9 +1,10 @@
 #pragma once
 
-#include <mono/metadata/object.h>
-#include <mono/metadata/appdomain.h>
 #include "core/variant/callable.h"
 #include "core/object/object_id.h"
+
+typedef struct _MonoDomain MonoDomain;
+typedef struct _MonoMethod MonoMethod;
 
 class CallableCustomMono : public CallableCustom {
 	uint32_t gchandle = 0;

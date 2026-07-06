@@ -10,6 +10,7 @@ extern void *mono_aot_module_System_Runtime_info;
 extern void *mono_aot_module_System_Collections_info;
 extern void *mono_aot_module_System_Threading_Tasks_info;
 extern void *mono_aot_module_GodotSharp_info;
+extern void *mono_aot_module_ProjectScripts_info;
 }
 
 static const AotModuleEntry aot_module_table[] = {
@@ -20,6 +21,7 @@ static const AotModuleEntry aot_module_table[] = {
 	{"System.Collections", &mono_aot_module_System_Collections_info},
 	{"System.Threading.Tasks", &mono_aot_module_System_Threading_Tasks_info},
 	{"GodotSharp", &mono_aot_module_GodotSharp_info},
+	{"ProjectScripts", &mono_aot_module_ProjectScripts_info},
 	{nullptr, nullptr}
 };
 

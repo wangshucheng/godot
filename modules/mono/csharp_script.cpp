@@ -6,18 +6,108 @@
 #include "core/object/object.h"
 #include "core/os/os.h"
 #include "core/io/file_access.h"
+#include "core/io/resource_loader.h"
+#include "core/io/resource_saver.h"
+#include "core/io/resource.h"
+#include "core/config/project_settings.h"
 #include "scene/main/node.h"
 #include <mono/metadata/object.h>
 #include <mono/metadata/assembly.h>
 #include <mono/metadata/debug-helpers.h>
 #include <mono/metadata/class.h>
-#include <mono/metadata/property.h>
 #include <mono/metadata/attrdefs.h>
 #include <cstdio>
 #include <cstring>
 
 using namespace mono_variant;
 using namespace mono_bridge;
+
+class ResourceFormatLoaderCSharpScript : public ResourceFormatLoader {
+	GDSOFTCLASS(ResourceFormatLoaderCSharpScript, ResourceFormatLoader);
+
+public:
+	Ref<Resource> load(const String &p_path, const String &p_original_path = "", Error *r_error = nullptr, bool p_use_sub_threads = false, float *r_progress = nullptr, CacheMode p_cache_mode = CACHE_MODE_REUSE) override {
+		if (p_path.is_empty()) {
+			if (r_error) *r_error = ERR_INVALID_PARAMETER;
+			return Ref<Resource>();
+		}
+
+		Ref<CSharpScript> scr;
+		scr.instantiate();
+		String load_path = p_original_path.is_empty() ? p_path : p_original_path;
+		scr->set_path(load_path);
+
+		String class_name = p_path.get_file().get_basename();
+		scr->set_class_name(class_name);
+
+		Ref<FileAccess> f = FileAccess::open(p_path, FileAccess::READ);
+		if (f.is_valid()) {
+			String source = f->get_as_utf8_string();
+			scr->set_source_code(source);
+		}
+
+		Error err = scr->reload();
+		if (r_error) {
+			*r_error = err;
+		}
+		return scr;
+	}
+
+	void get_recognized_extensions(List<String> *p_extensions) const override {
+		p_extensions->push_back("cs");
+	}
+
+	bool handles_type(const String &p_type) const override {
+		return p_type == "Script" || p_type == "CSharpScript";
+	}
+
+	String get_resource_type(const String &p_path) const override {
+		if (p_path.get_extension().to_lower() == "cs") {
+			return "CSharpScript";
+		}
+		return "";
+	}
+
+	void get_dependencies(const String &p_path, List<String> *p_dependencies, bool p_add_types = false) override {}
+};
+
+class ResourceFormatSaverCSharpScript : public ResourceFormatSaver {
+	GDSOFTCLASS(ResourceFormatSaverCSharpScript, ResourceFormatSaver);
+
+public:
+	Error save(const Ref<Resource> &p_resource, const String &p_path, uint32_t p_flags = 0) override {
+		Ref<CSharpScript> cs_script = p_resource;
+		ERR_FAIL_COND_V(cs_script.is_null(), ERR_INVALID_PARAMETER);
+
+		String source = cs_script->get_source_code();
+
+		{
+			Error err;
+			Ref<FileAccess> file = FileAccess::open(p_path, FileAccess::WRITE, &err);
+			ERR_FAIL_COND_V_MSG(err, err, "Cannot save C# script file '" + p_path + "'.");
+
+			file->store_string(source);
+			if (file->get_error() != OK && file->get_error() != ERR_FILE_EOF) {
+				return ERR_CANT_CREATE;
+			}
+		}
+
+		return OK;
+	}
+
+	void get_recognized_extensions(const Ref<Resource> &p_resource, List<String> *p_extensions) const override {
+		if (Object::cast_to<CSharpScript>(*p_resource)) {
+			p_extensions->push_back("cs");
+		}
+	}
+
+	bool recognize(const Ref<Resource> &p_resource) const override {
+		return Object::cast_to<CSharpScript>(*p_resource) != nullptr;
+	}
+};
+
+static Ref<ResourceFormatLoaderCSharpScript> resource_loader_csharp;
+static Ref<ResourceFormatSaverCSharpScript> resource_saver_csharp;
 
 CSharpLanguage *CSharpLanguage::singleton = nullptr;
 
@@ -29,7 +119,8 @@ ScriptLanguage *CSharpScript::get_language() const {
 
 bool CSharpScript::has_method(const StringName &p_method) const {
 	if (!mono_class) return false;
-	MonoMethod *m = mono_class_get_method_from_name(mono_class, p_method.utf8().get_data(), -1);
+	String mname = String(p_method);
+	MonoMethod *m = mono_class_get_method_from_name(mono_class, mname.utf8().get_data(), -1);
 	return m != nullptr;
 }
 
@@ -38,7 +129,8 @@ int CSharpScript::get_script_method_argument_count(const StringName &p_method, b
 		if (r_is_valid) *r_is_valid = false;
 		return 0;
 	}
-	MonoMethod *m = mono_class_get_method_from_name(mono_class, p_method.utf8().get_data(), -1);
+	String mname = String(p_method);
+	MonoMethod *m = mono_class_get_method_from_name(mono_class, mname.utf8().get_data(), -1);
 	if (!m) {
 		if (r_is_valid) *r_is_valid = false;
 		return 0;
@@ -53,10 +145,10 @@ void CSharpScript::get_script_method_list(List<MethodInfo> *r_list) const {
 	if (!mono_class) return;
 	void *iter = nullptr;
 	while (MonoMethod *m = mono_class_get_methods(mono_class, &iter)) {
-		const char *name = mono_method_get_name(m);
-		if (name && name[0] != '.' && strncmp(name, "get_", 4) != 0 && strncmp(name, "set_", 4) != 0) {
+		const char *mname_str = mono_method_get_name(m);
+		if (mname_str && mname_str[0] != '.' && strncmp(mname_str, "get_", 4) != 0 && strncmp(mname_str, "set_", 4) != 0) {
 			MethodInfo mi;
-			mi.name = String::utf8(name);
+			mi.name = String::utf8(mname_str);
 			r_list->push_back(mi);
 		}
 	}
@@ -67,54 +159,119 @@ Variant CSharpScript::callp(const StringName &p_method, const Variant **p_args, 
 	return Variant();
 }
 
+String CSharpScript::_parse_base_class() const {
+	if (source.is_empty()) return "Node";
+
+	Vector<String> lines = source.split("\n");
+	for (int i = 0; i < lines.size(); i++) {
+		String line = lines[i].strip_edges();
+		int comment_pos = line.find("//");
+		if (comment_pos >= 0) line = line.substr(0, comment_pos).strip_edges();
+		if (line.is_empty()) continue;
+
+		int colon_pos = line.find(":");
+		if (colon_pos < 0) continue;
+
+		String after_colon = line.substr(colon_pos + 1).strip_edges();
+		if (after_colon.is_empty()) continue;
+
+		Vector<String> parts = after_colon.split(",", false);
+		if (parts.size() > 0) {
+			String base = parts[0].strip_edges();
+			if (base.is_empty()) continue;
+
+			int space_pos = base.find(" ");
+			if (space_pos > 0) base = base.substr(0, space_pos).strip_edges();
+
+			int angle_pos = base.find("<");
+			if (angle_pos > 0) base = base.substr(0, angle_pos).strip_edges();
+
+			int dot_pos = base.rfind(".");
+			if (dot_pos >= 0) base = base.substr(dot_pos + 1).strip_edges();
+
+			return base;
+		}
+	}
+
+	return "Node";
+}
+
+String CSharpScript::_parse_namespace() const {
+	if (source.is_empty()) return "";
+
+	Vector<String> lines = source.split("\n");
+	for (int i = 0; i < lines.size(); i++) {
+		String line = lines[i].strip_edges();
+		if (line.begins_with("namespace ")) {
+			String ns = line.substr(10).strip_edges();
+			int brace_pos = ns.find("{");
+			if (brace_pos > 0) ns = ns.substr(0, brace_pos).strip_edges();
+			int semicolon_pos = ns.find(";");
+			if (semicolon_pos > 0) ns = ns.substr(0, semicolon_pos).strip_edges();
+			return ns;
+		}
+	}
+	return "";
+}
+
 void CSharpScript::resolve_mono_class() {
 	mono_class = nullptr;
 	mono_image = nullptr;
 	method_cache.clear();
+	mono_class_valid = false;
 
 	if (class_name.is_empty()) return;
 
 	MonoDomain *domain = MonoHost::get_singleton() ? MonoHost::get_singleton()->get_domain() : nullptr;
-	if (!domain) return;
-
-	const char *cname = class_name.utf8().get_data();
-
-	const char *namespaces[] = {"", "Godot", nullptr};
-
-	for (int ni = 0; namespaces[ni] != nullptr; ni++) {
-		mono_class = mono_class_from_name(mono_get_corlib(), namespaces[ni], cname);
-		if (mono_class) break;
+	if (!domain) {
+		return;
 	}
 
-	if (!mono_class && MonoHost::get_singleton()) {
-		MonoAssembly *gs = MonoHost::get_singleton()->get_godotsharp_assembly();
-		if (gs) {
-			mono_image = mono_assembly_get_image(gs);
-			for (int ni = 0; namespaces[ni] != nullptr; ni++) {
-				mono_class = mono_class_from_name(mono_image, namespaces[ni], cname);
-				if (mono_class) break;
-			}
+	if (CSharpLanguage::get_singleton()) {
+		CSharpLanguage::get_singleton()->load_scripts_assembly();
+	}
+
+	String cname_str = class_name;
+	const char *cname = cname_str.utf8().get_data();
+	String ns = _parse_namespace();
+
+	Vector<MonoImage *> search_images;
+	if (CSharpLanguage::get_singleton() && CSharpLanguage::get_singleton()->get_scripts_assembly()) {
+		search_images.push_back(mono_assembly_get_image(CSharpLanguage::get_singleton()->get_scripts_assembly()));
+	}
+	if (MonoHost::get_singleton() && MonoHost::get_singleton()->get_godotsharp_assembly()) {
+		search_images.push_back(mono_assembly_get_image(MonoHost::get_singleton()->get_godotsharp_assembly()));
+	}
+	search_images.push_back(mono_get_corlib());
+
+	Vector<String> namespaces_to_search;
+	namespaces_to_search.push_back(ns);
+	namespaces_to_search.push_back("");
+	namespaces_to_search.push_back("Godot");
+
+	Vector<CharString> ns_utf8;
+	for (int ni = 0; ni < namespaces_to_search.size(); ni++) {
+		ns_utf8.push_back(namespaces_to_search[ni].utf8());
+	}
+
+	for (int img_idx = 0; img_idx < search_images.size(); img_idx++) {
+		MonoImage *img = search_images[img_idx];
+		if (!img) continue;
+		for (int ni = 0; ni < ns_utf8.size(); ni++) {
+			mono_class = mono_class_from_name(img, ns_utf8[ni].get_data(), cname);
+			if (mono_class) break;
 		}
-	}
-
-	if (!mono_class && CSharpLanguage::get_singleton()) {
-		MonoAssembly *scripts_asm = CSharpLanguage::get_singleton()->get_scripts_assembly();
-		if (scripts_asm) {
-			mono_image = mono_assembly_get_image(scripts_asm);
-			for (int ni = 0; namespaces[ni] != nullptr; ni++) {
-				mono_class = mono_class_from_name(mono_image, namespaces[ni], cname);
-				if (mono_class) break;
-			}
+		if (mono_class) {
+			mono_image = img;
+			break;
 		}
 	}
 
 	if (mono_class) {
-		if (mono_class_is_abstract(mono_class)) {
-			printf("[Mono] WARNING: Class '%s' is abstract, cannot instantiate.\n", cname);
+		if (mono_class_get_flags(mono_class) & MONO_TYPE_ATTR_ABSTRACT) {
 			mono_class = nullptr;
 		} else {
-			valid = true;
-			printf("[Mono] CSharpScript: Resolved class '%s' for script.\n", cname);
+			mono_class_valid = true;
 		}
 	}
 }
@@ -130,8 +287,8 @@ MonoMethod *CSharpScript::get_method(const StringName &p_method, int p_argcount)
 	MonoMethod **cached = method_cache.getptr(key);
 	if (cached) return *cached;
 
-	const char *mname = p_method.utf8().get_data();
-	MonoMethod *m = mono_class_get_method_from_name(mono_class, mname, p_argcount);
+	String mname = String(p_method);
+	MonoMethod *m = mono_class_get_method_from_name(mono_class, mname.utf8().get_data(), p_argcount);
 
 	if (m) {
 		method_cache[key] = m;
@@ -141,31 +298,40 @@ MonoMethod *CSharpScript::get_method(const StringName &p_method, int p_argcount)
 
 Error CSharpScript::reload(bool p_keep_state) {
 	String path = get_path();
+	source_valid = false;
+	mono_class_valid = false;
+	mono_class = nullptr;
+	mono_image = nullptr;
+	method_cache.clear();
+
 	if (path.is_empty()) {
-		valid = true;
+		source_valid = true;
 		class_name = "Node";
 		native_base_name = "Node";
 		return OK;
 	}
 
-	class_name = path.get_basename().get_file();
-	native_base_name = "Node";
+	class_name = path.get_file().get_basename();
 
-	if (MonoHost::get_singleton() && MonoHost::get_singleton()->get_domain()) {
-		resolve_mono_class();
+	String base_from_source = _parse_base_class();
+	native_base_name = StringName(base_from_source);
+
+	if (!source.is_empty()) {
+		source_valid = true;
 	} else {
-		valid = true;
+		source_valid = false;
+	}
+
+	if (MonoHost::get_singleton() && MonoHost::get_singleton()->get_domain() && !class_name.is_empty()) {
+		resolve_mono_class();
 	}
 
 	return OK;
 }
 
 ScriptInstance *CSharpScript::instance_create(Object *p_this) {
-	if (!valid) {
-		CSharpScript *mutable_this = const_cast<CSharpScript *>(this);
-		if (MonoHost::get_singleton() && MonoHost::get_singleton()->get_domain() && !mono_class) {
-			mutable_this->resolve_mono_class();
-		}
+	if (source_valid && !mono_class && MonoHost::get_singleton() && MonoHost::get_singleton()->get_domain()) {
+		resolve_mono_class();
 	}
 	return memnew(CSharpInstance(Ref<CSharpScript>(this), p_this));
 }
@@ -180,14 +346,11 @@ CSharpInstance::CSharpInstance(const Ref<CSharpScript> &p_script, Object *p_owne
 
 	MonoDomain *domain = MonoHost::get_singleton() ? MonoHost::get_singleton()->get_domain() : nullptr;
 	if (!domain) {
-		printf("[Mono] WARNING: CSharpInstance created before Mono domain initialized.\n");
 		return;
 	}
 
 	MonoClass *klass = script->mono_class;
 	if (!klass) {
-		printf("[Mono] WARNING: CSharpInstance: class '%s' not resolved, instance will be non-functional.\n",
-			  script->class_name.utf8().get_data());
 		return;
 	}
 
@@ -195,13 +358,11 @@ CSharpInstance::CSharpInstance(const Ref<CSharpScript> &p_script, Object *p_owne
 	if (existing) {
 		mono_object = existing;
 		gchandle = mono_gchandle_new(mono_object, false);
-		printf("[Mono] CSharpInstance: Reusing existing managed object for '%s'.\n", script->class_name.utf8().get_data());
 		return;
 	}
 
 	MonoObject *cs_obj = mono_object_new(domain, klass);
 	if (!cs_obj) {
-		printf("[Mono] ERROR: Failed to create MonoObject for class '%s'.\n", script->class_name.utf8().get_data());
 		return;
 	}
 
@@ -219,9 +380,6 @@ CSharpInstance::CSharpInstance(const Ref<CSharpScript> &p_script, Object *p_owne
 	mono_runtime_object_init(cs_obj);
 
 	if (exc) {
-		MonoClass *exc_class = mono_object_get_class(exc);
-		const char *exc_name = exc_class ? mono_class_get_name(exc_class) : "(unknown)";
-		printf("[Mono] ERROR: Exception in script constructor: %s\n", exc_name ? exc_name : "?");
 		return;
 	}
 
@@ -229,9 +387,6 @@ CSharpInstance::CSharpInstance(const Ref<CSharpScript> &p_script, Object *p_owne
 
 	mono_object = cs_obj;
 	gchandle = mono_gchandle_new(mono_object, false);
-
-	printf("[Mono] CSharpInstance created for '%s' (owner=%s).\n",
-		   script->class_name.utf8().get_data(), String(owner->get_class()).utf8().get_data());
 }
 
 CSharpInstance::~CSharpInstance() {
@@ -281,9 +436,9 @@ MonoMethod *CSharpInstance::find_method(const StringName &p_method, int p_argcou
 		if (m) return m;
 	}
 
-	const char *mname = method_name.utf8().get_data();
+	const char *mname_cstr = method_name.utf8().get_data();
 	for (MonoClass *k = klass; k; k = mono_class_get_parent(k)) {
-		MonoMethod *m = mono_class_get_method_from_name(k, mname, p_argcount);
+		MonoMethod *m = mono_class_get_method_from_name(k, mname_cstr, p_argcount);
 		if (m) return m;
 	}
 
@@ -350,8 +505,8 @@ MonoObject *CSharpInstance::invoke_method(MonoMethod *p_method, const Variant **
 bool CSharpInstance::set(const StringName &p_name, const Variant &p_value) {
 	if (!mono_object) return false;
 
-	const char *prop_name = p_name.utf8().get_data();
-	String setter_name = "set_" + String(p_name);
+	String prop_name = String(p_name);
+	String setter_name = "set_" + prop_name;
 	MonoMethod *setter = find_method(setter_name, 1);
 	if (setter) {
 		Variant result;
@@ -363,8 +518,9 @@ bool CSharpInstance::set(const StringName &p_name, const Variant &p_value) {
 
 	MonoClass *klass = mono_object_get_class(mono_object);
 	MonoClassField *field = nullptr;
+	const char *pname_cstr = prop_name.utf8().get_data();
 	for (MonoClass *k = klass; k && !field; k = mono_class_get_parent(k)) {
-		field = mono_class_get_field_from_name(k, prop_name);
+		field = mono_class_get_field_from_name(k, pname_cstr);
 	}
 	if (field) {
 		MonoDomain *domain = mono_domain_get();
@@ -380,7 +536,7 @@ bool CSharpInstance::set(const StringName &p_name, const Variant &p_value) {
 	}
 
 	for (MonoClass *k = klass; k; k = mono_class_get_parent(k)) {
-		MonoProperty *prop = mono_class_get_property_from_name(k, prop_name);
+		MonoProperty *prop = mono_class_get_property_from_name(k, pname_cstr);
 		if (prop) {
 			MonoMethod *pset = mono_property_get_set_method(prop);
 			if (pset) {
@@ -400,9 +556,9 @@ bool CSharpInstance::set(const StringName &p_name, const Variant &p_value) {
 bool CSharpInstance::get(const StringName &p_name, Variant &r_ret) const {
 	if (!mono_object) return false;
 
-	const char *prop_name = p_name.utf8().get_data();
+	String prop_name = String(p_name);
 
-	String getter_name = "get_" + String(p_name);
+	String getter_name = "get_" + prop_name;
 	MonoMethod *getter = nullptr;
 	if (script.is_valid() && script->mono_class) {
 		CSharpInstance *nc = const_cast<CSharpInstance *>(this);
@@ -421,8 +577,9 @@ bool CSharpInstance::get(const StringName &p_name, Variant &r_ret) const {
 
 	MonoClass *klass = mono_object_get_class(mono_object);
 	MonoClassField *field = nullptr;
+	const char *pname_cstr = prop_name.utf8().get_data();
 	for (MonoClass *k = klass; k && !field; k = mono_class_get_parent(k)) {
-		field = mono_class_get_field_from_name(k, prop_name);
+		field = mono_class_get_field_from_name(k, pname_cstr);
 	}
 	if (field) {
 		MonoObject *val = nullptr;
@@ -432,7 +589,7 @@ bool CSharpInstance::get(const StringName &p_name, Variant &r_ret) const {
 	}
 
 	for (MonoClass *k = klass; k; k = mono_class_get_parent(k)) {
-		MonoProperty *prop = mono_class_get_property_from_name(k, prop_name);
+		MonoProperty *prop = mono_class_get_property_from_name(k, pname_cstr);
 		if (prop) {
 			MonoMethod *pget = mono_property_get_get_method(prop);
 			if (pget) {
@@ -456,9 +613,10 @@ Variant::Type CSharpInstance::get_property_type(const StringName &p_name, bool *
 	if (r_is_valid) *r_is_valid = false;
 	if (!mono_object) return Variant::NIL;
 
-	const char *prop_name = p_name.utf8().get_data();
+	String prop_name = String(p_name);
+	const char *pname_cstr = prop_name.utf8().get_data();
 	MonoClass *klass = mono_object_get_class(mono_object);
-	MonoProperty *prop = mono_class_get_property_from_name(klass, prop_name);
+	MonoProperty *prop = mono_class_get_property_from_name(klass, pname_cstr);
 	if (prop) {
 		MonoMethod *getter = mono_property_get_get_method(prop);
 		if (getter) {
@@ -622,19 +780,39 @@ MonoAssembly *CSharpLanguage::load_scripts_assembly() {
 	if (!MonoHost::get_singleton() || !MonoHost::get_singleton()->get_domain()) return nullptr;
 
 	String exe_dir = OS::get_singleton()->get_executable_path().get_base_dir();
+	String cwd = OS::get_singleton()->get_cwd();
 
-	String search_paths[] = {
-		exe_dir.path_join(".mono/assemblies/GodotSharp.dll"),
-		exe_dir.path_join(".mono/assemblies/ProjectScripts.dll"),
-		exe_dir.path_join("ProjectScripts.dll"),
-	};
+	Vector<String> search_paths;
+	search_paths.push_back(exe_dir.path_join(".mono/assemblies/ProjectScripts.dll"));
+	search_paths.push_back(exe_dir.path_join("ProjectScripts.dll"));
+	search_paths.push_back(cwd.path_join(".mono/assemblies/ProjectScripts.dll"));
+	search_paths.push_back(cwd.path_join("ProjectScripts.dll"));
 
-	for (int i = 0; i < 3; i++) {
-		if (FileAccess::exists(search_paths[i])) {
-			scripts_assembly = mono_domain_assembly_open(MonoHost::get_singleton()->get_domain(), search_paths[i].utf8().get_data());
+	List<String> cmdline_args = OS::get_singleton()->get_cmdline_args();
+	String project_path;
+	bool next_is_path = false;
+	for (const String &arg : cmdline_args) {
+		if (next_is_path) {
+			project_path = arg;
+			break;
+		}
+		if (arg == "--path" || arg == "-p") {
+			next_is_path = true;
+		}
+	}
+	if (!project_path.is_empty()) {
+		if (project_path.is_relative_path()) {
+			project_path = OS::get_singleton()->get_cwd().path_join(project_path);
+		}
+		search_paths.push_back(project_path.path_join(".mono/assemblies/ProjectScripts.dll"));
+		search_paths.push_back(project_path.path_join("ProjectScripts.dll"));
+	}
+
+	for (int i = 0; i < search_paths.size(); i++) {
+		const String &path = search_paths[i];
+		if (FileAccess::exists(path)) {
+			scripts_assembly = mono_domain_assembly_open(MonoHost::get_singleton()->get_domain(), path.utf8().get_data());
 			if (scripts_assembly) {
-				const char *img_name = mono_image_get_name(mono_assembly_get_image(scripts_assembly));
-				printf("[Mono] Loaded project scripts assembly: %s\n", img_name ? img_name : "(unknown)");
 				return scripts_assembly;
 			}
 		}
@@ -644,13 +822,47 @@ MonoAssembly *CSharpLanguage::load_scripts_assembly() {
 }
 
 void CSharpLanguage::init() {
-	printf("[Mono] CSharpLanguage initialized.\n");
+	load_scripts_assembly();
 }
 
 void CSharpLanguage::finish() {
 	scripts_assembly = nullptr;
 	loaded_assemblies.clear();
-	printf("[Mono] CSharpLanguage finished.\n");
+}
+
+void register_csharp_resource_loader() {
+	if (!resource_loader_csharp.is_valid()) {
+		resource_loader_csharp.instantiate();
+		ResourceLoader::add_resource_format_loader(resource_loader_csharp, true);
+	}
+	if (!resource_saver_csharp.is_valid()) {
+		resource_saver_csharp.instantiate();
+		ResourceSaver::add_resource_format_saver(resource_saver_csharp, true);
+	}
+}
+
+void unregister_csharp_resource_loader() {
+	if (resource_saver_csharp.is_valid()) {
+		ResourceSaver::remove_resource_format_saver(resource_saver_csharp);
+		resource_saver_csharp.unref();
+	}
+	if (resource_loader_csharp.is_valid()) {
+		ResourceLoader::remove_resource_format_loader(resource_loader_csharp);
+		resource_loader_csharp.unref();
+	}
+}
+
+void CSharpLanguage::reload_all_pending_scripts() {
+	if (!scripts_assembly) return;
+
+	List<Ref<Resource>> resources;
+	ResourceCache::get_cached_resources(&resources);
+	for (const Ref<Resource> &res : resources) {
+		Ref<CSharpScript> cs_script = res;
+		if (cs_script.is_valid() && !cs_script->is_valid() && cs_script->get_path().get_extension().to_lower() == "cs") {
+			cs_script->reload();
+		}
+	}
 }
 
 void CSharpLanguage::frame() {
@@ -675,19 +887,41 @@ void CSharpLanguage::get_recognized_extensions(List<String> *p_extensions) const
 Ref<Script> CSharpLanguage::make_template(const String &p_template, const String &p_class_name, const String &p_base_class_name) const {
 	Ref<CSharpScript> script;
 	script.instantiate();
-	String tmpl = "using Godot;\n\npublic partial class " + p_class_name + " : " + p_base_class_name + "\n{\n    public override void _Ready()\n    {\n        GD.Print(\"Hello from C#!\");\n    }\n}\n";
+	String tmpl;
+	if (p_template.contains("Empty")) {
+		tmpl = "using Godot;\n\npublic class " + p_class_name + " : " + p_base_class_name + "\n{\n}\n";
+	} else {
+		tmpl = "using Godot;\n\npublic class " + p_class_name + " : " + p_base_class_name + "\n{\n\tpublic override void _Ready()\n\t{\n\t\tGD.Print(\"Hello from C#!\");\n\t}\n}\n";
+	}
 	script->set_source_code(tmpl);
 	return script;
 }
 
 Vector<ScriptLanguage::ScriptTemplate> CSharpLanguage::get_built_in_templates(const StringName &p_object) {
-	Vector<ScriptTemplate> templates;
-	ScriptTemplate t;
-	t.inherit = p_object;
-	t.name = "C# Node";
-	t.description = "C# Script";
-	t.content = "using Godot;\n\npublic partial class _CLASS_ : _BASE_\n{\n    public override void _Ready()\n    {\n        GD.Print(\"Hello from C#!\");\n    }\n}\n";
-	templates.push_back(t);
+	Vector<ScriptLanguage::ScriptTemplate> templates;
+
+	{
+		ScriptTemplate t;
+		t.inherit = p_object;
+		t.name = "Empty";
+		t.description = "An empty C# script.";
+		t.content = "using Godot;\n\npublic class _CLASS_ : _BASE_\n{\n}\n";
+		t.id = 0;
+		t.origin = ScriptLanguage::TEMPLATE_BUILT_IN;
+		templates.push_back(t);
+	}
+
+	{
+		ScriptTemplate t;
+		t.inherit = p_object;
+		t.name = "C# Script";
+		t.description = "A C# script with _Ready() method.";
+		t.content = "using Godot;\n\npublic class _CLASS_ : _BASE_\n{\n\tpublic override void _Ready()\n\t{\n\t\tGD.Print(\"Hello from C#!\");\n\t}\n}\n";
+		t.id = 1;
+		t.origin = ScriptLanguage::TEMPLATE_BUILT_IN;
+		templates.push_back(t);
+	}
+
 	return templates;
 }
 

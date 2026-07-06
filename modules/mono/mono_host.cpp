@@ -65,8 +65,6 @@ Error MonoHost::initialize() {
 		return OK;
 	}
 
-	printf("[Mono] Initializing Mono Runtime...\n");
-
 	String exe_dir = OS::get_singleton()->get_executable_path().get_base_dir();
 
 	String mono_root = find_mono_root(exe_dir);
@@ -99,14 +97,8 @@ Error MonoHost::initialize() {
 		assemblies_dir = exe_dir.path_join("lib");
 	}
 
-	printf("[Mono] Exe dir: %s\n", exe_dir.utf8().get_data());
-	printf("[Mono] Mono root: %s\n", mono_root.is_empty() ? "(not found)" : mono_root.utf8().get_data());
-	printf("[Mono] Assemblies dir: %s\n", assemblies_dir.utf8().get_data());
-	printf("[Mono] BCL dir: %s\n", bcl_dir.utf8().get_data());
-	printf("[Mono] Config (etc) dir: %s\n", etc_dir.utf8().get_data());
-
 	if (!DirAccess::exists(bcl_dir) || !FileAccess::exists(bcl_dir.path_join("mscorlib.dll"))) {
-		printf("[Mono] WARNING: mscorlib.dll not found at %s\n", bcl_dir.utf8().get_data());
+		ERR_PRINT(String("[Mono] mscorlib.dll not found at " + bcl_dir).utf8().get_data());
 	}
 
 	mono_set_dirs(assemblies_dir.utf8().get_data(), etc_dir.utf8().get_data());
@@ -120,20 +112,21 @@ Error MonoHost::initialize() {
 	setenv("MONO_PATH", search_path.utf8().get_data(), 1);
 #endif
 
+	printf("[Mono] Initializing C# / Mono runtime...\n");
+	fflush(stdout);
+
 #ifdef MONO_AOT_MODE
 	domain = mono_jit_init_version("GodotMonoAOT", "v4.0.30319");
 	if (!domain) {
 		ERR_PRINT("[Mono] Failed to initialize AOT runtime (mono_jit_init_version returned NULL)");
 		return FAILED;
 	}
-	printf("[Mono] AOT domain created: %s\n", mono_domain_get_friendly_name(domain));
 #else
 	domain = mono_jit_init_version("GodotMono", "v4.0.30319");
 	if (!domain) {
 		ERR_PRINT("[Mono] Failed to initialize JIT runtime (mono_jit_init_version returned NULL)");
 		return FAILED;
 	}
-	printf("[Mono] JIT domain created: %s\n", mono_domain_get_friendly_name(domain));
 #endif
 
 	mono_aot_init();
@@ -152,7 +145,8 @@ Error MonoHost::initialize() {
 	}
 
 	if (!load_godotsharp()) {
-		printf("[Mono] Note: GodotSharp.dll not loaded (Phase 2 bindings will be limited).\n");
+		printf("[Mono] Note: GodotSharp.dll not loaded (managed bindings limited).\n");
+		fflush(stdout);
 	}
 
 	if (godotsharp_assembly) {
@@ -165,6 +159,7 @@ Error MonoHost::initialize() {
 				mono_runtime_invoke(init_method, nullptr, nullptr, &exc);
 				if (exc) {
 					printf("[Mono] WARNING: Exception in Runtime.Initialize().\n");
+					fflush(stdout);
 				}
 			}
 		}
@@ -173,7 +168,8 @@ Error MonoHost::initialize() {
 	cache_sync_context_method();
 
 	is_initialized = true;
-	printf("[Mono] Mono runtime initialized successfully.\n");
+	printf("[Mono] C# runtime initialized.\n");
+	fflush(stdout);
 	return OK;
 }
 
@@ -194,9 +190,6 @@ bool MonoHost::load_corlib() {
 		ERR_PRINT("[Mono] Failed to get corlib assembly from image!");
 		return false;
 	}
-
-	const char *mscorlib_name = mono_image_get_name(corlib_image);
-	printf("[Mono] Loaded corlib: %s\n", mscorlib_name ? mscorlib_name : "(unknown)");
 
 	corlib_assembly = mscorlib;
 	return true;
@@ -221,14 +214,12 @@ bool MonoHost::load_godotsharp() {
 
 	godotsharp_assembly = mono_domain_assembly_open(domain, gs_path.utf8().get_data());
 	if (!godotsharp_assembly) {
-		printf("[Mono] Failed to open GodotSharp.dll\n");
 		return false;
 	}
 
 	MonoImage *img = mono_assembly_get_image(godotsharp_assembly);
 	mono_bridge::cache_godot_classes(img);
 	mono_variant::cache_godot_math_classes(img);
-	printf("[Mono] GodotSharp loaded successfully.\n");
 	return true;
 }
 
@@ -346,12 +337,14 @@ void MonoHost::cache_sync_context_method() {
 	MonoClass *sync_ctx_class = mono_class_from_name(img, "Godot", "GodotSynchronizationContext");
 	if (!sync_ctx_class) {
 		printf("[Mono] GodotSynchronizationContext class not found (sync context pumping disabled).\n");
+		fflush(stdout);
 		return;
 	}
 
 	sync_context_pump_method = mono_class_get_method_from_name(sync_ctx_class, "Pump", 0);
 	if (sync_context_pump_method) {
 		printf("[Mono] GodotSynchronizationContext.Pump() cached for main thread pumping.\n");
+		fflush(stdout);
 	}
 }
 
@@ -372,7 +365,8 @@ void MonoHost::shutdown() {
 		return;
 	}
 
-	printf("[Mono] Shutting down Mono runtime...\n");
+	printf("[Mono] Shutting down C# runtime...\n");
+	fflush(stdout);
 
 	mono_bridge::shutdown();
 	mono_gc_bridge::shutdown();
@@ -386,5 +380,6 @@ void MonoHost::shutdown() {
 	}
 
 	is_initialized = false;
-	printf("[Mono] Mono runtime shutdown complete.\n");
+	printf("[Mono] C# runtime shutdown complete.\n");
+	fflush(stdout);
 }

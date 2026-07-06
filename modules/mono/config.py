@@ -3,11 +3,13 @@ def can_build(env, platform):
 
 
 def configure(env):
-    pass
+    env.add_module_version_string("mono")
 
 
 def get_doc_classes():
-    return []
+    return [
+        "CSharpScript",
+    ]
 
 
 def get_doc_path():
@@ -16,3 +18,7 @@ def get_doc_path():
 
 def get_modules_path():
     return "modules"
+
+
+def is_enabled():
+    return True

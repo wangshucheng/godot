@@ -41,6 +41,7 @@ void cache_mono_corlib_classes() {
 	mono_class_object = mono_class_from_name(corlib, "System", "Object");
 	mono_class_intptr = mono_class_from_name(corlib, "System", "IntPtr");
 	printf("[Mono] Cached corlib classes.\n");
+	fflush(stdout);
 }
 
 void cache_godot_math_classes(MonoImage *p_godot_image) {
@@ -49,6 +50,7 @@ void cache_godot_math_classes(MonoImage *p_godot_image) {
 	mono_class_color = mono_class_from_name(p_godot_image, "Godot", "Color");
 	mono_class_rect2 = mono_class_from_name(p_godot_image, "Godot", "Rect2");
 	printf("[Mono] Cached Godot math classes.\n");
+	fflush(stdout);
 }
 
 MonoClass *get_intptr_class() { return mono_class_intptr; }

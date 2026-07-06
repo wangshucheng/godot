@@ -29,6 +29,7 @@ void init(MonoDomain *p_domain) {
 	system_intptr_class = mono_class_from_name(corlib, "System", "IntPtr");
 
 	printf("[Mono] Bridge initialized.\n");
+	fflush(stdout);
 }
 
 void shutdown() {
@@ -41,6 +42,7 @@ void shutdown() {
 	godot_scene_tree_class = nullptr;
 	system_intptr_class = nullptr;
 	printf("[Mono] Bridge shut down.\n");
+	fflush(stdout);
 }
 
 Object *unmanaged_get_from_ptr(intptr_t p_native_ptr) {
@@ -162,6 +164,7 @@ void cache_godot_classes(MonoImage *p_godot_image) {
 	} else {
 		printf("[Mono] Godot classes cached.\n");
 	}
+	fflush(stdout);
 }
 
 }

@@ -1,14 +1,16 @@
 #include "mono_aot.h"
-#include <mono/metadata/assembly.h>
 #include <cstdio>
 
+#ifdef MONO_AOT_MODE
 extern "C" {
 	void mono_aot_register_module(void *aot_info);
 }
+#endif
 
 static int aot_registered_count = 0;
 
 void mono_aot_register_modules() {
+#ifdef MONO_AOT_MODE
 	const AotModuleEntry *table = mono_aot_get_module_table();
 	if (!table || !table->name) {
 		printf("[Mono] AOT: No AOT modules registered (JIT mode or empty AOT table).\n");
@@ -27,6 +29,9 @@ void mono_aot_register_modules() {
 		}
 	}
 	printf("[Mono] AOT: %d modules registered.\n", aot_registered_count);
+#else
+	printf("[Mono] AOT: JIT mode - skipping AOT module registration.\n");
+#endif
 }
 
 void mono_aot_init() {

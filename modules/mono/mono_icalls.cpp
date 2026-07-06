@@ -52,7 +52,7 @@ static void godot_icall_Object_Free(intptr_t native_ptr) {
 	RefCounted *rc = Object::cast_to<RefCounted>(obj);
 	if (rc) {
 		mono_gc_bridge::notify_native_destroyed(obj);
-		rc->unref();
+		rc->unreference();
 		return;
 	}
 	mono_gc_bridge::notify_native_destroyed(obj);
@@ -229,21 +229,21 @@ static intptr_t godot_icall_Node_GetTree(intptr_t native_ptr) {
 
 static intptr_t godot_icall_Object_Ctor(MonoObject *p_this_obj) {
 	if (!p_this_obj) {
-		printf("[Mono] godot_icall_Object_Ctor: p_this_obj is null\n");
 		return 0;
 	}
 
 	MonoClass *klass = mono_object_get_class(p_this_obj);
 	const char *class_name_cstr = mono_class_get_name(klass);
 	if (!class_name_cstr || class_name_cstr[0] == '\0') {
-		printf("[Mono] godot_icall_Object_Ctor: could not get class name from MonoObject\n");
 		return 0;
 	}
 
 	StringName class_name(class_name_cstr);
+	if (!ClassDB::can_instantiate(class_name)) {
+		return 0;
+	}
 	Object *obj = ClassDB::instantiate(class_name);
 	if (!obj) {
-		printf("[Mono] Failed to instantiate class: %s\n", class_name_cstr);
 		return 0;
 	}
 
@@ -519,4 +519,5 @@ void godot_register_icalls() {
 	mono_add_internal_call("Godot.Bridge::godot_icall_Input_GetMousePosition", (const void *)godot_icall_Input_GetMousePosition);
 	mono_add_internal_call("HelloWorld.ConsoleBridge::godot_icall_Console_WriteLine", (const void *)godot_icall_Console_WriteLine_raw);
 	printf("[Mono] Registered internal calls (nodes + resources + signals + platform + input).\n");
+	fflush(stdout);
 }

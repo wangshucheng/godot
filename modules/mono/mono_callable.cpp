@@ -80,17 +80,18 @@ void CallableCustomMono::call(const Variant **p_arguments, int p_argcount, Varia
 	MonoObject *exc = nullptr;
 	MonoObject *result = nullptr;
 
+	// mono_runtime_delegate_invoke expects void** params where each element
+	// is a pointer to the argument value (pointer to MonoObject* for ref types)
 	if (p_argcount == 0) {
-		void *params[1] = { nullptr };
-		result = mono_runtime_delegate_invoke((MonoObject *)delegate, params, &exc);
+		result = mono_runtime_delegate_invoke((MonoObject *)delegate, nullptr, &exc);
 	} else {
-		MonoClass *obj_class = mono_get_object_class();
-		MonoArray *args_array = mono_array_new(domain, obj_class, p_argcount);
+		// Use alloca for stack allocation of params array
+		void **params = (void **)alloca(sizeof(void *) * p_argcount);
+		MonoObject **args = (MonoObject **)alloca(sizeof(MonoObject *) * p_argcount);
 		for (int i = 0; i < p_argcount; i++) {
-			MonoObject *arg = variant_to_mono_object(domain, *p_arguments[i]);
-			mono_array_setref(args_array, i, arg);
+			args[i] = variant_to_mono_object(domain, *p_arguments[i]);
+			params[i] = &args[i];
 		}
-		void *params[1] = { args_array };
 		result = mono_runtime_delegate_invoke((MonoObject *)delegate, params, &exc);
 	}
 

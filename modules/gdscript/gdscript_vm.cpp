@@ -251,7 +251,12 @@ void (*type_init_function_table[])(Variant *) = {
 	&VariantInitializer<PackedVector4Array>::init, // PACKED_VECTOR4_ARRAY.
 };
 
-#if defined(__GNUC__) || defined(__clang__)
+// On Emscripten/WASM, force switch-based dispatch instead of computed goto.
+// Computed goto keeps all locals from all opcode handlers alive simultaneously,
+// causing V8 "local count too large" errors (WASM spec limit: 50000 locals).
+// Switch-based dispatch lets the compiler do better liveness analysis and
+// reuse stack slots, keeping the function under the limit.
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(__EMSCRIPTEN__)
 #define OPCODES_TABLE \
 	static const void *switch_table_ops[] = { \
 		&&OPCODE_OPERATOR, \

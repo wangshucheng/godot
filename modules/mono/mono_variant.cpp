@@ -188,7 +188,7 @@ MonoObject *variant_to_mono_object(MonoDomain *p_domain, const Variant &p_varian
 		case Variant::PLANE: {
 			::Plane pl = p_variant;
 			::Vector3 n = pl.get_normal();
-			return variant_to_mono_plane(p_domain, n.x, n.y, n.z, pl.get_d());
+			return variant_to_mono_plane(p_domain, n.x, n.y, n.z, pl.d);
 		}
 		case Variant::AABB: {
 			::AABB a = p_variant;
@@ -241,12 +241,12 @@ MonoObject *variant_to_mono_object(MonoDomain *p_domain, const Variant &p_varian
 		}
 		case Variant::ARRAY: {
 			Array arr = p_variant;
-			String str = arr.operator String();
+			String str = Variant(arr).operator String();
 			return reinterpret_cast<MonoObject *>(variant_to_mono_string(p_domain, str));
 		}
 		case Variant::DICTIONARY: {
 			Dictionary dict = p_variant;
-			String str = dict.operator String();
+			String str = Variant(dict).operator String();
 			return reinterpret_cast<MonoObject *>(variant_to_mono_string(p_domain, str));
 		}
 		default: {

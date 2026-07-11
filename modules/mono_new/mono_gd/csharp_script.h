@@ -3,7 +3,9 @@
 
 #include "core/object/script_language.h"
 #include "core/io/resource_loader.h"
+#include "core/io/resource_saver.h"
 #include "core/string/ustring.h"
+#include "core/templates/self_list.h"
 
 #include <mono/mono-publib.h>
 
@@ -20,11 +22,18 @@ public:
 class CSharpScript : public Script {
 	GDCLASS(CSharpScript, Script);
 
+	friend class CSharpLanguage;
+
 	String script_path;
 	String script_namespace;
 	String class_name;
 	GDMonoClass *mono_class = nullptr;
 	bool valid = false;
+
+	String source;
+	bool source_changed_cache = false;
+
+	SelfList<CSharpScript> script_list;
 
 protected:
 	static void _bind_methods();
@@ -115,6 +124,9 @@ public:
 	virtual String get_type() const override;
 	virtual String get_extension() const override;
 	virtual void finish() override;
+	virtual bool is_using_templates() override;
+	virtual Ref<Script> make_template(const String &p_template, const String &p_class_name, const String &p_base_class_name) const override;
+	virtual Vector<ScriptTemplate> get_built_in_templates(const StringName &p_object) override;
 	virtual Vector<String> get_reserved_words() const override;
 	virtual bool is_control_flow_keyword(const String &p_string) const override;
 	virtual Vector<String> get_comment_delimiters() const override;
@@ -148,9 +160,22 @@ public:
 	virtual int profiling_get_accumulated_data(ProfilingInfo *p_info_arr, int p_info_max) override;
 	virtual int profiling_get_frame_data(ProfilingInfo *p_info_arr, int p_info_max) override;
 	virtual void frame() override;
+	virtual ScriptNameCasing preferred_file_name_casing() const override;
 
+private:
+	friend class CSharpScript;
+	SelfList<CSharpScript>::List scripts_list;
+
+public:
 	CSharpLanguage();
 	~CSharpLanguage();
+};
+
+class ResourceFormatSaverCSharpScript : public ResourceFormatSaver {
+public:
+	virtual Error save(const Ref<Resource> &p_resource, const String &p_path, uint32_t p_flags = 0) override;
+	virtual void get_recognized_extensions(const Ref<Resource> &p_resource, List<String> *p_extensions) const override;
+	virtual bool recognize(const Ref<Resource> &p_resource) const override;
 };
 
 #endif

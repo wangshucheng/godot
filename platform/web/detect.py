@@ -145,11 +145,16 @@ def configure(env: "SConsEnvironment"):
         sys.exit(255)
 
     # Add Emscripten to the included paths (for compile_commands.json completion)
-    emcc_path = Path(str(WhereIs("emcc")))
-    while emcc_path.is_symlink():
-        # For some reason, mypy trips on `Path.readlink` not being defined, somehow.
-        emcc_path = emcc_path.readlink()  # type: ignore[attr-defined]
-    emscripten_include_path = emcc_path.parent.joinpath("cache", "sysroot", "include")
+    # Respect EM_CACHE environment variable if set, otherwise use default location
+    import os as _os
+    _em_cache = _os.environ.get("EM_CACHE")
+    if _em_cache:
+        emscripten_include_path = Path(_em_cache).joinpath("sysroot", "include")
+    else:
+        emcc_path = Path(str(WhereIs("emcc")))
+        while emcc_path.is_symlink():
+            emcc_path = emcc_path.readlink()  # type: ignore[attr-defined]
+        emscripten_include_path = emcc_path.parent.joinpath("cache", "sysroot", "include")
     env.Append(CPPPATH=[emscripten_include_path])
 
     ## Configure assertions.
@@ -282,7 +287,8 @@ def configure(env: "SConsEnvironment"):
         env.Append(LINKFLAGS=["-sOFFSCREEN_FRAMEBUFFER=1"])
         # Disables the use of *glGetProcAddress() which is inefficient.
         # See https://emscripten.org/docs/tools_reference/settings_reference.html#gl-enable-get-proc-address
-        env.Append(LINKFLAGS=["-sGL_ENABLE_GET_PROC_ADDRESS=0"])
+        # Note: GL_ENABLE_GET_PROC_ADDRESS was added in Emscripten 4.x; not available in 3.1.39.
+        pass  # env.Append(LINKFLAGS=["-sGL_ENABLE_GET_PROC_ADDRESS=0"])
 
     if env["javascript_eval"]:
         env.Append(CPPDEFINES=["JAVASCRIPT_EVAL_ENABLED"])
@@ -354,12 +360,7 @@ def configure(env: "SConsEnvironment"):
     env.Append(LINKFLAGS=["-sINVOKE_RUN=0"])
 
     # callMain for manual start, cwrap for the mono version.
-    # Make sure also to have those memory-related functions available.
-    heap_arrays = [f"HEAP{heap_type}{heap_size}" for heap_size in [8, 16, 32, 64] for heap_type in ["", "U"]] + [
-        "HEAPF32",
-        "HEAPF64",
-    ]
-    env["EXPORTED_RUNTIME_METHODS"] += ["callMain", "cwrap"] + heap_arrays
+    env["EXPORTED_RUNTIME_METHODS"] += ["callMain", "cwrap"]
     env["EXPORTED_FUNCTIONS"] += ["_malloc", "_free"]
 
     # Add code that allow exiting runtime.

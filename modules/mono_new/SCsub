@@ -44,14 +44,17 @@ def get_platform_lib_subdir(env):
 if mono_prefix:
     mono_lib_path = mono_prefix + "/lib"
     mono_inc_path = mono_prefix + "/include/mono-2.0"
+    mono_wasm_inc_path = None
 else:
     if env["platform"] == "web":
         mono_lib_path = "#modules/mono_new/thirdparty/mono/wasm"
         mono_inc_path = "#modules/mono_new/thirdparty/mono/include/mono-2.0"
+        mono_wasm_inc_path = "#modules/mono_new/thirdparty/mono/include/mono-2.0/wasm"
     else:
         mono_lib_base = "#modules/mono_new/thirdparty/mono/lib"
         mono_lib_platform = mono_lib_base + "/" + get_platform_lib_subdir(env)
         mono_inc_path = "#modules/mono_new/thirdparty/mono/include/mono-2.0"
+        mono_wasm_inc_path = None
 
         import os
         _plat_path = env.Dir(mono_lib_platform).abspath
@@ -74,10 +77,13 @@ env_mono.add_source_files(env.modules_sources, "glue/glue_cpp/*.cpp")
 
 if env["platform"] == "web":
     env_mono.add_source_files(env.modules_sources, "platform/mono_platform_web.cpp")
+    env_mono.add_source_files(env.modules_sources, "platform/mini_wasm_stubs.c")
 
 if env.editor_build:
     env_mono.add_source_files(env.modules_sources, "editor/*.cpp")
 
+if mono_wasm_inc_path:
+    env_mono.Append(CPPPATH=[mono_wasm_inc_path])
 env_mono.Append(CPPPATH=[mono_inc_path])
 env_mono.Append(CPPPATH=["#modules/mono_new/"])
 env_mono.Append(CPPPATH=["#modules/mono_new/platform/"])
@@ -108,37 +114,67 @@ elif mono_static:
             env.Append(LIBS=["mono-2.0-sgen", "psapi", "ws2_32", "winmm", "version", "iphlpapi", "oleaut32", "advapi32", "user32", "shell32", "ole32", "bcrypt"])
             env.Append(LIBPATH=[mono_lib_path])
     elif env["platform"] == "web":
-        # Link Mono WASM static libraries in dependency order
-        mono_wasm_libs = [
-            "mini",
+        # Link Mono WASM static libraries.
+        # Order matters for static linking; use --whole-archive to prevent
+        # the linker from stripping symbols referenced only via function pointers.
+        env.Append(LIBPATH=[mono_lib_path])
+        env.Append(LINKFLAGS=["-Wl,--whole-archive"])
+        # The core Mono libraries needed for interpreter mode (no JIT/AOT):
+        # - monosgen-2.0: mini runtime (JIT compiler, codegen, trampolines, zlib)
+        # - mono-ee-interp: the interpreter execution engine
+        # - monoruntimesgen: runtime classes, metadata, SGen GC integration
+        # - mono-ilgen: IL code generation for dynamic methods
+        # - monoruntime-support: runtime support utilities
+        # - eglib: embedded glib replacement
+        # - mono-icall-table: internal call table
+        # - monoutils: mono utilities (dlmalloc, codeman, etc.)
+        # - mono-dbg: debugger support
+        # - z: zlib compression
+        # - monomath: math helpers
+        # - monoruntime-config: runtime configuration
+        env.Append(LIBS=[
+            "monosgen-2.0",
             "mono-ee-interp",
             "monoruntimesgen",
             "mono-ilgen",
-            "mono-icall-table",
             "monoruntime-support",
-            "monoruntime-config",
-            "monosgen",
-            "mono-dbg",
-            "monoutils",
-            "monomath",
             "eglib",
+            "mono-icall-table",
+            "monoutils",
+            "mono-dbg",
             "z",
-        ]
-        env.Append(LIBPATH=[mono_lib_path])
-        for lib in mono_wasm_libs:
-            env.Append(LIBS=[lib])
+            "monomath",
+            "monoruntime-config",
+        ])
+        env.Append(LINKFLAGS=["-Wl,--no-whole-archive"])
         env_mono.Append(CPPDEFINES=["MONO_Web"])
         env_mono.Append(CPPDEFINES=["DISABLE_THREADS"])
         env_mono.Append(CPPDEFINES=["HAVE_SGEN_GC"])
         # Emscripten linker flags for Mono WASM
         env.Append(LINKFLAGS=[
             "-s", "ALLOW_MEMORY_GROWTH=1",
-            "-s", "EXPORTED_RUNTIME_METHODS=['ccall','cwrap','stringToUTF8','UTF8ToString']",
+            "-s", "EXPORTED_RUNTIME_METHODS=['ccall','cwrap','stringToUTF8','UTF8ToString','FS']",
             "-s", "ERROR_ON_UNDEFINED_SYMBOLS=0",
             "-s", "WARN_ON_UNDEFINED_SYMBOLS=0",
-            "-Wl,--allow-multiple-definition",
-            "--no-entry",
+            "-O1",
+            "--profiling-funcs",
         ])
+        # Provide JS implementations of Mono WASM runtime functions
+        # that Mono expects from the JavaScript environment.
+        _wasm_runtime_js = os.path.join(env.Dir("#modules/mono_new/platform").abspath, "mono_wasm_runtime.js").replace("\\", "/")
+        if os.path.isfile(_wasm_runtime_js):
+            env.Append(LINKFLAGS=["--js-library", _wasm_runtime_js])
+        # Embed BCL and C# assemblies into MEMFS via --preload-file.
+        # Files under modules/mono_new/preload/ are mounted at / in the WASM
+        # virtual filesystem so that Mono can find /mono/lib/mono/4.5/mscorlib.dll
+        # and /.mono/assemblies/GodotSharp.dll at runtime.
+        import os
+        _preload_abs = env.Dir("#modules/mono_new/preload").abspath.replace("\\", "/")
+        if os.path.isdir(_preload_abs) and os.listdir(_preload_abs):
+            env.Append(LINKFLAGS=[
+                "--preload-file",
+                _preload_abs + "@/",
+            ])
     elif env["platform"] == "macos":
         env.Append(LIBS=["mono-2.0-sgen", "pthread", "m", "dl"])
         env.Append(LIBPATH=[mono_lib_path])

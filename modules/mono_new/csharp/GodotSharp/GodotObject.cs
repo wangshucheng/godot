@@ -45,6 +45,60 @@ namespace Godot
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal extern static bool godot_icall_Object_DisconnectSignal(IntPtr nativePtr, string signal, Delegate callable);
 
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static IntPtr godot_icall_CreateObject(string className);
+
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static void godot_icall_Node_AddChild(IntPtr parent, IntPtr child);
+
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static void godot_icall_Object_SetString(IntPtr obj, string prop, string value);
+
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static void godot_icall_Object_SetInt(IntPtr obj, string prop, int value);
+
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static void godot_icall_Object_SetFloat(IntPtr obj, string prop, float value);
+
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static void godot_icall_Object_SetBool(IntPtr obj, string prop, bool value);
+
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static void godot_icall_Object_SetVector2(IntPtr obj, string prop, float x, float y);
+
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static void godot_icall_Object_SetColor(IntPtr obj, string prop, float r, float g, float b, float a);
+
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static void godot_icall_Object_SetObject(IntPtr obj, string prop, IntPtr value);
+
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static void godot_icall_Object_CallString(IntPtr obj, string method, string arg);
+
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static void godot_icall_Object_CallInt(IntPtr obj, string method, int arg);
+
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static void godot_icall_Object_CallStringInt(IntPtr obj, string method, string arg1, int arg2);
+
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static void godot_icall_Object_CallStringColor(IntPtr obj, string method, string arg1, float r, float g, float b, float a);
+
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static void godot_icall_Object_CallStringObject(IntPtr obj, string method, string arg1, IntPtr arg2);
+
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static void godot_icall_Object_CallNoArgs(IntPtr obj, string method);
+
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static IntPtr godot_icall_Object_CallNoArgsObject(IntPtr obj, string method);
+
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static double godot_icall_Object_GetFloat(IntPtr obj, string prop);
+
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static string godot_icall_Object_GetString(IntPtr obj, string prop);
+
         public void EmitSignal(StringName signal, params object[] args)
         {
             if (nativeInstance == IntPtr.Zero)
@@ -125,6 +179,11 @@ namespace Godot
         public virtual void _UnhandledKeyInput(InputEvent @event) { }
         public virtual void _EnterTree() { }
         public virtual void _ExitTree() { }
+
+		public void AddChild(Node node)
+		{
+			godot_icall_Node_AddChild(nativeInstance, node.nativeInstance);
+		}
     }
 
     public partial class Node2D : Node

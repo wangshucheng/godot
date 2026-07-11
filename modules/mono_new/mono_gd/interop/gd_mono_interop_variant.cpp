@@ -19,6 +19,11 @@
 #include "core/string/node_path.h"
 #include "core/math/math_funcs.h"
 #include "scene/main/node.h"
+#include "core/object/class_db.h"
+#include "core/config/engine.h"
+#include "core/os/time.h"
+#include "scene/main/canvas_layer.h"
+#include "scene/gui/control.h"
 
 #include <mono/mono-publib.h>
 #include <cstring>
@@ -110,7 +115,7 @@ VariantTypeManaged variant_type_to_managed(Variant::Type p_type) {
 }
 
 static MonoClass *get_mono_class_for_variant_type(MonoDomain *p_domain, VariantTypeManaged p_type) {
-	MonoImage *image = mono_get_corlib();
+	MonoImage *image = get_godot_sharp_image();
 	if (!image)
 		return nullptr;
 
@@ -167,7 +172,7 @@ MonoObject *variant_to_mono_object(MonoDomain *p_domain, const Variant &p_varian
 		return nullptr;
 
 	Variant::Type type = p_variant.get_type();
-	MonoImage *image = mono_get_corlib();
+	MonoImage *image = get_godot_sharp_image();
 	if (!image)
 		return nullptr;
 
@@ -563,7 +568,8 @@ Variant mono_object_to_variant(MonoObject *p_obj, VariantTypeManaged p_hint_type
 			MonoPlane *mp = (MonoPlane *)mono_object_unbox(p_obj);
 			return Plane(mp->x, mp->y, mp->z, mp->d);
 		}
-		if (strcmp(class_name, "GodotObject") == 0 || mono_class_is_subclass_of(cls, godot_object_class, false)) {
+		ensure_native_instance_field();
+		if (strcmp(class_name, "GodotObject") == 0 || (godot_object_class && mono_class_is_subclass_of(cls, godot_object_class, false))) {
 			Object *native = (Object *)get_native_object(p_obj);
 			if (native) return Variant(native);
 		}
@@ -650,6 +656,166 @@ static mono_bool icall_Input_IsActionPressed(MonoString *p_action) {
 	return Input::get_singleton()->is_action_pressed(action);
 }
 
+// ===== UI and Node Manipulation Internal Calls =====
+
+static void *icall_CreateObject(MonoString *p_class_name) {
+	if (!p_class_name) return nullptr;
+	char *utf8 = mono_string_to_utf8(p_class_name);
+	if (!utf8) return nullptr;
+	String class_name = String::utf8(utf8);
+	mono_free(utf8);
+	Object *obj = ClassDB::instantiate(class_name);
+	if (!obj) {
+		MonoLogger::log_error("Failed to create object of type: " + class_name);
+		return nullptr;
+	}
+	return obj;
+}
+
+static void icall_Node_AddChild(void *p_parent, void *p_child) {
+	if (!p_parent || !p_child) return;
+	Node *parent = (Node *)p_parent;
+	Node *child = (Node *)p_child;
+	parent->add_child(child);
+}
+
+static void icall_Object_SetString(void *p_obj, MonoString *p_prop, MonoString *p_value) {
+	if (!p_obj || !p_prop) return;
+	Object *obj = (Object *)p_obj;
+	String prop = String::utf8(mono_string_to_utf8(p_prop));
+	String value = p_value ? String::utf8(mono_string_to_utf8(p_value)) : String();
+	obj->set(prop, Variant(value));
+}
+
+static void icall_Object_SetInt(void *p_obj, MonoString *p_prop, int64_t p_value) {
+	if (!p_obj || !p_prop) return;
+	Object *obj = (Object *)p_obj;
+	String prop = String::utf8(mono_string_to_utf8(p_prop));
+	obj->set(prop, Variant(p_value));
+}
+
+static void icall_Object_SetFloat(void *p_obj, MonoString *p_prop, float p_value) {
+	if (!p_obj || !p_prop) return;
+	Object *obj = (Object *)p_obj;
+	String prop = String::utf8(mono_string_to_utf8(p_prop));
+	obj->set(prop, Variant(p_value));
+}
+
+static void icall_Object_SetBool(void *p_obj, MonoString *p_prop, mono_bool p_value) {
+	if (!p_obj || !p_prop) return;
+	Object *obj = (Object *)p_obj;
+	String prop = String::utf8(mono_string_to_utf8(p_prop));
+	obj->set(prop, Variant((bool)(p_value != 0)));
+}
+
+static void icall_Object_SetVector2(void *p_obj, MonoString *p_prop, float x, float y) {
+	if (!p_obj || !p_prop) return;
+	Object *obj = (Object *)p_obj;
+	String prop = String::utf8(mono_string_to_utf8(p_prop));
+	obj->set(prop, Variant(Vector2(x, y)));
+}
+
+static void icall_Object_SetColor(void *p_obj, MonoString *p_prop, float r, float g, float b, float a) {
+	if (!p_obj || !p_prop) return;
+	Object *obj = (Object *)p_obj;
+	String prop = String::utf8(mono_string_to_utf8(p_prop));
+	obj->set(prop, Variant(Color(r, g, b, a)));
+}
+
+static void icall_Object_SetObject(void *p_obj, MonoString *p_prop, void *p_value) {
+	if (!p_obj || !p_prop) return;
+	Object *obj = (Object *)p_obj;
+	String prop = String::utf8(mono_string_to_utf8(p_prop));
+	Object *value = (Object *)p_value;
+	obj->set(prop, Variant(value));
+}
+
+static void icall_Object_CallString(void *p_obj, MonoString *p_method, MonoString *p_arg) {
+	if (!p_obj || !p_method) return;
+	Object *obj = (Object *)p_obj;
+	String method = String::utf8(mono_string_to_utf8(p_method));
+	String arg = p_arg ? String::utf8(mono_string_to_utf8(p_arg)) : String();
+	obj->call(method, Variant(arg));
+}
+
+static void icall_Object_CallInt(void *p_obj, MonoString *p_method, int64_t p_arg) {
+	if (!p_obj || !p_method) return;
+	Object *obj = (Object *)p_obj;
+	String method = String::utf8(mono_string_to_utf8(p_method));
+	obj->call(method, Variant(p_arg));
+}
+
+static void icall_Object_CallStringInt(void *p_obj, MonoString *p_method, MonoString *p_arg1, int64_t p_arg2) {
+	if (!p_obj || !p_method) return;
+	Object *obj = (Object *)p_obj;
+	String method = String::utf8(mono_string_to_utf8(p_method));
+	String arg1 = p_arg1 ? String::utf8(mono_string_to_utf8(p_arg1)) : String();
+	obj->call(method, Variant(arg1), Variant(p_arg2));
+}
+
+static void icall_Object_CallStringColor(void *p_obj, MonoString *p_method, MonoString *p_arg1, float r, float g, float b, float a) {
+	if (!p_obj || !p_method) return;
+	Object *obj = (Object *)p_obj;
+	String method = String::utf8(mono_string_to_utf8(p_method));
+	String arg1 = p_arg1 ? String::utf8(mono_string_to_utf8(p_arg1)) : String();
+	obj->call(method, Variant(arg1), Variant(Color(r, g, b, a)));
+}
+
+static void icall_Object_CallStringObject(void *p_obj, MonoString *p_method, MonoString *p_arg1, void *p_arg2) {
+	if (!p_obj || !p_method) return;
+	Object *obj = (Object *)p_obj;
+	String method = String::utf8(mono_string_to_utf8(p_method));
+	String arg1 = p_arg1 ? String::utf8(mono_string_to_utf8(p_arg1)) : String();
+	Object *arg2 = (Object *)p_arg2;
+	obj->call(method, Variant(arg1), Variant(arg2));
+}
+
+static void icall_Object_CallNoArgs(void *p_obj, MonoString *p_method) {
+	if (!p_obj || !p_method) return;
+	Object *obj = (Object *)p_obj;
+	String method = String::utf8(mono_string_to_utf8(p_method));
+	obj->call(method);
+}
+
+static void *icall_Object_CallNoArgsObject(void *p_obj, MonoString *p_method) {
+	if (!p_obj || !p_method) return nullptr;
+	Object *obj = (Object *)p_obj;
+	String method = String::utf8(mono_string_to_utf8(p_method));
+	Variant ret = obj->call(method);
+	Object *result = ret;
+	return result;
+}
+
+static double icall_Object_GetFloat(void *p_obj, MonoString *p_prop) {
+	if (!p_obj || !p_prop) return 0.0;
+	Object *obj = (Object *)p_obj;
+	String prop = String::utf8(mono_string_to_utf8(p_prop));
+	Variant v = obj->get(prop);
+	return (double)v;
+}
+
+static MonoString *icall_Object_GetString(void *p_obj, MonoString *p_prop) {
+	if (!p_obj || !p_prop) return nullptr;
+	Object *obj = (Object *)p_obj;
+	String prop = String::utf8(mono_string_to_utf8(p_prop));
+	Variant v = obj->get(prop);
+	String s = v;
+	return mono_string_new(mono_domain_get(), s.utf8().get_data());
+}
+
+static int64_t icall_Engine_GetFramesPerSecond() {
+	return (int64_t)Engine::get_singleton()->get_frames_per_second();
+}
+
+static int64_t icall_OS_GetStaticMemoryUsage() {
+	return (int64_t)OS::get_singleton()->get_static_memory_usage();
+}
+
+static MonoString *icall_Time_GetTimeStringFromSystem() {
+	String time = Time::get_singleton()->get_time_string_from_system();
+	return mono_string_new(mono_domain_get(), time.utf8().get_data());
+}
+
 void variant_register_icalls() {
 	MonoLogger::log("Registering Mono interop icalls...");
 
@@ -662,6 +828,27 @@ void variant_register_icalls() {
 	mono_add_internal_call("Godot.Input::godot_icall_Input_IsKeyPressed", (const void *)icall_Input_IsKeyPressed);
 	mono_add_internal_call("Godot.Input::godot_icall_Input_IsActionPressed", (const void *)icall_Input_IsActionPressed);
 
+	mono_add_internal_call("Godot.GodotObject::godot_icall_CreateObject", (const void *)icall_CreateObject);
+	mono_add_internal_call("Godot.GodotObject::godot_icall_Node_AddChild", (const void *)icall_Node_AddChild);
+	mono_add_internal_call("Godot.GodotObject::godot_icall_Object_SetString", (const void *)icall_Object_SetString);
+	mono_add_internal_call("Godot.GodotObject::godot_icall_Object_SetInt", (const void *)icall_Object_SetInt);
+	mono_add_internal_call("Godot.GodotObject::godot_icall_Object_SetFloat", (const void *)icall_Object_SetFloat);
+	mono_add_internal_call("Godot.GodotObject::godot_icall_Object_SetBool", (const void *)icall_Object_SetBool);
+	mono_add_internal_call("Godot.GodotObject::godot_icall_Object_SetVector2", (const void *)icall_Object_SetVector2);
+	mono_add_internal_call("Godot.GodotObject::godot_icall_Object_SetColor", (const void *)icall_Object_SetColor);
+	mono_add_internal_call("Godot.GodotObject::godot_icall_Object_SetObject", (const void *)icall_Object_SetObject);
+	mono_add_internal_call("Godot.GodotObject::godot_icall_Object_CallString", (const void *)icall_Object_CallString);
+	mono_add_internal_call("Godot.GodotObject::godot_icall_Object_CallInt", (const void *)icall_Object_CallInt);
+	mono_add_internal_call("Godot.GodotObject::godot_icall_Object_CallStringInt", (const void *)icall_Object_CallStringInt);
+	mono_add_internal_call("Godot.GodotObject::godot_icall_Object_CallStringColor", (const void *)icall_Object_CallStringColor);
+	mono_add_internal_call("Godot.GodotObject::godot_icall_Object_CallStringObject", (const void *)icall_Object_CallStringObject);
+	mono_add_internal_call("Godot.GodotObject::godot_icall_Object_CallNoArgs", (const void *)icall_Object_CallNoArgs);
+	mono_add_internal_call("Godot.GodotObject::godot_icall_Object_CallNoArgsObject", (const void *)icall_Object_CallNoArgsObject);
+	mono_add_internal_call("Godot.GodotObject::godot_icall_Object_GetFloat", (const void *)icall_Object_GetFloat);
+	mono_add_internal_call("Godot.GodotObject::godot_icall_Object_GetString", (const void *)icall_Object_GetString);
+	mono_add_internal_call("Godot.Engine::godot_icall_Engine_GetFramesPerSecond", (const void *)icall_Engine_GetFramesPerSecond);
+	mono_add_internal_call("Godot.OS::godot_icall_OS_GetStaticMemoryUsage", (const void *)icall_OS_GetStaticMemoryUsage);
+	mono_add_internal_call("Godot.Time::godot_icall_Time_GetTimeStringFromSystem", (const void *)icall_Time_GetTimeStringFromSystem);
 	MonoLogger::log("Mono interop icalls registered");
 }
 

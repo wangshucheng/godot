@@ -1,5 +1,11 @@
 #include "gd_mono.h"
 
+#ifdef WEB_ENABLED
+#include <emscripten.h>
+#include <cstdio>
+#include <cstring>
+#endif
+
 #include "core/config/project_settings.h"
 #include "core/io/dir_access.h"
 #include "core/io/file_access.h"
@@ -9,6 +15,48 @@
 #include "../mono_gd/interop/gd_mono_interop_variant.h"
 #include "../mono_gd/interop/gd_mono_callable.h"
 #include "../glue/mono_glue.h"
+#include <mono/mono-publib.h>
+#include <cstring>
+
+#define MONO_AOT_MODE_INTERP 5
+#define MONO_EE_MODE_INTERP 1000
+#define MONO_TABLE_TYPEDEF 2
+
+extern "C" {
+void mono_jit_set_aot_mode(int mode);
+const char *mono_check_corlib_version(void);
+MonoImage *mono_get_corlib(void);
+const char *mono_image_get_name(MonoImage *image);
+MonoImage *mono_image_open_full(const char *fname, MonoImageOpenStatus *status, mono_bool refonly);
+const char *mono_image_strerror(MonoImageOpenStatus status);
+void mono_image_close(MonoImage *image);
+void mono_trace_set_level_string(const char *value);
+void mono_trace_set_mask_string(const char *value);
+typedef void (*MonoLogCallback)(const char *log_domain, const char *log_level, const char *message, mono_bool fatal, void *user_data);
+typedef void (*MonoPrintCallback)(const char *string, mono_bool is_stdout);
+void mono_trace_set_log_handler(MonoLogCallback callback, void *user_data);
+void mono_trace_set_print_handler(MonoPrintCallback callback);
+void mono_trace_set_printerr_handler(MonoPrintCallback callback);
+const void *mono_image_get_table_info(MonoImage *image, int table_id);
+int mono_table_info_get_rows(const void *table);
+MonoClass *mono_class_get(MonoImage *image, uint32_t type_token);
+}
+
+#ifdef WEB_ENABLED
+static void web_mono_log_callback(const char *log_domain, const char *log_level, const char *message, mono_bool fatal, void *user_data) {
+	if (message) {
+		printf("[Mono-Trace] %s: %s\n", log_domain ? log_domain : "?", message);
+		fflush(stdout);
+	}
+}
+
+static void web_mono_print_callback(const char *string, mono_bool is_stdout) {
+	if (string) {
+		printf("%s", string);
+		fflush(stdout);
+	}
+}
+#endif
 
 static GDMono *singleton = nullptr;
 
@@ -79,38 +127,136 @@ bool GDMono::initialize() {
 
 	MonoLogger::log("Initializing Mono runtime (static linkage mode)...");
 
+#ifdef WEB_ENABLED
+	// In WebAssembly, get_executable_path() returns the module name (e.g. "godot.js"),
+	// not a real filesystem path. Use "/" as base directory since BCL and assemblies
+	// are embedded into MEMFS via Emscripten --preload-file at build time.
+	String exe_dir = "/";
+#else
 	String exe_dir = OS::get_singleton()->get_executable_path().get_base_dir();
+#endif
 
 	String mono_lib_dir = exe_dir.path_join("mono").path_join("lib");
 	String mono_etc_dir = exe_dir.path_join("mono").path_join("etc");
-	mono_set_dirs(mono_lib_dir.utf8().get_data(), mono_etc_dir.utf8().get_data());
+	String mono_bcl_dir = mono_lib_dir.path_join("mono").path_join("4.5");
+
+	CharString mono_lib_utf8 = mono_lib_dir.utf8();
+	CharString mono_etc_utf8 = mono_etc_dir.utf8();
+
+	MonoLogger::log(vformat("Mono lib dir (assembly_dir): %s", mono_lib_dir));
+	MonoLogger::log(vformat("Mono etc dir (config_dir): %s", mono_etc_dir));
+	MonoLogger::log(vformat("BCL candidate 1 (DISABLE_DESKTOP_LOADER): %s/mscorlib.dll", mono_lib_dir));
+	MonoLogger::log(vformat("BCL candidate 2 (desktop layout): %s/mscorlib.dll", mono_bcl_dir));
+
+	mono_set_dirs(mono_lib_utf8.get_data(), mono_etc_utf8.get_data());
+
+#ifdef WEB_ENABLED
+	MonoLogger::log("Installing Mono trace log handlers for diagnostics...");
+	mono_trace_set_level_string("debug");
+	mono_trace_set_mask_string("all");
+	// Also enable eglib log for ghashtable diagnostics
+	mono_trace_set_log_handler(web_mono_log_callback, nullptr);
+	mono_trace_set_print_handler(web_mono_print_callback);
+	mono_trace_set_printerr_handler(web_mono_print_callback);
+	MonoLogger::log("Mono trace log handlers installed");
+#endif
 
 	mono_config_parse(nullptr);
 
 	assemblies_path = exe_dir.path_join(".mono").path_join("assemblies");
+#ifdef WEB_ENABLED
+	DirAccess::make_dir_recursive_absolute(assemblies_path);
+#else
 	if (!DirAccess::exists(assemblies_path)) {
 		DirAccess::make_dir_recursive_absolute(assemblies_path);
 	}
+#endif
 
-	String mono_bcl_dir = mono_lib_dir.path_join("mono").path_join("4.5");
+#ifdef WEB_ENABLED
+	{
+		String test_paths[] = {
+			mono_lib_dir.path_join("mscorlib.dll"),
+			mono_bcl_dir.path_join("mscorlib.dll"),
+		};
+		for (const String &p : test_paths) {
+			FILE *f = fopen(p.utf8().get_data(), "rb");
+			if (f) {
+				fseek(f, 0, SEEK_END);
+				long sz = ftell(f);
+				fseek(f, 0, SEEK_SET);
+				char sig[4] = {0};
+				fread(sig, 1, 4, f);
+				fclose(f);
+				bool valid_mz = (sig[0] == 'M' && sig[1] == 'Z');
+				MonoLogger::log(vformat("BCL found: %s size=%d MZ=%s", p, (int)sz, valid_mz ? "yes" : "no"));
+			} else {
+				MonoLogger::log(vformat("BCL NOT FOUND: %s", p));
+			}
+		}
+	}
+#endif
 
 	const char *runtime_version = "v4.0.30319";
 
+#ifdef WEB_ENABLED
+	MonoLogger::log("Setting up interpreter mode (AOT_MODE_INTERP with arch trampoline fallback)...");
+	mono_jit_set_aot_mode(MONO_AOT_MODE_INTERP);
+#endif
+
+	MonoLogger::log(vformat("Calling mono_jit_init_version with runtime: %s", runtime_version));
+
+#ifdef WEB_ENABLED
+	printf("[Mono-Diag] BEFORE mono_jit_init_version call\n");
+	fflush(stdout);
+#endif
+
 	root_domain = mono_jit_init_version("GodotEngine", runtime_version);
+
+#ifdef WEB_ENABLED
+	printf("[Mono-Diag] AFTER mono_jit_init_version call, root_domain=%p\n", (void*)root_domain);
+	fflush(stdout);
+#endif
+
+	MonoLogger::log(vformat("mono_jit_init_version returned, root_domain=%s", root_domain ? "non-null" : "null"));
+
+#ifdef WEB_ENABLED
+	const char *corlib_version_err = mono_check_corlib_version();
+	if (corlib_version_err) {
+		MonoLogger::log_error(vformat("mono_check_corlib_version FAILED: %s", corlib_version_err));
+	} else {
+		MonoLogger::log("mono_check_corlib_version PASSED");
+	}
+
+	if (root_domain) {
+		MonoImage *corlib = mono_get_corlib();
+		if (corlib) {
+			const char *corlib_name = mono_image_get_name(corlib);
+			MonoLogger::log(vformat("corlib loaded successfully: %s", corlib_name ? corlib_name : "(null)"));
+		} else {
+			MonoLogger::log_error("mono_get_corlib() returned NULL - mscorlib invalid!");
+		}
+	}
+#endif
+
 	if (!root_domain) {
-		MonoLogger::log_warning(vformat("Mono JIT init reported issues (BCL not found at %s). Managed code execution will be unavailable until BCL assemblies are deployed.", mono_bcl_dir));
-		MonoLogger::log_warning("Place mscorlib.dll and BCL assemblies in: <exe_dir>/mono/lib/mono/4.5/");
+		MonoLogger::log_warning(vformat("Mono JIT init reported issues (BCL not found at %s or %s). Managed code execution will be unavailable until BCL assemblies are deployed.", mono_lib_dir, mono_bcl_dir));
+		MonoLogger::log_warning("Place mscorlib.dll and BCL assemblies in: <exe_dir>/mono/lib/ (for DISABLE_DESKTOP_LOADER) or <exe_dir>/mono/lib/mono/4.5/");
 	} else {
 		MonoLogger::log(vformat("Mono BCL path: %s", mono_bcl_dir));
 	}
 
 	if (root_domain) {
+#ifdef DISABLE_APPDOMAINS
+		scripts_domain = root_domain;
+		MonoLogger::log("Using root domain (multi-appdomain support disabled in WASM build)");
+#else
 		scripts_domain = mono_domain_create_appdomain(const_cast<char *>("GodotScripts"), nullptr);
 		if (!scripts_domain) {
 			MonoLogger::log_error("Failed to create scripts app domain");
 		} else {
 			mono_domain_set(scripts_domain, true);
 		}
+#endif
 	}
 
 	GDMonoInterop::variant_register_icalls();
@@ -226,8 +372,10 @@ void GDMono::cleanup() {
 	godotsharp_image = nullptr;
 
 	if (scripts_domain) {
+#ifndef DISABLE_APPDOMAINS
 		mono_domain_set(root_domain, true);
 		mono_domain_unload(scripts_domain);
+#endif
 		scripts_domain = nullptr;
 	}
 
@@ -259,9 +407,20 @@ bool GDMono::load_assembly(const String &p_path, bool p_is_proj_assembly) {
 	}
 
 	const char *name = mono_image_get_name(image);
-	MonoLogger::log(vformat("Loaded assembly: %s", name));
+	MonoLogger::log(vformat("Loaded assembly: %s (added to user_assemblies)", name));
+
+	// Add to user_assemblies so find_class can search it.
+	UserAssembly ua;
+	ua.assembly = assembly;
+	ua.image = image;
+	ua.name = p_path.get_file().get_basename();
+	user_assemblies.push_back(ua);
 
 	return true;
+}
+
+void GDMono::clear_user_assemblies() {
+	user_assemblies.clear();
 }
 
 MonoClass *GDMono::get_class(const String &p_namespace, const String &p_class_name) {
@@ -307,10 +466,63 @@ MonoClass *GDMono::find_class(const String &p_class_name) {
 
 	MonoClass *klass = nullptr;
 
-	const char *namespaces_to_try[] = { "", "Godot", "TestProject", nullptr };
+	// Try common namespaces first
+	const char *namespaces_to_try[] = { "", "Godot", nullptr };
 	for (int i = 0; namespaces_to_try[i] != nullptr; i++) {
 		klass = get_class(namespaces_to_try[i], p_class_name);
 		if (klass) return klass;
+	}
+
+	// Try project name as namespace (sanitized)
+	ProjectSettings *ps = ProjectSettings::get_singleton();
+	if (ps) {
+		String project_name = ps->get_setting("application/config/name", String());
+		if (!project_name.is_empty()) {
+			// Sanitize: remove non-alphanumeric, capitalize each word
+			String sanitized;
+			bool capitalize_next = true;
+			for (int i = 0; i < project_name.length(); i++) {
+				char32_t c = project_name[i];
+				if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+					if (capitalize_next && c >= 'a' && c <= 'z') {
+						sanitized += String::chr(c - 32);
+					} else {
+						sanitized += String::chr(c);
+					}
+					capitalize_next = false;
+				} else {
+					capitalize_next = true;
+				}
+			}
+			if (!sanitized.is_empty()) {
+				klass = get_class(sanitized, p_class_name);
+				if (klass) return klass;
+			}
+		}
+
+		// Try custom assembly name setting
+		String assembly_name = ps->get_setting("mono/project/assembly_name", String());
+		if (!assembly_name.is_empty()) {
+			klass = get_class(assembly_name, p_class_name);
+			if (klass) return klass;
+		}
+	}
+
+	// Last resort: search all user assemblies by iterating images
+	for (const UserAssembly &ua : user_assemblies) {
+		if (!ua.image) continue;
+		const void *table = mono_image_get_table_info(ua.image, MONO_TABLE_TYPEDEF);
+		if (!table) continue;
+		int rows = mono_table_info_get_rows(table);
+		for (int i = 0; i < rows; i++) {
+			MonoClass *cls = mono_class_get(ua.image, (i + 1) | (MONO_TABLE_TYPEDEF << 24));
+			if (cls) {
+				const char *name = mono_class_get_name(cls);
+				if (name && strcmp(name, p_class_name.utf8().get_data()) == 0) {
+					return cls;
+				}
+			}
+		}
 	}
 
 	return nullptr;

@@ -41,4 +41,8 @@ const GodotEmscripten = {
 	},
 };
 autoAddDeps(GodotEmscripten, '$GodotEmscripten');
-addToLibrary(GodotEmscripten);
+if (typeof addToLibrary === 'function') {
+	addToLibrary(GodotEmscripten);
+} else {
+	mergeInto(LibraryManager.library, GodotEmscripten);
+}

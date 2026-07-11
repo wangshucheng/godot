@@ -1,6 +1,7 @@
 #include "csharp_script.h"
 
 #include "gd_mono_class.h"
+#include "interop/gd_mono_interop_variant.h"
 #include "../mono_runtime/gd_mono.h"
 #include "../utils/mono_logger.h"
 #include "core/io/file_access.h"
@@ -110,10 +111,12 @@ bool CSharpScript::has_source_code() const {
 }
 
 String CSharpScript::get_source_code() const {
-	return "";
+	return source;
 }
 
 void CSharpScript::set_source_code(const String &p_code) {
+	source = p_code;
+	source_changed_cache = true;
 }
 
 Error CSharpScript::reload(bool p_keep_state) {
@@ -127,6 +130,7 @@ Error CSharpScript::reload(bool p_keep_state) {
 
 	valid = false;
 
+	// Derive class name from the script file name (e.g. "Player.cs" -> "Player")
 	String file = script_path.get_file();
 	class_name = file.get_basename();
 
@@ -134,12 +138,17 @@ Error CSharpScript::reload(bool p_keep_state) {
 
 	MonoClass *klass = GDMono::get_singleton()->find_class(class_name);
 	if (!klass) {
-		MonoLogger::log_error(vformat("Failed to find C# class: %s", class_name));
-		return ERR_FILE_CANT_OPEN;
+		// Class not yet compiled - this is normal for newly created scripts
+		MonoLogger::log(vformat("C# class not found (not yet compiled?): %s", class_name));
+		return OK; // Return OK so the script resource remains valid
 	}
 
-	if (mono_class) {
-		delete mono_class;
+	// Safe pattern: clear pointer before deleting so existing instances
+	// don't dereference a dangling pointer during destruction.
+	GDMonoClass *old_class = mono_class;
+	mono_class = nullptr;
+	if (old_class) {
+		delete old_class;
 	}
 
 	mono_class = new GDMonoClass(klass);
@@ -214,14 +223,40 @@ const Variant CSharpScript::get_rpc_config() const {
 }
 
 Error CSharpScript::load_source_code(const String &p_path) {
+	// Actually read the file contents into the source member so the editor
+	// and the script resource can display/save the source code.
+	Error err;
+	Ref<FileAccess> f = FileAccess::open(p_path, FileAccess::READ, &err);
+	if (err != OK || f.is_null()) {
+		MonoLogger::log_error(vformat("Failed to open C# script file: %s", p_path));
+		return err;
+	}
+
+	Vector<uint8_t> buffer;
+	int64_t len = f->get_length();
+	if (len > 0) {
+		buffer.resize(len);
+		f->get_buffer(buffer.ptrw(), len);
+		source = String::utf8((const char *)buffer.ptr(), len);
+	} else {
+		source = String();
+	}
+
 	script_path = p_path;
+	source_changed_cache = false;
+
 	return reload();
 }
 
-CSharpScript::CSharpScript() {
+CSharpScript::CSharpScript() : script_list(this) {
+	CSharpLanguage *lang = CSharpLanguage::get_singleton();
+	if (lang) {
+		lang->scripts_list.add(&script_list);
+	}
 }
 
 CSharpScript::~CSharpScript() {
+	script_list.remove_from_list();
 }
 
 bool CSharpInstance::set(const StringName &p_name, const Variant &p_value) {
@@ -269,7 +304,7 @@ Variant CSharpInstance::callp(const StringName &p_method, const Variant **p_args
 		return Variant();
 	}
 
-	MonoMethod *method = mono_class->get_method(p_method);
+	MonoMethod *method = mono_class->get_method(p_method, p_argcount);
 	if (!method) {
 		r_error.error = Callable::CallError::CALL_ERROR_INVALID_METHOD;
 		return Variant();
@@ -277,14 +312,43 @@ Variant CSharpInstance::callp(const StringName &p_method, const Variant **p_args
 
 	r_error.error = Callable::CallError::CALL_OK;
 
+	// Build params array for mono_runtime_invoke. Previously this passed
+	// nullptr, which crashed for any method that takes parameters.
+	void **params = nullptr;
+	MonoObject **boxed_params = nullptr;
+	if (p_argcount > 0) {
+		params = (void **)memalloc(sizeof(void *) * p_argcount);
+		boxed_params = (MonoObject **)memalloc(sizeof(MonoObject *) * p_argcount);
+		MonoDomain *domain = GDMono::get_singleton() ? GDMono::get_singleton()->get_scripts_domain() : nullptr;
+		for (int i = 0; i < p_argcount; i++) {
+			if (domain) {
+				boxed_params[i] = GDMonoInterop::variant_to_mono_object(domain, *p_args[i]);
+				params[i] = boxed_params[i];
+			} else {
+				params[i] = nullptr;
+			}
+		}
+	}
+
 	MonoObject *exc = nullptr;
-	MonoObject *result = mono_runtime_invoke(method, mono_object, nullptr, &exc);
+	MonoObject *result = mono_runtime_invoke(method, mono_object, params, &exc);
+
+	if (params) {
+		memfree(params);
+	}
+	if (boxed_params) {
+		memfree(boxed_params);
+	}
 
 	if (exc) {
 		r_error.error = Callable::CallError::CALL_ERROR_INVALID_METHOD;
+		MonoLogger::log_error("Exception in C# method call: " + String(p_method));
 		return Variant();
 	}
 
+	if (result) {
+		return GDMonoInterop::mono_object_to_variant(result);
+	}
 	return Variant();
 }
 
@@ -396,6 +460,97 @@ String CSharpLanguage::get_extension() const {
 void CSharpLanguage::finish() {
 }
 
+bool CSharpLanguage::is_using_templates() {
+	return true;
+}
+
+Ref<Script> CSharpLanguage::make_template(const String &p_template, const String &p_class_name, const String &p_base_class_name) const {
+	Ref<CSharpScript> scr;
+	scr.instantiate();
+
+	String processed = p_template;
+	String class_name = p_class_name.replace(" ", "_");
+	String base_name = p_base_class_name;
+
+	// Map common Godot types to their C# wrappers in GodotSharp.
+	// Unknown types fall back to GodotObject so the file still compiles.
+	static const char *known_types[] = {
+		"Node", "Node2D", "Node3D", "Resource", "GodotObject",
+		"Control", "Sprite2D", "Camera2D", "CharacterBody2D",
+		"RigidBody2D", "Area2D", "CanvasItem", "Window",
+		nullptr
+	};
+	bool base_known = false;
+	for (int i = 0; known_types[i]; i++) {
+		if (base_name == known_types[i]) {
+			base_known = true;
+			break;
+		}
+	}
+	if (!base_known) {
+		base_name = "GodotObject";
+	}
+
+	processed = processed.replace("_BASE_", base_name)
+						.replace("_CLASS_", class_name)
+						.replace("_TS_", "\t");
+
+	scr->set_source_code(processed);
+	return scr;
+}
+
+Vector<ScriptLanguage::ScriptTemplate> CSharpLanguage::get_built_in_templates(const StringName &p_object) {
+	Vector<ScriptTemplate> templates;
+	ScriptTemplate t;
+	t.inherit = String(p_object);
+	t.origin = TemplateLocation::TEMPLATE_BUILT_IN;
+
+	// Provide a Node-oriented template (most common case for C# scripts).
+	if (p_object == StringName("Node") ||
+		p_object == StringName("Node2D") ||
+		p_object == StringName("Node3D") ||
+		p_object == StringName("Control") ||
+		p_object == StringName("Window")) {
+		t.name = "Default";
+		t.description = "C# script with _Ready and _Process overrides";
+		t.content =
+				"using Godot;\n"
+				"using System;\n"
+				"\n"
+				"public partial class _CLASS_ : _BASE_\n"
+				"{\n"
+				"_TS_// Called when the node enters the scene tree for the first time.\n"
+				"_TS_public override void _Ready()\n"
+				"_TS_{\n"
+				"_TS_}\n"
+				"\n"
+				"_TS_// Called every frame. 'delta' is the elapsed time since the previous frame.\n"
+				"_TS_public override void _Process(double delta)\n"
+				"_TS_{\n"
+				"_TS_}\n"
+				"}\n";
+		templates.append(t);
+	} else {
+		// Generic fallback template
+		t.name = "Default";
+		t.description = "C# script template";
+		t.content =
+				"using Godot;\n"
+				"using System;\n"
+				"\n"
+				"public partial class _CLASS_ : _BASE_\n"
+				"{\n"
+				"_TS_// Called when the node enters the scene tree for the first time.\n"
+				"_TS_public override void _Ready()\n"
+				"_TS_{\n"
+				"_TS_}\n"
+				"}\n";
+		templates.append(t);
+	}
+
+	return templates;
+}
+
 Vector<String> CSharpLanguage::get_reserved_words() const {
 	static const char *_reserved[] = {
 		"abstract", "as", "base", "bool", "break", "byte", "case", "catch",
@@ -460,7 +615,16 @@ int CSharpLanguage::find_function(const String &p_function, const String &p_code
 }
 
 String CSharpLanguage::make_function(const String &p_class, const String &p_name, const PackedStringArray &p_args) const {
-	return "";
+	// C# doesn't use class name for method generation, but Godot passes it
+	String s = "public override void " + p_name + "(";
+	for (int i = 0; i < p_args.size(); i++) {
+		String arg = p_args[i];
+		if (i > 0) s += ", ";
+		// Godot passes args as "type name" - keep as-is for C#
+		s += arg;
+	}
+	s += ") {\n    \n}\n";
+	return s;
 }
 
 void CSharpLanguage::auto_indent_code(String &p_code, int p_from_line, int p_to_line) const {
@@ -503,9 +667,26 @@ String CSharpLanguage::debug_parse_stack_level_expression(int p_level, const Str
 }
 
 void CSharpLanguage::reload_all_scripts() {
+	// Iterate over all known CSharpScript instances and reload them so they
+	// pick up newly compiled classes from the freshly loaded assembly.
+	SelfList<CSharpScript> *elem = scripts_list.first();
+	while (elem) {
+		CSharpScript *script = elem->self();
+		if (script && !script->script_path.is_empty()) {
+			MonoLogger::log(vformat("Reloading C# script: %s", script->script_path));
+			script->reload();
+		}
+		elem = elem->next();
+	}
 }
 
 void CSharpLanguage::reload_scripts(const Array &p_scripts, bool p_soft_reload) {
+	for (int i = 0; i < p_scripts.size(); i++) {
+		Ref<CSharpScript> script = p_scripts[i];
+		if (script.is_valid() && !script->script_path.is_empty()) {
+			script->reload(!p_soft_reload);
+		}
+	}
 }
 
 void CSharpLanguage::reload_tool_script(const Ref<Script> &p_script, bool p_soft_reload) {
@@ -548,6 +729,10 @@ void CSharpLanguage::frame() {
 	}
 }
 
+ScriptLanguage::ScriptNameCasing CSharpLanguage::preferred_file_name_casing() const {
+	return SCRIPT_NAME_CASING_PASCAL_CASE;
+}
+
 CSharpLanguage::CSharpLanguage() {
 	singleton = this;
 }
@@ -556,4 +741,43 @@ CSharpLanguage::~CSharpLanguage() {
 	if (singleton == this) {
 		singleton = nullptr;
 	}
+}
+
+Error ResourceFormatSaverCSharpScript::save(const Ref<Resource> &p_resource, const String &p_path, uint32_t p_flags) {
+	Ref<CSharpScript> script = p_resource;
+	ERR_FAIL_COND_V(script.is_null(), ERR_INVALID_PARAMETER);
+
+	String source = script->get_source_code();
+	Error err;
+	Ref<FileAccess> f = FileAccess::open(p_path, FileAccess::WRITE, &err);
+	ERR_FAIL_COND_V_MSG(err != OK, err, "Cannot save C# script: " + p_path);
+
+	f->store_string(source);
+	if (source.size() > 0 && source[source.size() - 1] != '\n') {
+		f->store_8('\n'); // Ensure file ends with newline
+	}
+	f->close();
+
+#ifdef TOOLS_ENABLED
+	// Notify the editor integration so it can ensure the .csproj exists
+	// and trigger compilation of the C# project.
+	{
+		extern void csharp_editor_on_script_saved(const String &p_path);
+		csharp_editor_on_script_saved(p_path);
+	}
+#endif
+
+	return OK;
+}
+
+void ResourceFormatSaverCSharpScript::get_recognized_extensions(const Ref<Resource> &p_resource, List<String> *p_extensions) const {
+	Ref<CSharpScript> script = p_resource;
+	if (script.is_valid()) {
+		p_extensions->push_back("cs");
+	}
+}
+
+bool ResourceFormatSaverCSharpScript::recognize(const Ref<Resource> &p_resource) const {
+	Ref<CSharpScript> script = p_resource;
+	return script.is_valid();
 }

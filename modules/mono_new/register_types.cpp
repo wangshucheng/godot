@@ -4,6 +4,7 @@
 #include "mono_runtime/gd_mono.h"
 #include "utils/mono_logger.h"
 #include "core/io/resource_loader.h"
+#include "core/io/resource_saver.h"
 
 #ifdef TOOLS_ENABLED
 #include "editor/csharp_editor.h"
@@ -12,6 +13,7 @@
 static GDMono *_godot_mono = nullptr;
 static CSharpLanguage *_csharp_language = nullptr;
 static Ref<ResourceFormatLoaderCSharpScript> resource_loader_csharp;
+static Ref<ResourceFormatSaverCSharpScript> resource_saver_csharp;
 
 void initialize_mono_new_module(ModuleInitializationLevel p_level) {
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SCENE) {
@@ -30,6 +32,9 @@ void initialize_mono_new_module(ModuleInitializationLevel p_level) {
 		resource_loader_csharp.instantiate();
 		ResourceLoader::add_resource_format_loader(resource_loader_csharp);
 
+		resource_saver_csharp.instantiate();
+		ResourceSaver::add_resource_format_saver(resource_saver_csharp);
+
 		ScriptServer::register_language(_csharp_language);
 
 		MonoLogger::log("Mono module initialized successfully (static linking)");
@@ -38,12 +43,18 @@ void initialize_mono_new_module(ModuleInitializationLevel p_level) {
 #ifdef TOOLS_ENABLED
 	if (p_level == MODULE_INITIALIZATION_LEVEL_EDITOR) {
 		initialize_csharp_editor();
+		register_csharp_export_plugin();
 	}
 #endif
 }
 
 void uninitialize_mono_new_module(ModuleInitializationLevel p_level) {
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SCENE) {
+		if (resource_saver_csharp.is_valid()) {
+			ResourceSaver::remove_resource_format_saver(resource_saver_csharp);
+			resource_saver_csharp.unref();
+		}
+
 		if (resource_loader_csharp.is_valid()) {
 			ResourceLoader::remove_resource_format_loader(resource_loader_csharp);
 			resource_loader_csharp.unref();
@@ -64,6 +75,7 @@ void uninitialize_mono_new_module(ModuleInitializationLevel p_level) {
 
 #ifdef TOOLS_ENABLED
 	if (p_level == MODULE_INITIALIZATION_LEVEL_EDITOR) {
+		unregister_csharp_export_plugin();
 		uninitialize_csharp_editor();
 	}
 #endif

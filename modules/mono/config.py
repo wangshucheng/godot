@@ -1,4 +1,6 @@
 def can_build(env, platform):
+    if platform == "web":
+        return False
     if env.editor_build:
         env.module_add_dependencies("mono", ["regex"])
 

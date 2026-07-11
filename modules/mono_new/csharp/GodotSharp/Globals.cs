@@ -158,13 +158,40 @@ namespace Godot
         }
     }
 
-    public static class Engine
-    {
-        public static bool IsEditorHint() => false;
-    }
+	public static class Engine
+	{
+		public static bool IsEditorHint() => false;
 
-    public static class OS
-    {
-        public static string GetName() => "Windows";
-    }
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static int godot_icall_Engine_GetFramesPerSecond();
+
+		public static int GetFramesPerSecond()
+		{
+			return godot_icall_Engine_GetFramesPerSecond();
+		}
+	}
+
+	public static class OS
+	{
+		public static string GetName() => "Windows";
+
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static long godot_icall_OS_GetStaticMemoryUsage();
+
+		public static long GetStaticMemoryUsage()
+		{
+			return godot_icall_OS_GetStaticMemoryUsage();
+		}
+	}
+
+	public static class Time
+	{
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static string godot_icall_Time_GetTimeStringFromSystem();
+
+		public static string GetTimeStringFromSystem()
+		{
+			return godot_icall_Time_GetTimeStringFromSystem();
+		}
+	}
 }

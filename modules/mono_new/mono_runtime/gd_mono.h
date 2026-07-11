@@ -53,6 +53,7 @@ public:
 	void cleanup();
 
 	bool load_assembly(const String &p_path, bool p_is_proj_assembly = false);
+	void clear_user_assemblies();
 	MonoClass *get_class(const String &p_namespace, const String &p_class_name);
 	MonoClass *find_class(const String &p_class_name);
 	MonoMethod *get_method(MonoClass *p_class, const String &p_name, int p_param_count = 0);

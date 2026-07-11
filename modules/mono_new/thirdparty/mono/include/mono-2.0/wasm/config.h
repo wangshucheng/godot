@@ -14,7 +14,7 @@
 /* #undef DEFAULT_GC_NAME */
 
 /* String of disabled features */
-#define DISABLED_FEATURES "ssa,com,jit,reflection_emit,save_verifier,generic_sharing,simd,ssa_backend,full_messages,logging,remoting,perf_counters,attach,dbghelp,sgen_marksweep_conc,sgen_split_nursery,sgen_gc_bridge,sgen_debug_helpers,security,appdomains,verifier,assembly_remapping,shared_perfcounters,cleanup,mdb,gac,interpreter"
+#define DISABLED_FEATURES "ssa,com,jit,reflection_emit,save_verifier,generic_sharing,simd,ssa_backend,full_messages,logging,remoting,perf_counters,attach,dbghelp,sgen_marksweep_conc,sgen_split_nursery,sgen_gc_bridge,sgen_debug_helpers,security,appdomains,verifier,assembly_remapping,shared_perfcounters,cleanup,mdb,gac"
 
 /* Disable AOT Compiler */
 /* #undef DISABLE_AOT */
@@ -65,7 +65,7 @@
 #define DISABLE_ICALL_TABLES 1
 
 /* Disable the interpreter. */
-#define DISABLE_INTERPRETER 1
+/* #undef DISABLE_INTERPRETER */
 
 /* Disable the JIT, only full-aot mode or interpreter will be supported by the
    runtime. */

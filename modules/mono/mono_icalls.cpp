@@ -1,4 +1,5 @@
 #include "mono_icalls.h"
+#include "mono_host.h"
 #include "mono_variant.h"
 #include "mono_bridge.h"
 #include "mono_gc_bridge.h"
@@ -63,6 +64,16 @@ static bool godot_icall_Object_IsInstanceValid(intptr_t native_ptr) {
 static void godot_icall_Object_Free(intptr_t native_ptr) {
 	if (native_ptr == 0) return;
 	Object *obj = (Object *)native_ptr;
+
+	// RefCounted: use release_refcounted_binding (unreference + possible memdelete)
+	if (mono_gc_bridge::is_refcounted_binding(obj)) {
+		RefCounted *rc = Object::cast_to<RefCounted>(obj);
+		if (rc) {
+			mono_gc_bridge::release_refcounted_binding(rc);
+			return;
+		}
+	}
+
 	if (obj->is_class("Node")) {
 		Node *node = Object::cast_to<Node>(obj);
 		if (node && node->is_inside_tree()) {
@@ -78,6 +89,15 @@ static void godot_icall_Object_Free(intptr_t native_ptr) {
 	}
 	mono_gc_bridge::notify_native_destroyed(obj);
 	memdelete(obj);
+}
+
+// C# RefCounted.Dispose() calls this to release the C# held reference
+static void godot_icall_RefCounted_ReleaseRef(intptr_t native_ptr) {
+	if (native_ptr == 0) return;
+	Object *obj = (Object *)native_ptr;
+	RefCounted *rc = Object::cast_to<RefCounted>(obj);
+	if (!rc) return;
+	mono_gc_bridge::release_refcounted_binding(rc);
 }
 
 static MonoObject *godot_icall_Object_Get(intptr_t native_ptr, MonoString *p_name) {
@@ -1504,10 +1524,20 @@ static int32_t godot_icall_Test_GetClassCategory(MonoString *className) {
 	return 0;
 }
 
+// Register the GodotSynchronizationContext singleton for instance-based
+// pumping. Called from C# Runtime.Initialize() after Install().
+static void godot_icall_RegisterSyncContext(MonoObject *instance) {
+	MonoHost *host = MonoHost::get_singleton();
+	if (host) {
+		host->register_sync_context(instance);
+	}
+}
+
 void godot_register_icalls() {
 	// All internalcalls are declared in Godot.Bridge (matching our compiled GodotSharp.dll)
 	mono_add_internal_call("Godot.Bridge::godot_icall_GD_Print", (const void *)godot_icall_GD_Print);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Object_Free", (const void *)godot_icall_Object_Free);
+	mono_add_internal_call("Godot.Bridge::godot_icall_RefCounted_ReleaseRef", (const void *)godot_icall_RefCounted_ReleaseRef);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Object_Get", (const void *)godot_icall_Object_Get);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Object_Set", (const void *)godot_icall_Object_Set);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Object_Call", (const void *)godot_icall_Object_Call);
@@ -1620,6 +1650,9 @@ void godot_register_icalls() {
 	mono_add_internal_call("Godot.Bridge::godot_icall_Test_GetPassCount", (const void *)godot_icall_Test_GetPassCount);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Test_GetFailCount", (const void *)godot_icall_Test_GetFailCount);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Test_ResetCounters", (const void *)godot_icall_Test_ResetCounters);
+
+	// Sync context registration (C# -> C++ to register singleton for instance-based pumping)
+	mono_add_internal_call("Godot.Bridge::godot_icall_RegisterSyncContext", (const void *)godot_icall_RegisterSyncContext);
 
 	printf("[Mono] Registered all internal calls (Godot.Bridge::*).\n");
 	fflush(stdout);

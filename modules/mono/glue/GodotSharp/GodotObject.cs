@@ -15,7 +15,7 @@ namespace Godot {
     public class Object : IDisposable {
         internal IntPtr NativePtr;
         internal uint _bridgeGCHandle;
-        private bool disposed = false;
+        protected bool disposed = false;
         private bool _isNativeWrapper;
         // Use ArrayList instead of Dictionary<(string,Delegate),Callable> to avoid
         // complex generic type resolution issues in Mono WASM interpreter mode.

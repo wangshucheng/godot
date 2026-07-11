@@ -24,6 +24,12 @@ public:
 
 	void pump_sync_context();
 
+	// Called from C# via icall when GodotSynchronizationContext is installed.
+	// This registers the instance so pump_sync_context() can invoke
+	// PumpInstance() as an instance method (avoiding static method dispatch
+	// which triggers WASM interpreter signature mismatch).
+	void register_sync_context(MonoObject *p_instance);
+
 	static MonoHost *get_singleton() { return singleton; }
 
 	MonoDomain *get_domain() const { return domain; }
@@ -34,7 +40,11 @@ private:
 	MonoDomain *domain = nullptr;
 	MonoAssembly *corlib_assembly = nullptr;
 	MonoAssembly *godotsharp_assembly = nullptr;
-	MonoMethod *sync_context_pump_method = nullptr;
+	// Instance-based sync context pumping: avoids mono_runtime_invoke on
+	// static methods, which triggers signature mismatch in WASM interpreter.
+	MonoMethod *sync_context_pump_method = nullptr; // PumpInstance (instance method)
+	MonoObject *sync_context_instance = nullptr;     // GodotSynchronizationContext._instance
+	bool sync_context_lazy_attempted = false;         // Avoid repeated lazy cache attempts
 
 	static MonoHost *singleton;
 

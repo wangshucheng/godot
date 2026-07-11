@@ -25,6 +25,7 @@ MonoClass *get_godot_resource_class();
 MonoClass *get_godot_packed_scene_class();
 MonoClass *get_godot_input_event_class();
 MonoClass *get_godot_scene_tree_class();
+MonoClass *get_godot_refcounted_class();
 MonoClass *get_mono_class_for_object(Object *p_obj);
 
 void cache_godot_classes(MonoImage *p_godot_image);

@@ -594,6 +594,7 @@ bool MonoHost::load_assembly_and_run(const String &p_assembly_path) {
 
 void MonoHost::cache_sync_context_method() {
 	sync_context_pump_method = nullptr;
+	sync_context_instance = nullptr;
 
 	if (!godotsharp_assembly) {
 		return;
@@ -609,36 +610,85 @@ void MonoHost::cache_sync_context_method() {
 		return;
 	}
 
-	sync_context_pump_method = mono_class_get_method_from_name(sync_ctx_class, "Pump", 0);
+	// Read the static _instance field using mono_field_static_get_value
+	// (NOT mono_field_get_value with NULL obj, which asserts in Mono 6.12).
+	// This is the lazy fallback path; the primary registration is via the
+	// godot_icall_RegisterSyncContext icall from Runtime.Initialize().
+	MonoClassField *instance_field = mono_class_get_field_from_name(sync_ctx_class, "_instance");
+	if (!instance_field) {
+		printf("[Mono] GodotSynchronizationContext._instance field not found.\n");
+		fflush(stdout);
+		return;
+	}
+
+	MonoVTable *vtable = mono_class_vtable(mono_domain_get(), sync_ctx_class);
+	if (!vtable) {
+		printf("[Mono] GodotSynchronizationContext vtable could not be created.\n");
+		fflush(stdout);
+		return;
+	}
+
+	MonoObject *instance = nullptr;
+	mono_field_static_get_value(vtable, instance_field, &instance);
+	if (!instance) {
+		printf("[Mono] GodotSynchronizationContext._instance is null (Install() not called yet).\n");
+		fflush(stdout);
+		return;
+	}
+
+	// Cache the instance method and the instance object.
+	sync_context_pump_method = mono_class_get_method_from_name(sync_ctx_class, "PumpInstance", 0);
 	if (sync_context_pump_method) {
-		printf("[Mono] GodotSynchronizationContext.Pump() cached for main thread pumping.\n");
+		sync_context_instance = instance;
+		printf("[Mono] GodotSynchronizationContext.PumpInstance() cached for main thread pumping.\n");
 		fflush(stdout);
 	}
 }
 
-void MonoHost::pump_sync_context() {
-	if (!sync_context_pump_method) return;
+void MonoHost::register_sync_context(MonoObject *p_instance) {
+	if (!p_instance) return;
 
-#ifdef WEB_ENABLED
-	// Disabled on Web: mono_runtime_invoke on static methods triggers
-	// "RuntimeError: function signature mismatch" in WASM interpreter mode.
-	// Async/await continuations are not needed for basic C# scripts.
-	return;
-#endif
+	MonoClass *cls = mono_object_get_class(p_instance);
+	if (!cls) return;
 
-	printf("[Mono] pump_sync_context: invoking Pump...\n");
+	MonoMethod *pump_method = mono_class_get_method_from_name(cls, "PumpInstance", 0);
+	if (!pump_method) {
+		printf("[Mono] PumpInstance method not found on sync context class.\n");
+		fflush(stdout);
+		return;
+	}
+
+	sync_context_instance = p_instance;
+	sync_context_pump_method = pump_method;
+	printf("[Mono] Sync context registered for instance-based pumping.\n");
 	fflush(stdout);
+}
 
+void MonoHost::pump_sync_context() {
+	// Lazy cache fallback: if the icall registration hasn't happened yet
+	// (e.g., Runtime.Initialize() not called), try reading the static field
+	// once. The icall path (register_sync_context) is the primary mechanism.
+	if (!sync_context_pump_method || !sync_context_instance) {
+		if (!sync_context_lazy_attempted) {
+			sync_context_lazy_attempted = true;
+			cache_sync_context_method();
+		}
+		if (!sync_context_pump_method || !sync_context_instance) {
+			return;
+		}
+	}
+
+	// Invoke the instance method PumpInstance() on the singleton.
+	// Instance method dispatch works in the WASM interpreter; only static
+	// method dispatch via mono_runtime_invoke triggers signature mismatch.
 	MonoObject *exc = nullptr;
-	mono_runtime_invoke(sync_context_pump_method, nullptr, nullptr, &exc);
+	mono_runtime_invoke(sync_context_pump_method, sync_context_instance, nullptr, &exc);
 	if (exc) {
 		MonoClass *exc_class = mono_object_get_class(exc);
 		const char *exc_name = exc_class ? mono_class_get_name(exc_class) : "(unknown)";
-		printf("[Mono] Exception in SyncContext.Pump(): %s\n", exc_name ? exc_name : "(unknown)");
+		printf("[Mono] Exception in SyncContext.PumpInstance(): %s\n", exc_name ? exc_name : "(unknown)");
+		fflush(stdout);
 	}
-
-	printf("[Mono] pump_sync_context: done.\n");
-	fflush(stdout);
 }
 
 void MonoHost::shutdown() {
@@ -654,6 +704,8 @@ void MonoHost::shutdown() {
 	mono_aot_shutdown();
 
 	sync_context_pump_method = nullptr;
+	sync_context_instance = nullptr;
+	sync_context_lazy_attempted = false;
 
 	if (domain) {
 		mono_jit_cleanup(domain);

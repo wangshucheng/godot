@@ -55,5 +55,13 @@ namespace Godot {
         public static void Pump() {
             _instance?.ProcessPending();
         }
+
+        // Instance-method wrapper for Pump(). Used by C++ to avoid calling
+        // static methods via mono_runtime_invoke, which triggers signature
+        // mismatch in the WASM interpreter. C++ reads the static _instance
+        // field (a safe memory read) then invokes this instance method.
+        public void PumpInstance() {
+            ProcessPending();
+        }
     }
 }

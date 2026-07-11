@@ -43,10 +43,28 @@ if env["platform"] == "windows":
     env_mono.Prepend(LIBPATH=[mono_lib_path])
 
     if env.msvc:
+        # Use the static Mono library to produce a DLL-less executable.
+        # libmono-static-sgen.lib (~29MB) contains the full Mono SGen runtime;
+        # mono-2.0-sgen.lib (~274KB) is only an import library for the DLL.
+        #
+        # The Mono static lib was compiled with /MD (dynamic CRT) and uses
+        # __declspec(dllimport) for CRT functions, producing __imp_ prefixed
+        # symbol references. mono_static_compat.c embeds /ALTERNATENAME
+        # linker directives via #pragma comment(linker, ...) to redirect
+        # these to statically-linked CRT functions.
         env.Append(LINKFLAGS=[
-            "mono-2.0-sgen.lib",
+            "libmono-static-sgen.lib",
             "MonoPosixHelper.lib",
+            "ws2_32.lib",
+            "psapi.lib",
+            "version.lib",
+            "winmm.lib",
+            "bcrypt.lib",
+            "ole32.lib",
+            "oldnames.lib",
         ])
+        # Add the static-compat shim (provides __imp_ → CRT name redirects)
+        mono_sources.append("mono_static_compat.c")
     else:
         env.Append(LIBS=[
             "mono-2.0-sgen",

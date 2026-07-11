@@ -11,6 +11,9 @@ namespace Godot {
         internal static extern void godot_icall_Object_Free(IntPtr nativePtr);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_RefCounted_ReleaseRef(IntPtr nativePtr);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern object godot_icall_Object_Get(IntPtr nativePtr, string name);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
@@ -315,5 +318,11 @@ namespace Godot {
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern void godot_icall_Test_ResetCounters();
+
+        // Register the GodotSynchronizationContext singleton for instance-based
+        // pumping. Called from Runtime.Initialize() to avoid static method
+        // dispatch via mono_runtime_invoke (WASM interpreter signature mismatch).
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_RegisterSyncContext(object instance);
     }
 }

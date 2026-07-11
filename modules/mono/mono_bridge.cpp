@@ -22,6 +22,7 @@ static MonoClass *godot_resource_class = nullptr;
 static MonoClass *godot_packed_scene_class = nullptr;
 static MonoClass *godot_input_event_class = nullptr;
 static MonoClass *godot_scene_tree_class = nullptr;
+static MonoClass *godot_refcounted_class = nullptr;
 static MonoClass *system_intptr_class = nullptr;
 
 void init(MonoDomain *p_domain) {
@@ -42,6 +43,7 @@ void shutdown() {
 	godot_packed_scene_class = nullptr;
 	godot_input_event_class = nullptr;
 	godot_scene_tree_class = nullptr;
+	godot_refcounted_class = nullptr;
 	system_intptr_class = nullptr;
 	printf("[Mono] Bridge shut down.\n");
 	fflush(stdout);
@@ -79,7 +81,13 @@ static void set_native_ptr_field(MonoObject *p_cs_obj, intptr_t p_ptr_val) {
 void tie_native_ptr(MonoObject *p_cs_obj, Object *p_obj) {
 	if (!p_cs_obj || !p_obj) return;
 
-	mono_gc_bridge::tie_managed_to_native(p_cs_obj, p_obj, true);
+	// Use RefCounted-specific binding for RefCounted objects (strong GCHandle + reference())
+	RefCounted *rc = Object::cast_to<RefCounted>(p_obj);
+	if (rc) {
+		mono_gc_bridge::tie_managed_to_refcounted(p_cs_obj, rc);
+	} else {
+		mono_gc_bridge::tie_managed_to_native(p_cs_obj, p_obj, true);
+	}
 	set_native_ptr_field(p_cs_obj, (intptr_t)p_obj);
 }
 
@@ -95,8 +103,20 @@ MonoObject *managed_get_or_create(Object *p_obj, MonoClass *p_class) {
 		return mono_value_box(domain, system_intptr_class, &ptr_val);
 	}
 
+	// For RefCounted: add C# reference BEFORE constructor (which calls tie_native_ptr)
+	// The caller's Ref<T> keeps the object alive during this function.
+	// After this function returns, caller's Ref<T> destructs, but C# reference keeps it alive.
+	RefCounted *rc = Object::cast_to<RefCounted>(p_obj);
+	if (rc) {
+		rc->reference(); // C# reference
+	}
+
 	MonoObject *cs_obj = mono_object_new(domain, p_class);
-	if (!cs_obj) return nullptr;
+	if (!cs_obj) {
+		// Failed to create C# object, undo the reference
+		if (rc) rc->unreference();
+		return nullptr;
+	}
 
 	void *args[1];
 	intptr_t ptr_val = (intptr_t)p_obj;
@@ -143,6 +163,7 @@ MonoClass *get_godot_resource_class() { return godot_resource_class; }
 MonoClass *get_godot_packed_scene_class() { return godot_packed_scene_class; }
 MonoClass *get_godot_input_event_class() { return godot_input_event_class; }
 MonoClass *get_godot_scene_tree_class() { return godot_scene_tree_class; }
+MonoClass *get_godot_refcounted_class() { return godot_refcounted_class; }
 
 MonoClass *get_mono_class_for_object(Object *p_obj) {
 	if (!p_obj) return nullptr;
@@ -151,6 +172,7 @@ MonoClass *get_mono_class_for_object(Object *p_obj) {
 	if (godot_input_event_class && p_obj->is_class("InputEvent")) return godot_input_event_class;
 	if (godot_resource_class && p_obj->is_class("Resource")) return godot_resource_class;
 	if (godot_node_class && p_obj->is_class("Node")) return godot_node_class;
+	if (godot_refcounted_class && p_obj->is_class("RefCounted")) return godot_refcounted_class;
 	return godot_object_class;
 }
 
@@ -170,6 +192,7 @@ void cache_godot_classes(MonoImage *p_godot_image) {
 	godot_packed_scene_class = mono_class_from_name(p_godot_image, "Godot", "PackedScene");
 	godot_input_event_class = mono_class_from_name(p_godot_image, "Godot", "InputEvent");
 	godot_scene_tree_class = mono_class_from_name(p_godot_image, "Godot", "SceneTree");
+	godot_refcounted_class = mono_class_from_name(p_godot_image, "Godot", "RefCounted");
 
 	printf("[Mono] Class lookup: Object=%p Node=%p Resource=%p PackedScene=%p InputEvent=%p SceneTree=%p\n",
 		godot_object_class, godot_node_class, godot_resource_class,

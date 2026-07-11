@@ -12,6 +12,13 @@ namespace Godot {
 
             Platform.Initialize();
             GodotSynchronizationContext.Install();
+            // Register the sync context instance with C++ so it can call
+            // PumpInstance() as an instance method. This avoids the static
+            // method dispatch via mono_runtime_invoke that triggers WASM
+            // interpreter signature mismatch.
+            if (GodotSynchronizationContext.Instance != null) {
+                Bridge.godot_icall_RegisterSyncContext(GodotSynchronizationContext.Instance);
+            }
         }
 
         public static bool IsInitialized => _initialized;

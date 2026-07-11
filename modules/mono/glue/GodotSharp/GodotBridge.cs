@@ -171,5 +171,149 @@ namespace Godot {
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern void godot_icall_DebugUi_AddLineInt(string prefix, int value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_DebugUi_AddPassFail(string testName, int passed);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_DebugUi_AddSeparator();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_DebugUi_GetLineCount();
+
+        // Test support icalls - global pointer model (WASM-safe)
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_Create(string className);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Test_AddToScene();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_AddChild(string className);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_GetChildCount();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Test_SetName(string name);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Test_SetIntProp(string prop, int value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_GetIntProp(string prop);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Test_SetStringProp(string prop, string value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Test_CallVoidNoArgs(string method);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_CallIntNoArgs(string method);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_CallBoolNoArgs(string method);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Test_Free();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_IsValid();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_LoadScene(string path);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_InstantiateScene();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_GetSceneChildCount();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Test_FreeScene();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_IsWebPlatform();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_ConnectSignal(string signal);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_EmitSignal(string signal);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_GetSignalCount();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_GetClassCategory(string className);
+
+        // Extended test icalls for comprehensive scenario testing
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_GetNameLen();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_RemoveChildIdx(int idx);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_HasMethod(string method);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_FileWrite(string path, string content);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_FileRead(string path);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_FileExists(string path);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_FileDelete(string path);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_Raycast3D();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_SetAudioVolume(int volume_db_x10);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_GetAudioVolume();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_AddAnimation(string animName);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_PlayAnimation(string animName);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_GetAnimationCount();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_IsAnimationPlaying(string animName);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_BclListTest();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_BclDictTest();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_BclAsyncTest();
+
+        // Assertion framework icalls (WASM-safe: all string/int ops in C++)
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Test_Assert(string name, int condition);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Test_FinishTest(string testName);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_GetPassCount();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_GetFailCount();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Test_ResetCounters();
     }
 }

@@ -82,5 +82,157 @@ namespace Godot {
         public static void DebugUiAddLineInt(string prefix, int value) {
             Bridge.godot_icall_DebugUi_AddLineInt(prefix, value);
         }
+        public static void DebugUiAddPassFail(string testName, bool passed) {
+            Bridge.godot_icall_DebugUi_AddPassFail(testName, passed ? 1 : 0);
+        }
+        public static void DebugUiAddSeparator() {
+            Bridge.godot_icall_DebugUi_AddSeparator();
+        }
+        public static int DebugUiGetLineCount() {
+            return Bridge.godot_icall_DebugUi_GetLineCount();
+        }
+
+        // =============================================
+        // Test support helpers: global pointer model (WASM-safe).
+        // All operations use string/int only - no IntPtr.
+        // =============================================
+
+        public static int TestCreate(string className) {
+            return Bridge.godot_icall_Test_Create(className);
+        }
+        public static void TestAddToScene() {
+            Bridge.godot_icall_Test_AddToScene();
+        }
+        public static int TestAddChild(string className) {
+            return Bridge.godot_icall_Test_AddChild(className);
+        }
+        public static int TestGetChildCount() {
+            return Bridge.godot_icall_Test_GetChildCount();
+        }
+        public static void TestSetName(string name) {
+            Bridge.godot_icall_Test_SetName(name);
+        }
+        public static void TestSetIntProp(string prop, int value) {
+            Bridge.godot_icall_Test_SetIntProp(prop, value);
+        }
+        public static int TestGetIntProp(string prop) {
+            return Bridge.godot_icall_Test_GetIntProp(prop);
+        }
+        public static void TestSetStringProp(string prop, string value) {
+            Bridge.godot_icall_Test_SetStringProp(prop, value);
+        }
+        public static void TestCallVoid(string method) {
+            Bridge.godot_icall_Test_CallVoidNoArgs(method);
+        }
+        public static int TestCallInt(string method) {
+            return Bridge.godot_icall_Test_CallIntNoArgs(method);
+        }
+        public static int TestCallBool(string method) {
+            return Bridge.godot_icall_Test_CallBoolNoArgs(method);
+        }
+        public static void TestFree() {
+            Bridge.godot_icall_Test_Free();
+        }
+        public static int TestIsValid() {
+            return Bridge.godot_icall_Test_IsValid();
+        }
+        public static int TestLoadScene(string path) {
+            return Bridge.godot_icall_Test_LoadScene(path);
+        }
+        public static int TestInstantiateScene() {
+            return Bridge.godot_icall_Test_InstantiateScene();
+        }
+        public static int TestGetSceneChildCount() {
+            return Bridge.godot_icall_Test_GetSceneChildCount();
+        }
+        public static void TestFreeScene() {
+            Bridge.godot_icall_Test_FreeScene();
+        }
+        public static int TestIsWebPlatform() {
+            return Bridge.godot_icall_Test_IsWebPlatform();
+        }
+        public static int TestConnectSignal(string signal) {
+            return Bridge.godot_icall_Test_ConnectSignal(signal);
+        }
+        public static int TestEmitSignal(string signal) {
+            return Bridge.godot_icall_Test_EmitSignal(signal);
+        }
+        public static int TestGetSignalCount() {
+            return Bridge.godot_icall_Test_GetSignalCount();
+        }
+        public static int TestGetClassCategory(string className) {
+            return Bridge.godot_icall_Test_GetClassCategory(className);
+        }
+
+        // =============================================
+        // Extended test helpers for comprehensive scenarios
+        // =============================================
+
+        public static int TestGetNameLen() {
+            return Bridge.godot_icall_Test_GetNameLen();
+        }
+        public static int TestRemoveChildIdx(int idx) {
+            return Bridge.godot_icall_Test_RemoveChildIdx(idx);
+        }
+        public static int TestHasMethod(string method) {
+            return Bridge.godot_icall_Test_HasMethod(method);
+        }
+        public static int TestFileWrite(string path, string content) {
+            return Bridge.godot_icall_Test_FileWrite(path, content);
+        }
+        public static int TestFileRead(string path) {
+            return Bridge.godot_icall_Test_FileRead(path);
+        }
+        public static int TestFileExists(string path) {
+            return Bridge.godot_icall_Test_FileExists(path);
+        }
+        public static int TestFileDelete(string path) {
+            return Bridge.godot_icall_Test_FileDelete(path);
+        }
+        public static int TestRaycast3D() {
+            return Bridge.godot_icall_Test_Raycast3D();
+        }
+        public static int TestSetAudioVolume(int volumeDbX10) {
+            return Bridge.godot_icall_Test_SetAudioVolume(volumeDbX10);
+        }
+        public static int TestGetAudioVolume() {
+            return Bridge.godot_icall_Test_GetAudioVolume();
+        }
+        public static int TestAddAnimation(string animName) {
+            return Bridge.godot_icall_Test_AddAnimation(animName);
+        }
+        public static int TestPlayAnimation(string animName) {
+            return Bridge.godot_icall_Test_PlayAnimation(animName);
+        }
+        public static int TestGetAnimationCount() {
+            return Bridge.godot_icall_Test_GetAnimationCount();
+        }
+        public static int TestIsAnimationPlaying(string animName) {
+            return Bridge.godot_icall_Test_IsAnimationPlaying(animName);
+        }
+        public static int TestBclListTest() {
+            return Bridge.godot_icall_Test_BclListTest();
+        }
+        public static int TestBclDictTest() {
+            return Bridge.godot_icall_Test_BclDictTest();
+        }
+        public static int TestBclAsyncTest() {
+            return Bridge.godot_icall_Test_BclAsyncTest();
+        }
+        public static void TestAssert(string name, int condition) {
+            Bridge.godot_icall_Test_Assert(name, condition);
+        }
+        public static void TestFinishTest(string testName) {
+            Bridge.godot_icall_Test_FinishTest(testName);
+        }
+        public static int TestGetPassCount() {
+            return Bridge.godot_icall_Test_GetPassCount();
+        }
+        public static int TestGetFailCount() {
+            return Bridge.godot_icall_Test_GetFailCount();
+        }
+        public static void TestResetCounters() {
+            Bridge.godot_icall_Test_ResetCounters();
+        }
     }
 }

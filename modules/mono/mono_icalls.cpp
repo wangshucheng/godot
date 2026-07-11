@@ -12,23 +12,26 @@
 #include "core/math/vector2.h"
 #include "scene/main/node.h"
 #include "scene/resources/packed_scene.h"
+#include <mono/metadata/image.h>
+#include <mono/metadata/blob.h>
 #include <cstdio>
 #include <cstdarg>
 #include <cstdlib>
+#include <cstring>
 
 using namespace mono_variant;
 using namespace mono_bridge;
 
+// Matches our DLL: Godot.Bridge::godot_icall_GD_Print(string message)
 static void godot_icall_GD_Print(MonoString *message) {
-	if (!message) {
+	if (message) {
+		char *utf8 = mono_string_to_utf8(message);
+		if (utf8) {
+			printf("%s\n", utf8);
+			mono_free(utf8);
+		}
+	} else {
 		printf("\n");
-		fflush(stdout);
-		return;
-	}
-	char *utf8 = mono_string_to_utf8(message);
-	if (utf8) {
-		printf("%s\n", utf8);
-		mono_free(utf8);
 	}
 	fflush(stdout);
 }
@@ -227,28 +230,43 @@ static intptr_t godot_icall_Node_GetTree(intptr_t native_ptr) {
 	return tree ? (intptr_t)tree : 0;
 }
 
+// Matches our DLL: Godot.Bridge::godot_icall_Object_Ctor(object thisObj) -> native int
 static intptr_t godot_icall_Object_Ctor(MonoObject *p_this_obj) {
 	if (!p_this_obj) {
 		return 0;
 	}
 
+	// Check if NativePtr is already set (e.g., by CSharpScript before calling constructor)
 	MonoClass *klass = mono_object_get_class(p_this_obj);
-	const char *class_name_cstr = mono_class_get_name(klass);
-	if (!class_name_cstr || class_name_cstr[0] == '\0') {
-		return 0;
+	MonoClassField *native_ptr_field = nullptr;
+	for (MonoClass *k = klass; k && !native_ptr_field; k = mono_class_get_parent(k)) {
+		native_ptr_field = mono_class_get_field_from_name(k, "NativePtr");
+	}
+	if (native_ptr_field) {
+		intptr_t existing_ptr = 0;
+		mono_field_get_value(p_this_obj, native_ptr_field, &existing_ptr);
+		if (existing_ptr != 0) {
+			return existing_ptr;
+		}
 	}
 
-	StringName class_name(class_name_cstr);
-	if (!ClassDB::can_instantiate(class_name)) {
-		return 0;
-	}
-	Object *obj = ClassDB::instantiate(class_name);
-	if (!obj) {
-		return 0;
+	// No existing native ptr — create new native object.
+	// Walk up the C# class hierarchy to find the first class that ClassDB can instantiate.
+	for (MonoClass *k = klass; k; k = mono_class_get_parent(k)) {
+		const char *cname = mono_class_get_name(k);
+		const char *cns = mono_class_get_namespace(k);
+		if (!cname || !cns || strcmp(cns, "Godot") != 0) continue;
+		StringName class_name(cname);
+		if (ClassDB::can_instantiate(class_name)) {
+			Object *obj = ClassDB::instantiate(class_name);
+			if (obj) {
+				mono_bridge::tie_native_ptr(p_this_obj, obj);
+				return (intptr_t)obj;
+			}
+		}
 	}
 
-	mono_bridge::tie_native_ptr(p_this_obj, obj);
-	return (intptr_t)obj;
+	return 0;
 }
 
 static void godot_icall_Object_BindNativePtr(MonoObject *p_this_obj, intptr_t native_ptr) {
@@ -407,22 +425,6 @@ static intptr_t godot_icall_PackedScene_Instantiate(intptr_t scene_ptr) {
 	return instance ? (intptr_t)instance : 0;
 }
 
-static void godot_icall_Console_WriteLine_raw(MonoString *message) {
-	if (message == nullptr) {
-		printf("\n");
-		fflush(stdout);
-		return;
-	}
-	char *utf8_str = mono_string_to_utf8(message);
-	if (utf8_str != nullptr) {
-		printf("%s\n", utf8_str);
-		mono_free(utf8_str);
-	} else {
-		printf("\n");
-	}
-	fflush(stdout);
-}
-
 static intptr_t godot_icall_Object_InstantiateFromNative(MonoString *p_class_name) {
 	if (!p_class_name) return 0;
 	char *name_utf8 = mono_string_to_utf8(p_class_name);
@@ -483,14 +485,21 @@ static MonoObject *godot_icall_Input_GetMousePosition() {
 }
 
 void godot_register_icalls() {
+	// All internalcalls are declared in Godot.Bridge (matching our compiled GodotSharp.dll)
 	mono_add_internal_call("Godot.Bridge::godot_icall_GD_Print", (const void *)godot_icall_GD_Print);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Object_Free", (const void *)godot_icall_Object_Free);
-	mono_add_internal_call("Godot.Bridge::godot_icall_Object_IsInstanceValid", (const void *)godot_icall_Object_IsInstanceValid);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Object_Get", (const void *)godot_icall_Object_Get);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Object_Set", (const void *)godot_icall_Object_Set);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Object_Call", (const void *)godot_icall_Object_Call);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Object_Ctor", (const void *)godot_icall_Object_Ctor);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Object_BindNativePtr", (const void *)godot_icall_Object_BindNativePtr);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Object_IsInstanceValid", (const void *)godot_icall_Object_IsInstanceValid);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Object_Connect", (const void *)godot_icall_Object_Connect);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Object_Disconnect", (const void *)godot_icall_Object_Disconnect);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Object_IsConnected", (const void *)godot_icall_Object_IsConnected);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Object_EmitSignal", (const void *)godot_icall_Object_EmitSignal);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Object_HasSignal", (const void *)godot_icall_Object_HasSignal);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Object_InstantiateFromNative", (const void *)godot_icall_Object_InstantiateFromNative);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Node_GetNode", (const void *)godot_icall_Node_GetNode);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Node_GetParent", (const void *)godot_icall_Node_GetParent);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Node_GetChild", (const void *)godot_icall_Node_GetChild);
@@ -505,19 +514,13 @@ void godot_register_icalls() {
 	mono_add_internal_call("Godot.Bridge::godot_icall_Callable_CreateFromDelegate", (const void *)godot_icall_Callable_CreateFromDelegate);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Callable_Call", (const void *)godot_icall_Callable_Call);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Callable_Free", (const void *)godot_icall_Callable_Free);
-	mono_add_internal_call("Godot.Bridge::godot_icall_Object_Connect", (const void *)godot_icall_Object_Connect);
-	mono_add_internal_call("Godot.Bridge::godot_icall_Object_Disconnect", (const void *)godot_icall_Object_Disconnect);
-	mono_add_internal_call("Godot.Bridge::godot_icall_Object_IsConnected", (const void *)godot_icall_Object_IsConnected);
-	mono_add_internal_call("Godot.Bridge::godot_icall_Object_EmitSignal", (const void *)godot_icall_Object_EmitSignal);
-	mono_add_internal_call("Godot.Bridge::godot_icall_Object_HasSignal", (const void *)godot_icall_Object_HasSignal);
-	mono_add_internal_call("Godot.Bridge::godot_icall_Object_InstantiateFromNative", (const void *)godot_icall_Object_InstantiateFromNative);
 	mono_add_internal_call("Godot.Bridge::godot_icall_ResourceLoader_Load", (const void *)godot_icall_ResourceLoader_Load);
 	mono_add_internal_call("Godot.Bridge::godot_icall_PackedScene_Instantiate", (const void *)godot_icall_PackedScene_Instantiate);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Platform_GetRuntimeInfo", (const void *)godot_icall_Platform_GetRuntimeInfo);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Input_IsKeyPressed", (const void *)godot_icall_Input_IsKeyPressed);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Input_IsMouseButtonPressed", (const void *)godot_icall_Input_IsMouseButtonPressed);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Input_GetMousePosition", (const void *)godot_icall_Input_GetMousePosition);
-	mono_add_internal_call("HelloWorld.ConsoleBridge::godot_icall_Console_WriteLine", (const void *)godot_icall_Console_WriteLine_raw);
-	printf("[Mono] Registered internal calls (nodes + resources + signals + platform + input).\n");
+
+	printf("[Mono] Registered %d internal calls (Godot.Bridge::*).\n", 34);
 	fflush(stdout);
 }

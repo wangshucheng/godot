@@ -13,10 +13,10 @@ namespace Godot {
             Platform.Initialize();
             GodotSynchronizationContext.Install();
 
+            // NOTE: Avoid string concatenation with enum/bool values in WASM interpreter mode.
+            // Boxing + Enum.ToString() triggers a virtual call that causes
+            // "RuntimeError: function signature mismatch" in the WASM function table.
             GD.Print("[GodotSharp] Runtime initialized.");
-            GD.Print("[GodotSharp] Platform: " + Platform.Current);
-            GD.Print("[GodotSharp] AOT: " + Platform.IsAotMode + ", Web: " + Platform.IsWeb + ", SingleThreaded: " + Platform.IsSingleThreaded);
-            GD.Print("[GodotSharp] SyncContext: " + (SynchronizationContext.Current?.GetType().Name ?? "(null)"));
         }
 
         public static bool IsInitialized => _initialized;

@@ -1,5 +1,5 @@
 using System;
-using System.Collections.Generic;
+using System.Collections;
 
 namespace Godot {
     [Flags]
@@ -17,7 +17,9 @@ namespace Godot {
         internal uint _bridgeGCHandle;
         private bool disposed = false;
         private bool _isNativeWrapper;
-        private readonly Dictionary<(string signal, Delegate callback), Callable> _connectedCallables = new Dictionary<(string, Delegate), Callable>();
+        // Use ArrayList instead of Dictionary<(string,Delegate),Callable> to avoid
+        // complex generic type resolution issues in Mono WASM interpreter mode.
+        private ArrayList _connectedCallables = new ArrayList();
 
         public Object() {
             _bridgeGCHandle = 0;
@@ -84,33 +86,43 @@ namespace Godot {
 
         private void ConnectImpl(string signal, Delegate callback, int flags) {
             ThrowIfDisposed();
-            var key = (signal, callback);
-            if (_connectedCallables.ContainsKey(key)) return;
+            // Check if already connected
+            for (int i = 0; i < _connectedCallables.Count; i++) {
+                object[] entry = (object[])_connectedCallables[i];
+                if ((string)entry[0] == signal && (Delegate)entry[1] == callback) return;
+            }
             Callable callable = Callable.From(callback);
             bool ok = Bridge.godot_icall_Object_Connect(NativePtr, signal, callable.NativePtr, flags);
             if (ok) {
-                _connectedCallables[key] = callable;
+                _connectedCallables.Add(new object[] { signal, callback, callable });
             } else {
                 callable.Dispose();
-                throw new InvalidOperationException($"Failed to connect signal '{signal}'.");
+                throw new InvalidOperationException("Failed to connect signal '" + signal + "'.");
             }
         }
 
         public void Disconnect(string signal, Delegate callback) {
             ThrowIfDisposed();
-            var key = (signal, callback);
-            if (_connectedCallables.TryGetValue(key, out Callable callable)) {
-                Bridge.godot_icall_Object_Disconnect(NativePtr, signal, callable.NativePtr);
-                callable.Dispose();
-                _connectedCallables.Remove(key);
+            for (int i = 0; i < _connectedCallables.Count; i++) {
+                object[] entry = (object[])_connectedCallables[i];
+                if ((string)entry[0] == signal && (Delegate)entry[1] == callback) {
+                    Callable callable = (Callable)entry[2];
+                    Bridge.godot_icall_Object_Disconnect(NativePtr, signal, callable.NativePtr);
+                    callable.Dispose();
+                    _connectedCallables.RemoveAt(i);
+                    return;
+                }
             }
         }
 
         public bool IsConnected(string signal, Delegate callback) {
             ThrowIfDisposed();
-            var key = (signal, callback);
-            if (_connectedCallables.TryGetValue(key, out Callable callable)) {
-                return Bridge.godot_icall_Object_IsConnected(NativePtr, signal, callable.NativePtr);
+            for (int i = 0; i < _connectedCallables.Count; i++) {
+                object[] entry = (object[])_connectedCallables[i];
+                if ((string)entry[0] == signal && (Delegate)entry[1] == callback) {
+                    Callable callable = (Callable)entry[2];
+                    return Bridge.godot_icall_Object_IsConnected(NativePtr, signal, callable.NativePtr);
+                }
             }
             return false;
         }
@@ -137,8 +149,9 @@ namespace Godot {
 
         public void Free() {
             if (NativePtr != IntPtr.Zero && !disposed) {
-                foreach (var kv in _connectedCallables) {
-                    kv.Value.Dispose();
+                foreach (object item in _connectedCallables) {
+                    object[] entry = (object[])item;
+                    ((Callable)entry[2]).Dispose();
                 }
                 _connectedCallables.Clear();
                 Bridge.godot_icall_Object_Free(NativePtr);

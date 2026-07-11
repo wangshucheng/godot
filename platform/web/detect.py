@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -241,6 +242,27 @@ def configure(env: "SConsEnvironment"):
     env["ARCOM_POSIX"] = env["ARCOM"].replace("$TARGET", "$TARGET.posix").replace("$SOURCES", "$SOURCES.posix")
     env["ARCOM"] = "${TEMPFILE('$ARCOM_POSIX','$ARCOMSTR')}"
 
+    # Use TempFileMunge for the linker as well, since link invocations with
+    # many object files and static libraries (e.g. Mono runtime) exceed the
+    # 32 KB cmd.exe command line limit on Windows.
+    env["LINKCOM_POSIX"] = env["LINKCOM"].replace("$TARGET", "$TARGET.posix").replace("$SOURCES", "$SOURCES.posix")
+    env["LINKCOM"] = "${TEMPFILE('$LINKCOM_POSIX','$LINKCOMSTR')}"
+
+    # Convert Windows backslash paths to forward slashes in response files.
+    # emcc's shlex response file parser strips backslashes, breaking paths.
+    import re as _re
+    from SCons.Subst import quote_spaces as _quote_spaces
+    _WINPATHSEP_RE = _re.compile(r"\\([^\"'\\]|$)")
+
+    def _tempfile_arg_esc_func(arg):
+        arg = _quote_spaces(arg)
+        # Convert Windows backslashes to forward slashes (emcc/shlex compatible)
+        return _WINPATHSEP_RE.sub(r"/\1", arg)
+
+    env["TEMPFILEARGESCFUNC"] = _tempfile_arg_esc_func
+    # Use newlines as separator in response files for robust parsing
+    env["TEMPFILEARGJOIN"] = "\n"
+
     # All intermediate files are just object files.
     env["OBJPREFIX"] = ""
     env["OBJSUFFIX"] = ".o"
@@ -331,6 +353,12 @@ def configure(env: "SConsEnvironment"):
     # us since we don't know requirements at compile-time.
     env.Append(LINKFLAGS=["-sALLOW_MEMORY_GROWTH=1"])
 
+    # Allow multiple definitions (needed for Mono static libraries that may
+    # duplicate symbols like pthread_sigmask from libc).
+    env.Append(LINKFLAGS=["-Wl,--allow-multiple-definition"])
+    # Show all undefined symbols, not just the first 20.
+    env.Append(LINKFLAGS=["-Wl,--error-limit=0"])
+
     # Do not call main immediately when the support code is ready.
     env.Append(LINKFLAGS=["-sINVOKE_RUN=0"])
 
@@ -349,6 +377,9 @@ def configure(env: "SConsEnvironment"):
     # This workaround creates a closure that prevents the garbage collector from freeing the WebGL context.
     # We also only use WebGL2, and changing context version is not widely supported anyway.
     env.Append(LINKFLAGS=["-sGL_WORKAROUND_SAFARI_GETCONTEXT_BUG=0"])
+
+    # Allow multiple definitions for Mono static libraries (which may duplicate libc symbols).
+    env.Append(LINKFLAGS=["--allow-multiple-definition"])
 
     # Disable GDScript LSP (as the Web platform is not compatible with TCP).
     env.Append(CPPDEFINES=["GDSCRIPT_NO_LSP"])

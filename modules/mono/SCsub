@@ -20,6 +20,7 @@ mono_sources = [
     "csharp_script.cpp",
     "mono_aot.cpp",
     "mono_aot_modules.cpp",
+    "mono_export_plugin.cpp",
     "utils/path_utils.cpp",
 ]
 
@@ -78,46 +79,66 @@ elif env["platform"] == "macos":
 elif env["platform"] == "web":
     env_mono.Append(CPPDEFINES=[
         ("MONO_STATIC", 1),
-        ("MONO_AOT_MODE", 1),
+        ("MONO_INTERP_MODE", 1),
         ("WEB_ENABLED", 1),
         ("DISABLE_SOCKET", 1),
         ("MONO_SINGLE_THREAD", 1),
     ])
 
     mono_lib_path = mono_root + "/libs/web/wasm"
+    env.Prepend(LIBPATH=[mono_lib_path])
     env_mono.Prepend(LIBPATH=[mono_lib_path])
 
-    env_mono.Append(LIBS=[
-        "mono-2.0",
-        "monoruntime",
+    env.Append(LIBS=[
+        "mini",
+        "monoruntimesgen",
         "monosgen-2.0",
+        "mono-ee-interp",
+        "mono-ilgen",
+        "monoutils",
+        "eglib",
         "mono-profiler-aot",
     ])
 
     wasm_threads = env.get("wasm_threads", False)
     if wasm_threads:
         env_mono.Append(CPPDEFINES=[("MONO_WASM_THREADS", 1)])
-        env_mono.Append(LINKFLAGS=[
+        env.Append(LINKFLAGS=[
             "-s", "PROXY_TO_PTHREAD=1",
             "-s", "PTHREAD_POOL_SIZE=4",
             "-s", "SHARED_MEMORY=1",
         ])
     else:
-        env_mono.Append(LINKFLAGS=[
+        env.Append(LINKFLAGS=[
             "-s", "PROXY_TO_PTHREAD=0",
             "-s", "PTHREAD_POOL_SIZE=0",
         ])
 
     wasm_memory = env.get("wasm_memory_size", 256)
-    env_mono.Append(LINKFLAGS=[
+    env.Append(LINKFLAGS=[
         "-s", "ALLOW_MEMORY_GROWTH=1",
         "-s", ("TOTAL_MEMORY=%dMB" % wasm_memory),
-        "-s", "EXPORT_NAME=GodotMono",
-        "-s", "FILESYSTEM=0",
     ])
 
-    print("[Mono] WASM platform: Full AOT mode configured (threads=%s, memory=%dMB)"
+    print("[Mono] WASM platform: Interpreter mode configured (threads=%s, memory=%dMB)"
           % ("yes" if wasm_threads else "no", wasm_memory))
+
+    # Don't error on undefined symbols - the Mono WASM libraries reference
+    # JavaScript-side functions (mono_wasm_*, mono_set_timeout) that are
+    # normally provided by the Mono WASM driver. We don't need them since
+    # we use interpreter mode, and they'll be resolved as JS imports at runtime.
+    env.Append(LINKFLAGS=["-sERROR_ON_UNDEFINED_SYMBOLS=0"])
+
+    # Enable C++ exception support - the Mono runtime libraries require it.
+    # Must use SUPPORT_LONGJMP=emscripten (not 'wasm') with exceptions enabled.
+    env.Append(LINKFLAGS=["-sDISABLE_EXCEPTION_THROWING=0"])
+    env.Append(LINKFLAGS=["-sDISABLE_EXCEPTION_CATCHING=0"])
+    env.Append(LINKFLAGS=["-sSUPPORT_LONGJMP=emscripten"])
+
+    # Provide mono_wasm_enable_gc stub (required by SGEN GC, not handled by
+    # --import-undefined because it's referenced from within a library).
+    wasm_glue = env_mono.Object(source="#modules/mono/mono_wasm_glue.cpp")
+    env.Prepend(LIBS=[wasm_glue])
 
 env_mono.add_source_files(env.modules_sources, mono_sources)
 

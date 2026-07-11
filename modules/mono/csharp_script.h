@@ -35,13 +35,13 @@ class CSharpScript : public Script {
 
 public:
 	void set_class_name(const String &p_name) { class_name = p_name; }
-	bool can_instantiate() const override { return mono_class != nullptr; }
+	bool can_instantiate() const override;
 	Ref<Script> get_base_script() const override { return Ref<Script>(); }
 	StringName get_global_name() const override { return StringName(); }
 	bool inherits_script(const Ref<Script> &p_script) const override { return false; }
 	StringName get_instance_base_type() const override { return native_base_name; }
 	ScriptInstance *instance_create(Object *p_this) override;
-	PlaceHolderScriptInstance *placeholder_instance_create(Object *p_this) override { return nullptr; }
+	PlaceHolderScriptInstance *placeholder_instance_create(Object *p_this) override;
 	bool has_source_code() const override { return true; }
 	String get_source_code() const override { return source; }
 	void set_source_code(const String &p_code) override { source = p_code; mono_class = nullptr; mono_image = nullptr; method_cache.clear(); mono_class_valid = false; }
@@ -110,6 +110,7 @@ class CSharpLanguage : public ScriptLanguage {
 	int lang_idx = -1;
 	HashMap<String, MonoAssembly *> loaded_assemblies;
 	MonoAssembly *scripts_assembly = nullptr;
+	bool build_pending = false;
 
 public:
 	static CSharpLanguage *get_singleton() { return singleton; }
@@ -119,17 +120,24 @@ public:
 	MonoAssembly *get_scripts_assembly() const { return scripts_assembly; }
 	void reload_all_pending_scripts();
 
+	void ensure_project_file();
+	bool build_project();
+	void request_build() { build_pending = true; }
+	String get_project_csproj_path() const;
+	String get_project_sln_path() const;
+	String get_mono_assemblies_dir() const;
+
 	String get_name() const override { return "C#"; }
 	String get_type() const override { return "CSharpScript"; }
 	String get_extension() const override { return "cs"; }
 	void init() override;
 	void finish() override;
 	void frame() override;
-	Vector<String> get_reserved_words() const override { return {}; }
-	bool is_control_flow_keyword(const String &p_keyword) const override { return false; }
-	Vector<String> get_comment_delimiters() const override { return {"/* */", "//"}; }
-	Vector<String> get_doc_comment_delimiters() const override { return {"/** */", "///"}; }
-	Vector<String> get_string_delimiters() const override { return {"\" \"", "' '", "@\" \"", "\"\"\" \"\"\""}; }
+	Vector<String> get_reserved_words() const override;
+	bool is_control_flow_keyword(const String &p_keyword) const override;
+	Vector<String> get_comment_delimiters() const override;
+	Vector<String> get_doc_comment_delimiters() const override;
+	Vector<String> get_string_delimiters() const override;
 	bool is_using_templates() override { return true; }
 	Ref<Script> make_template(const String &p_template, const String &p_class_name, const String &p_base_class_name) const override;
 	Vector<ScriptTemplate> get_built_in_templates(const StringName &p_object) override;

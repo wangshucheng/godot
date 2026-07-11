@@ -105,5 +105,71 @@ namespace Godot {
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern object godot_icall_Input_GetMousePosition();
+
+        // WASM-safe icalls for Label/Control (pointer-passing icalls used by UI wrappers)
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Engine_GetFps();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Label_SetFpsText(IntPtr labelPtr, int fps);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Object_SetIntText(IntPtr objPtr, string propName, int value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Label_SetPrefixedInt(IntPtr labelPtr, string prefix, int value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Label_AppendLog(IntPtr labelPtr, string message);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Control_SetPosition(IntPtr ctrlPtr, int x, int y);
+
+        // WebSocket icalls - global pointer model (NO STRING RETURNS to C#)
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_WebSocket_Init(string url);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_WebSocket_PollAndGetState();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_WebSocket_Poll();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_WebSocket_GetState();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_WebSocket_SendText(string text);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_WebSocket_SendPrefixedInt(string prefix, int value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_WebSocket_GetSendCount();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_WebSocket_GetRecvCount();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_WebSocket_ShowLastMessage();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_WebSocket_GetPacketCount();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_WebSocket_Close();
+
+        // Debug UI icalls - global pointer model (WASM-safe, no pointer passing)
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_DebugUi_Init();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_DebugUi_Clear();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_DebugUi_AddLine(string line);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_DebugUi_AddLineInt(string prefix, int value);
     }
 }

@@ -12,6 +12,15 @@
 #include "core/math/vector2.h"
 #include "scene/main/node.h"
 #include "scene/resources/packed_scene.h"
+#include "core/config/engine.h"
+#include "scene/gui/label.h"
+#include "scene/gui/control.h"
+#include "scene/main/scene_tree.h"
+#include "scene/main/canvas_layer.h"
+#include "scene/main/viewport.h"
+#include "scene/main/window.h"
+#include "modules/websocket/websocket_peer.h"
+#include "servers/text/text_server.h"
 #include <mono/metadata/image.h>
 #include <mono/metadata/blob.h>
 #include <cstdio>
@@ -484,6 +493,377 @@ static MonoObject *godot_icall_Input_GetMousePosition() {
 	return variant_to_mono_vector2(domain, mp.x, mp.y);
 }
 
+// ============================================================
+// WASM-safe icalls: These bypass Mono WASM interpreter bugs by
+// performing string/int operations in C++ instead of C#.
+// The Mono WASM interpreter crashes with "function signature
+// mismatch" on: int.ToString(), string concat with int, method
+// calls returning string, etc. These icalls move all such
+// operations to the C++ side.
+// ============================================================
+
+// C++-side int to string conversion (replaces int.ToString())
+static MonoString *godot_icall_Int_ToString(int32_t value) {
+	MonoDomain *domain = mono_domain_get();
+	char buf[16];
+	snprintf(buf, sizeof(buf), "%d", value);
+	return mono_string_new(domain, buf);
+}
+
+// C++-side string concat with int (replaces "prefix" + int)
+static MonoString *godot_icall_String_ConcatInt(MonoString *prefix, int32_t value) {
+	MonoDomain *domain = mono_domain_get();
+	char *utf8 = prefix ? mono_string_to_utf8(prefix) : nullptr;
+	char buf[16];
+	snprintf(buf, sizeof(buf), "%d", value);
+
+	// Concatenate
+	String result = String(utf8 ? utf8 : "") + String(buf);
+	if (utf8) mono_free(utf8);
+	return mono_string_new(domain, result.utf8().get_data());
+}
+
+// C++-side: set Label text to "FPS: N" directly (no C# string ops at all)
+static void godot_icall_Label_SetFpsText(intptr_t label_ptr, int32_t fps) {
+	if (label_ptr == 0) return;
+	Object *obj = (Object *)label_ptr;
+	if (!mono_gc_bridge::is_native_alive(obj)) return;
+
+	Label *label = Object::cast_to<Label>(obj);
+	if (!label) return;
+
+	char buf[16];
+	snprintf(buf, sizeof(buf), "FPS: %d", fps);
+	label->set_text(buf);
+}
+
+// C++-side: set any Object property to an int-formatted string (no C# string ops)
+static void godot_icall_Object_SetIntText(intptr_t obj_ptr, MonoString *prop_name, int32_t value) {
+	if (obj_ptr == 0) return;
+	Object *obj = (Object *)obj_ptr;
+	if (!mono_gc_bridge::is_native_alive(obj)) return;
+
+	char *name_utf8 = mono_string_to_utf8(prop_name);
+	StringName prop(name_utf8);
+	mono_free(name_utf8);
+
+	char buf[16];
+	snprintf(buf, sizeof(buf), "%d", value);
+	obj->set(prop, String(buf));
+}
+
+// C++-side: get engine FPS (replaces C# arithmetic in _Process)
+static int32_t godot_icall_Engine_GetFps() {
+	Engine *engine = Engine::get_singleton();
+	if (!engine) return 0;
+	return (int32_t)engine->get_frames_per_second();
+}
+
+// C++-side: set Label text with a prefix + int (e.g. "Frames: 1234")
+static void godot_icall_Label_SetPrefixedInt(intptr_t label_ptr, MonoString *prefix, int32_t value) {
+	if (label_ptr == 0) return;
+	Object *obj = (Object *)label_ptr;
+	if (!mono_gc_bridge::is_native_alive(obj)) return;
+
+	Label *label = Object::cast_to<Label>(obj);
+	if (!label) return;
+
+	char *utf8 = prefix ? mono_string_to_utf8(prefix) : nullptr;
+	char buf[32];
+	snprintf(buf, sizeof(buf), "%s%d", utf8 ? utf8 : "", value);
+	if (utf8) mono_free(utf8);
+	label->set_text(buf);
+}
+
+// C++-side: append a log line to a Label's existing text
+// (reads current text, appends "\n" + new message, sets it back)
+static void godot_icall_Label_AppendLog(intptr_t label_ptr, MonoString *message) {
+	if (label_ptr == 0) return;
+	Object *obj = (Object *)label_ptr;
+	if (!mono_gc_bridge::is_native_alive(obj)) return;
+
+	Label *label = Object::cast_to<Label>(obj);
+	if (!label) return;
+
+	String current = label->get_text();
+	char *utf8 = message ? mono_string_to_utf8(message) : nullptr;
+	String new_text = current + "\n" + String(utf8 ? utf8 : "");
+	if (utf8) mono_free(utf8);
+	label->set_text(new_text);
+}
+
+// Set Control position (x, y) - WASM-safe, no Vector2 needed in C#.
+static void godot_icall_Control_SetPosition(intptr_t ctrl_ptr, int32_t x, int32_t y) {
+	if (ctrl_ptr == 0) return;
+	Object *obj = (Object *)ctrl_ptr;
+	if (!mono_gc_bridge::is_native_alive(obj)) return;
+	Control *ctrl = Object::cast_to<Control>(obj);
+	if (!ctrl) return;
+	ctrl->set_position(Vector2((real_t)x, (real_t)y));
+}
+
+// ============================================================
+// Debug UI icalls: Global pointer model (WASM-safe).
+// C++ side creates and manages a single debug Label; C# never
+// touches pointers, never does string/int ops. All text building
+// is done in C++ to avoid Mono WASM interpreter signature mismatch.
+// ============================================================
+
+static Label *_g_debug_label = nullptr;
+static Vector<String> _g_debug_lines;
+static const int MAX_DEBUG_LINES = 100;
+
+// Find/create the debug label (added to scene root via CanvasLayer)
+static Label *_ensure_debug_label() {
+	if (_g_debug_label) return _g_debug_label;
+
+	SceneTree *tree = Object::cast_to<SceneTree>(OS::get_singleton()->get_main_loop());
+	if (!tree) {
+		printf("[Mono] ERROR: Cannot get SceneTree for debug UI\n");
+		fflush(stdout);
+		return nullptr;
+	}
+	Window *root = tree->get_root();
+	if (!root) {
+		printf("[Mono] ERROR: Cannot get root Window for debug UI\n");
+		fflush(stdout);
+		return nullptr;
+	}
+
+	CanvasLayer *layer = memnew(CanvasLayer);
+	layer->set_layer(100);
+	root->add_child(layer);
+
+	Label *label = memnew(Label);
+	label->set_anchors_preset(Control::PRESET_TOP_LEFT);
+	label->set_position(Vector2(10, 10));
+	label->set_size(Vector2(1200, 800));
+	label->set_autowrap_mode(TextServer::AUTOWRAP_WORD_SMART);
+	label->add_theme_font_size_override("font_size", 16);
+	label->add_theme_color_override("font_color", Color(1, 1, 1, 1));
+	label->add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.8f));
+	label->add_theme_constant_override("shadow_offset_x", 2);
+	label->add_theme_constant_override("shadow_offset_y", 2);
+	_g_debug_lines.clear();
+	label->set_text("");
+	layer->add_child(label);
+
+	_g_debug_label = label;
+	printf("[Mono] Debug UI label created and added to scene.\n");
+	fflush(stdout);
+	return _g_debug_label;
+}
+
+static void _refresh_debug_label() {
+	if (!_g_debug_label) return;
+	String full;
+	for (int i = 0; i < _g_debug_lines.size(); i++) {
+		if (i > 0) full += "\n";
+		full += _g_debug_lines[i];
+	}
+	_g_debug_label->set_text(full);
+}
+
+// Init debug UI: creates the label if needed. Returns 0 on success.
+static int32_t godot_icall_DebugUi_Init() {
+	Label *l = _ensure_debug_label();
+	return l ? 0 : -1;
+}
+
+// Clear all text lines.
+static void godot_icall_DebugUi_Clear() {
+	_g_debug_lines.clear();
+	_refresh_debug_label();
+}
+
+// Append a text line.
+static void godot_icall_DebugUi_AddLine(MonoString *line) {
+	if (!_ensure_debug_label()) return;
+	char *utf8 = line ? mono_string_to_utf8(line) : nullptr;
+	String s(utf8 ? utf8 : "");
+	if (utf8) mono_free(utf8);
+	_g_debug_lines.append(s);
+	while (_g_debug_lines.size() > MAX_DEBUG_LINES) {
+		_g_debug_lines.remove_at(0);
+	}
+	_refresh_debug_label();
+}
+
+// Append a line: prefix + int value (all string/int concat done in C++).
+static void godot_icall_DebugUi_AddLineInt(MonoString *prefix, int32_t value) {
+	if (!_ensure_debug_label()) return;
+	char *utf8 = prefix ? mono_string_to_utf8(prefix) : nullptr;
+	char buf[32];
+	snprintf(buf, sizeof(buf), "%d", value);
+	String s = String(utf8 ? utf8 : "") + String(buf);
+	if (utf8) mono_free(utf8);
+	_g_debug_lines.append(s);
+	while (_g_debug_lines.size() > MAX_DEBUG_LINES) {
+		_g_debug_lines.remove_at(0);
+	}
+	_refresh_debug_label();
+}
+
+// ============================================================
+// WebSocket icalls: WASM-safe WebSocket operations
+// Uses a global WebSocketPeer pointer to avoid passing/returning
+// pointers through icalls, which triggers Mono WASM interpreter
+// "function signature mismatch" errors.
+// All string operations done in C++. NO strings returned to C#.
+// ============================================================
+
+// Global WebSocket peer - avoids pointer passing through icall boundary.
+// Single-connection model is sufficient for testing.
+static WebSocketPeer *_ws_global_peer = nullptr;
+
+// Track state and stats entirely in C++ (no string returned to C#).
+static int32_t _ws_last_state = -1;
+static int _ws_poll_count = 0;
+static int _ws_send_count = 0;
+static int _ws_recv_count = 0;
+static String _ws_last_message;
+
+// Create + connect in one step. Returns Error code (0 = OK, -1 = create failed).
+static int32_t godot_icall_WebSocket_Init(MonoString *url) {
+	if (_ws_global_peer) {
+		_ws_global_peer->close();
+		memdelete(_ws_global_peer);
+		_ws_global_peer = nullptr;
+	}
+
+	WebSocketPeer *peer = WebSocketPeer::create();
+	if (!peer) {
+		printf("[Mono] ERROR: WebSocketPeer::create() returned null!\n");
+		fflush(stdout);
+		return -1;
+	}
+	_ws_global_peer = peer;
+	_ws_last_state = -1;
+	_ws_poll_count = 0;
+	_ws_send_count = 0;
+	_ws_recv_count = 0;
+	_ws_last_message = "";
+
+	char *utf8 = url ? mono_string_to_utf8(url) : nullptr;
+	if (!utf8) return -1;
+
+	String ws_url(utf8);
+	mono_free(utf8);
+
+	Error err = peer->connect_to_url(ws_url);
+	printf("[Mono] WebSocket connect_to_url => Error %d, state=%d\n", (int)err, (int)peer->get_ready_state());
+	fflush(stdout);
+	return (int32_t)err;
+}
+
+// Poll the WebSocket and process received messages (store in C++ buffer).
+// Returns current ready state.
+static int32_t godot_icall_WebSocket_PollAndGetState() {
+	if (!_ws_global_peer) return 3; // CLOSED
+	_ws_global_peer->poll();
+	_ws_poll_count++;
+
+	// Drain all available packets into C++-side buffer (last message kept)
+	int avail = _ws_global_peer->get_available_packet_count();
+	while (avail > 0) {
+		const uint8_t *buffer = nullptr;
+		int buffer_size = 0;
+		Error err = _ws_global_peer->get_packet(&buffer, buffer_size);
+		if (err == OK && buffer && buffer_size > 0) {
+			_ws_last_message = String::utf8((const char *)buffer, buffer_size);
+			_ws_recv_count++;
+		}
+		avail--;
+	}
+
+	int32_t cur_state = (int32_t)_ws_global_peer->get_ready_state();
+	if (cur_state != _ws_last_state) {
+		printf("[Mono] WS state changed: %d -> %d\n", (int)_ws_last_state, (int)cur_state);
+		fflush(stdout);
+		_ws_last_state = cur_state;
+	}
+	return cur_state;
+}
+
+// Poll only (no state return - kept for compatibility if needed)
+static void godot_icall_WebSocket_Poll() {
+	godot_icall_WebSocket_PollAndGetState();
+}
+
+// Get WebSocket ready state: 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED
+static int32_t godot_icall_WebSocket_GetState() {
+	if (!_ws_global_peer) return 3;
+	return (int32_t)_ws_global_peer->get_ready_state();
+}
+
+// Send a text message. Returns Error code (0 = OK)
+static int32_t godot_icall_WebSocket_SendText(MonoString *text) {
+	if (!_ws_global_peer) return -1;
+
+	char *utf8 = text ? mono_string_to_utf8(text) : nullptr;
+	if (!utf8) return -1;
+
+	String msg(utf8);
+	mono_free(utf8);
+
+	Error err = _ws_global_peer->send_text(msg);
+	if (err == OK) _ws_send_count++;
+	return (int32_t)err;
+}
+
+// Send prefixed text: builds "prefix<count>" in C++ (no string ops in C#).
+// Increments internal send counter automatically. Returns Error code.
+static int32_t godot_icall_WebSocket_SendPrefixedInt(MonoString *prefix, int32_t value) {
+	if (!_ws_global_peer) return -1;
+
+	char *utf8 = prefix ? mono_string_to_utf8(prefix) : nullptr;
+	char buf[32];
+	snprintf(buf, sizeof(buf), "%d", value);
+	String msg;
+	if (utf8) {
+		msg = String(utf8) + String(buf);
+		mono_free(utf8);
+	} else {
+		msg = String(buf);
+	}
+
+	Error err = _ws_global_peer->send_text(msg);
+	if (err == OK) _ws_send_count++;
+	printf("[Mono] WS send_prefixed_int => %s (err=%d)\n", msg.utf8().get_data(), (int)err);
+	fflush(stdout);
+	return (int32_t)err;
+}
+
+// Get send/recv counts (safe - returns int only, no string).
+static int32_t godot_icall_WebSocket_GetSendCount() {
+	return _ws_send_count;
+}
+static int32_t godot_icall_WebSocket_GetRecvCount() {
+	return _ws_recv_count;
+}
+
+// Append last received message to debug UI (all done in C++ - no string to C#).
+static void godot_icall_WebSocket_ShowLastMessage() {
+	if (_ws_last_message.is_empty()) return;
+	_g_debug_lines.append(_ws_last_message);
+	while (_g_debug_lines.size() > MAX_DEBUG_LINES) {
+		_g_debug_lines.remove_at(0);
+	}
+	_refresh_debug_label();
+}
+
+// Get the number of available packets (messages)
+static int32_t godot_icall_WebSocket_GetPacketCount() {
+	if (!_ws_global_peer) return 0;
+	return _ws_global_peer->get_available_packet_count();
+}
+
+// Close the WebSocket connection
+static void godot_icall_WebSocket_Close() {
+	if (!_ws_global_peer) return;
+	_ws_global_peer->close();
+}
+
 void godot_register_icalls() {
 	// All internalcalls are declared in Godot.Bridge (matching our compiled GodotSharp.dll)
 	mono_add_internal_call("Godot.Bridge::godot_icall_GD_Print", (const void *)godot_icall_GD_Print);
@@ -521,6 +901,35 @@ void godot_register_icalls() {
 	mono_add_internal_call("Godot.Bridge::godot_icall_Input_IsMouseButtonPressed", (const void *)godot_icall_Input_IsMouseButtonPressed);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Input_GetMousePosition", (const void *)godot_icall_Input_GetMousePosition);
 
-	printf("[Mono] Registered %d internal calls (Godot.Bridge::*).\n", 34);
+	// WASM-safe icalls (bypass Mono WASM interpreter string/int bugs)
+	mono_add_internal_call("Godot.Bridge::godot_icall_Int_ToString", (const void *)godot_icall_Int_ToString);
+	mono_add_internal_call("Godot.Bridge::godot_icall_String_ConcatInt", (const void *)godot_icall_String_ConcatInt);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Label_SetFpsText", (const void *)godot_icall_Label_SetFpsText);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Object_SetIntText", (const void *)godot_icall_Object_SetIntText);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Engine_GetFps", (const void *)godot_icall_Engine_GetFps);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Label_SetPrefixedInt", (const void *)godot_icall_Label_SetPrefixedInt);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Label_AppendLog", (const void *)godot_icall_Label_AppendLog);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Control_SetPosition", (const void *)godot_icall_Control_SetPosition);
+
+	// WebSocket icalls (global pointer model - no pointer passing through icall boundary)
+	mono_add_internal_call("Godot.Bridge::godot_icall_WebSocket_Init", (const void *)godot_icall_WebSocket_Init);
+	mono_add_internal_call("Godot.Bridge::godot_icall_WebSocket_PollAndGetState", (const void *)godot_icall_WebSocket_PollAndGetState);
+	mono_add_internal_call("Godot.Bridge::godot_icall_WebSocket_Poll", (const void *)godot_icall_WebSocket_Poll);
+	mono_add_internal_call("Godot.Bridge::godot_icall_WebSocket_GetState", (const void *)godot_icall_WebSocket_GetState);
+	mono_add_internal_call("Godot.Bridge::godot_icall_WebSocket_SendText", (const void *)godot_icall_WebSocket_SendText);
+	mono_add_internal_call("Godot.Bridge::godot_icall_WebSocket_SendPrefixedInt", (const void *)godot_icall_WebSocket_SendPrefixedInt);
+	mono_add_internal_call("Godot.Bridge::godot_icall_WebSocket_GetSendCount", (const void *)godot_icall_WebSocket_GetSendCount);
+	mono_add_internal_call("Godot.Bridge::godot_icall_WebSocket_GetRecvCount", (const void *)godot_icall_WebSocket_GetRecvCount);
+	mono_add_internal_call("Godot.Bridge::godot_icall_WebSocket_ShowLastMessage", (const void *)godot_icall_WebSocket_ShowLastMessage);
+	mono_add_internal_call("Godot.Bridge::godot_icall_WebSocket_GetPacketCount", (const void *)godot_icall_WebSocket_GetPacketCount);
+	mono_add_internal_call("Godot.Bridge::godot_icall_WebSocket_Close", (const void *)godot_icall_WebSocket_Close);
+
+	// Debug UI icalls (global pointer model - no pointer passing, no C# string ops)
+	mono_add_internal_call("Godot.Bridge::godot_icall_DebugUi_Init", (const void *)godot_icall_DebugUi_Init);
+	mono_add_internal_call("Godot.Bridge::godot_icall_DebugUi_Clear", (const void *)godot_icall_DebugUi_Clear);
+	mono_add_internal_call("Godot.Bridge::godot_icall_DebugUi_AddLine", (const void *)godot_icall_DebugUi_AddLine);
+	mono_add_internal_call("Godot.Bridge::godot_icall_DebugUi_AddLineInt", (const void *)godot_icall_DebugUi_AddLineInt);
+
+	printf("[Mono] Registered all internal calls (Godot.Bridge::*).\n");
 	fflush(stdout);
 }

@@ -1510,6 +1510,81 @@ static int32_t godot_icall_Test_BclAsyncTest() {
 	return 1;
 }
 
+// GC stress test: create count nodes, add them as children of a parent node,
+// then remove and free them all. Returns 1 if all operations succeeded.
+// This verifies that the GC bridge correctly tracks RefCounted/Object
+// references across bulk creation and destruction cycles.
+static int32_t godot_icall_Test_GcStressTest(int32_t count) {
+	printf("[Test] GcStressTest: creating %d nodes...\n", (int)count);
+	fflush(stdout);
+
+	// Get the scene tree root to attach nodes to
+	SceneTree *tree = Object::cast_to<SceneTree>(OS::get_singleton()->get_main_loop());
+	if (!tree) {
+		printf("[Test] GcStressTest: no scene tree\n");
+		return 0;
+	}
+	Node *root = tree->get_root();
+	if (!root) {
+		printf("[Test] GcStressTest: no root node\n");
+		return 0;
+	}
+
+	// Create a container parent
+	Node *container = memnew(Node);
+	container->set_name("GcStressContainer");
+	root->add_child(container);
+
+	// Phase 1: Bulk create
+	LocalVector<Node *> nodes;
+	nodes.reserve(count);
+	for (int i = 0; i < count; i++) {
+		Node *n = memnew(Node);
+		if (!n) {
+			printf("[Test] GcStressTest: failed to create node %d\n", i);
+			return 0;
+		}
+		container->add_child(n);
+		nodes.push_back(n);
+	}
+
+	int childCount = container->get_child_count();
+	if (childCount != count) {
+		printf("[Test] GcStressTest: child count mismatch: expected %d, got %d\n", (int)count, childCount);
+		// Cleanup
+		for (uint32_t i = 0; i < nodes.size(); i++) {
+			if (nodes[i]) {
+				container->remove_child(nodes[i]);
+				nodes[i]->queue_free();
+			}
+		}
+		container->queue_free();
+		return 0;
+	}
+
+	// Phase 2: Bulk remove and free
+	for (uint32_t i = 0; i < nodes.size(); i++) {
+		container->remove_child(nodes[i]);
+		nodes[i]->queue_free();
+	}
+	nodes.clear();
+
+	// Verify all children removed
+	childCount = container->get_child_count();
+	if (childCount != 0) {
+		printf("[Test] GcStressTest: children remaining after free: %d\n", childCount);
+		container->queue_free();
+		return 0;
+	}
+
+	// Free the container
+	container->queue_free();
+
+	printf("[Test] GcStressTest: %d nodes created and freed successfully\n", (int)count);
+	fflush(stdout);
+	return 1;
+}
+
 // Get the name of the global test object's class.
 static int32_t godot_icall_Test_GetClassCategory(MonoString *className) {
 	// Returns category ID: 1=Node, 2=Control, 3=CanvasItem, 4=Resource, 0=unknown
@@ -1531,6 +1606,214 @@ static void godot_icall_RegisterSyncContext(MonoObject *instance) {
 	if (host) {
 		host->register_sync_context(instance);
 	}
+}
+
+// ============================================================================
+// Reflection icalls: expose ClassDB metadata to C# for runtime introspection.
+// All return strings as newline-separated values to minimize icall count
+// and avoid WASM interpreter string-return signature mismatch issues.
+// ============================================================================
+
+// Get all registered class names as a newline-separated string.
+static MonoString *godot_icall_ClassDB_GetClassList() {
+	LocalVector<StringName> classes;
+	ClassDB::get_class_list(classes);
+	String result;
+	for (uint32_t i = 0; i < classes.size(); i++) {
+		if (i > 0) result += "\n";
+		result += String(classes[i]);
+	}
+	return mono_string_new(mono_domain_get(), result.utf8().get_data());
+}
+
+// Check if a class exists. Returns 1 if true, 0 if false.
+static int32_t godot_icall_ClassDB_ClassExists(MonoString *className) {
+	if (!className) return 0;
+	char *utf8 = mono_string_to_utf8(className);
+	if (!utf8) return 0;
+	StringName name(utf8);
+	mono_free(utf8);
+	return ClassDB::class_exists(name) ? 1 : 0;
+}
+
+// Get the parent class name. Returns empty string if no parent or class not found.
+static MonoString *godot_icall_ClassDB_GetParentClass(MonoString *className) {
+	if (!className) return mono_string_new(mono_domain_get(), "");
+	char *utf8 = mono_string_to_utf8(className);
+	if (!utf8) return mono_string_new(mono_domain_get(), "");
+	StringName name(utf8);
+	mono_free(utf8);
+	StringName parent = ClassDB::get_parent_class(name);
+	return mono_string_new(mono_domain_get(), String(parent).utf8().get_data());
+}
+
+// Check if childClass inherits from parentClass. Returns 1 if true, 0 if false.
+static int32_t godot_icall_ClassDB_IsParentClass(MonoString *childClass, MonoString *parentClass) {
+	if (!childClass || !parentClass) return 0;
+	char *utf8_child = mono_string_to_utf8(childClass);
+	char *utf8_parent = mono_string_to_utf8(parentClass);
+	if (!utf8_child || !utf8_parent) {
+		if (utf8_child) mono_free(utf8_child);
+		if (utf8_parent) mono_free(utf8_parent);
+		return 0;
+	}
+	StringName child(utf8_child);
+	StringName parent(utf8_parent);
+	mono_free(utf8_child);
+	mono_free(utf8_parent);
+	return ClassDB::is_parent_class(child, parent) ? 1 : 0;
+}
+
+// Check if a class can be instantiated. Returns 1 if true, 0 if false.
+static int32_t godot_icall_ClassDB_CanInstantiate(MonoString *className) {
+	if (!className) return 0;
+	char *utf8 = mono_string_to_utf8(className);
+	if (!utf8) return 0;
+	StringName name(utf8);
+	mono_free(utf8);
+	return ClassDB::can_instantiate(name) ? 1 : 0;
+}
+
+// Get all method names for a class as a newline-separated string.
+static MonoString *godot_icall_ClassDB_GetMethodList(MonoString *className) {
+	if (!className) return mono_string_new(mono_domain_get(), "");
+	char *utf8 = mono_string_to_utf8(className);
+	if (!utf8) return mono_string_new(mono_domain_get(), "");
+	StringName name(utf8);
+	mono_free(utf8);
+	List<MethodInfo> methods;
+	ClassDB::get_method_list(name, &methods);
+	String result;
+	int idx = 0;
+	for (const MethodInfo &mi : methods) {
+		if (idx > 0) result += "\n";
+		result += String(mi.name);
+		idx++;
+	}
+	return mono_string_new(mono_domain_get(), result.utf8().get_data());
+}
+
+// Check if a class has a specific method. Returns 1 if true, 0 if false.
+static int32_t godot_icall_ClassDB_HasMethod(MonoString *className, MonoString *methodName) {
+	if (!className || !methodName) return 0;
+	char *utf8_class = mono_string_to_utf8(className);
+	char *utf8_method = mono_string_to_utf8(methodName);
+	if (!utf8_class || !utf8_method) {
+		if (utf8_class) mono_free(utf8_class);
+		if (utf8_method) mono_free(utf8_method);
+		return 0;
+	}
+	StringName cls(utf8_class);
+	StringName mtd(utf8_method);
+	mono_free(utf8_class);
+	mono_free(utf8_method);
+	return ClassDB::has_method(cls, mtd) ? 1 : 0;
+}
+
+// Get the argument count for a method. Returns -1 if method not found.
+static int32_t godot_icall_ClassDB_GetMethodArgCount(MonoString *className, MonoString *methodName) {
+	if (!className || !methodName) return -1;
+	char *utf8_class = mono_string_to_utf8(className);
+	char *utf8_method = mono_string_to_utf8(methodName);
+	if (!utf8_class || !utf8_method) {
+		if (utf8_class) mono_free(utf8_class);
+		if (utf8_method) mono_free(utf8_method);
+		return -1;
+	}
+	StringName cls(utf8_class);
+	StringName mtd(utf8_method);
+	mono_free(utf8_class);
+	mono_free(utf8_method);
+	bool valid = false;
+	int count = ClassDB::get_method_argument_count(cls, mtd, &valid);
+	return valid ? count : -1;
+}
+
+// Get all property names for a class as a newline-separated string.
+static MonoString *godot_icall_ClassDB_GetPropertyList(MonoString *className) {
+	if (!className) return mono_string_new(mono_domain_get(), "");
+	char *utf8 = mono_string_to_utf8(className);
+	if (!utf8) return mono_string_new(mono_domain_get(), "");
+	StringName name(utf8);
+	mono_free(utf8);
+	List<PropertyInfo> props;
+	ClassDB::get_property_list(name, &props);
+	String result;
+	int idx = 0;
+	for (const PropertyInfo &pi : props) {
+		// Skip internal/group properties (only expose user-visible ones)
+		if (pi.usage & (PROPERTY_USAGE_INTERNAL | PROPERTY_USAGE_CATEGORY | PROPERTY_USAGE_GROUP | PROPERTY_USAGE_SUBGROUP)) {
+			continue;
+		}
+		if (!(pi.usage & PROPERTY_USAGE_STORAGE)) {
+			continue;
+		}
+		if (idx > 0) result += "\n";
+		result += String(pi.name);
+		idx++;
+	}
+	return mono_string_new(mono_domain_get(), result.utf8().get_data());
+}
+
+// Check if a class has a specific property. Returns 1 if true, 0 if false.
+static int32_t godot_icall_ClassDB_HasProperty(MonoString *className, MonoString *propName) {
+	if (!className || !propName) return 0;
+	char *utf8_class = mono_string_to_utf8(className);
+	char *utf8_prop = mono_string_to_utf8(propName);
+	if (!utf8_class || !utf8_prop) {
+		if (utf8_class) mono_free(utf8_class);
+		if (utf8_prop) mono_free(utf8_prop);
+		return 0;
+	}
+	StringName cls(utf8_class);
+	StringName prop(utf8_prop);
+	mono_free(utf8_class);
+	mono_free(utf8_prop);
+	return ClassDB::has_property(cls, prop) ? 1 : 0;
+}
+
+// Get all signal names for a class as a newline-separated string.
+static MonoString *godot_icall_ClassDB_GetSignalList(MonoString *className) {
+	if (!className) return mono_string_new(mono_domain_get(), "");
+	char *utf8 = mono_string_to_utf8(className);
+	if (!utf8) return mono_string_new(mono_domain_get(), "");
+	StringName name(utf8);
+	mono_free(utf8);
+	List<MethodInfo> signals;
+	ClassDB::get_signal_list(name, &signals);
+	String result;
+	int idx = 0;
+	for (const MethodInfo &si : signals) {
+		if (idx > 0) result += "\n";
+		result += String(si.name);
+		idx++;
+	}
+	return mono_string_new(mono_domain_get(), result.utf8().get_data());
+}
+
+// Check if a class has a specific signal. Returns 1 if true, 0 if false.
+static int32_t godot_icall_ClassDB_HasSignal(MonoString *className, MonoString *signalName) {
+	if (!className || !signalName) return 0;
+	char *utf8_class = mono_string_to_utf8(className);
+	char *utf8_signal = mono_string_to_utf8(signalName);
+	if (!utf8_class || !utf8_signal) {
+		if (utf8_class) mono_free(utf8_class);
+		if (utf8_signal) mono_free(utf8_signal);
+		return 0;
+	}
+	StringName cls(utf8_class);
+	StringName sig(utf8_signal);
+	mono_free(utf8_class);
+	mono_free(utf8_signal);
+	return ClassDB::has_signal(cls, sig) ? 1 : 0;
+}
+
+// Get the class name of a Godot object instance.
+static MonoString *godot_icall_Object_GetClassName(MonoObject *obj) {
+	if (!obj) return mono_string_new(mono_domain_get(), "");
+	MonoClass *cls = mono_object_get_class(obj);
+	if (!cls) return mono_string_new(mono_domain_get(), "");
+	return mono_string_new(mono_domain_get(), mono_class_get_name(cls));
 }
 
 void godot_register_icalls() {
@@ -1645,6 +1928,7 @@ void godot_register_icalls() {
 	mono_add_internal_call("Godot.Bridge::godot_icall_Test_BclListTest", (const void *)godot_icall_Test_BclListTest);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Test_BclDictTest", (const void *)godot_icall_Test_BclDictTest);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Test_BclAsyncTest", (const void *)godot_icall_Test_BclAsyncTest);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Test_GcStressTest", (const void *)godot_icall_Test_GcStressTest);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Test_Assert", (const void *)godot_icall_Test_Assert);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Test_FinishTest", (const void *)godot_icall_Test_FinishTest);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Test_GetPassCount", (const void *)godot_icall_Test_GetPassCount);
@@ -1653,6 +1937,21 @@ void godot_register_icalls() {
 
 	// Sync context registration (C# -> C++ to register singleton for instance-based pumping)
 	mono_add_internal_call("Godot.Bridge::godot_icall_RegisterSyncContext", (const void *)godot_icall_RegisterSyncContext);
+
+	// Reflection: ClassDB metadata exposure for C# runtime introspection
+	mono_add_internal_call("Godot.Bridge::godot_icall_ClassDB_GetClassList", (const void *)godot_icall_ClassDB_GetClassList);
+	mono_add_internal_call("Godot.Bridge::godot_icall_ClassDB_ClassExists", (const void *)godot_icall_ClassDB_ClassExists);
+	mono_add_internal_call("Godot.Bridge::godot_icall_ClassDB_GetParentClass", (const void *)godot_icall_ClassDB_GetParentClass);
+	mono_add_internal_call("Godot.Bridge::godot_icall_ClassDB_IsParentClass", (const void *)godot_icall_ClassDB_IsParentClass);
+	mono_add_internal_call("Godot.Bridge::godot_icall_ClassDB_CanInstantiate", (const void *)godot_icall_ClassDB_CanInstantiate);
+	mono_add_internal_call("Godot.Bridge::godot_icall_ClassDB_GetMethodList", (const void *)godot_icall_ClassDB_GetMethodList);
+	mono_add_internal_call("Godot.Bridge::godot_icall_ClassDB_HasMethod", (const void *)godot_icall_ClassDB_HasMethod);
+	mono_add_internal_call("Godot.Bridge::godot_icall_ClassDB_GetMethodArgCount", (const void *)godot_icall_ClassDB_GetMethodArgCount);
+	mono_add_internal_call("Godot.Bridge::godot_icall_ClassDB_GetPropertyList", (const void *)godot_icall_ClassDB_GetPropertyList);
+	mono_add_internal_call("Godot.Bridge::godot_icall_ClassDB_HasProperty", (const void *)godot_icall_ClassDB_HasProperty);
+	mono_add_internal_call("Godot.Bridge::godot_icall_ClassDB_GetSignalList", (const void *)godot_icall_ClassDB_GetSignalList);
+	mono_add_internal_call("Godot.Bridge::godot_icall_ClassDB_HasSignal", (const void *)godot_icall_ClassDB_HasSignal);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Object_GetClassName", (const void *)godot_icall_Object_GetClassName);
 
 	printf("[Mono] Registered all internal calls (Godot.Bridge::*).\n");
 	fflush(stdout);

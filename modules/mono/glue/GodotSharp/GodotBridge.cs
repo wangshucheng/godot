@@ -303,6 +303,9 @@ namespace Godot {
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern int godot_icall_Test_BclAsyncTest();
 
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_GcStressTest(int count);
+
         // Assertion framework icalls (WASM-safe: all string/int ops in C++)
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern void godot_icall_Test_Assert(string name, int condition);
@@ -324,5 +327,45 @@ namespace Godot {
         // dispatch via mono_runtime_invoke (WASM interpreter signature mismatch).
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern void godot_icall_RegisterSyncContext(object instance);
+
+        // Reflection: ClassDB metadata exposure
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern string godot_icall_ClassDB_GetClassList();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_ClassDB_ClassExists(string className);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern string godot_icall_ClassDB_GetParentClass(string className);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_ClassDB_IsParentClass(string childClass, string parentClass);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_ClassDB_CanInstantiate(string className);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern string godot_icall_ClassDB_GetMethodList(string className);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_ClassDB_HasMethod(string className, string methodName);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_ClassDB_GetMethodArgCount(string className, string methodName);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern string godot_icall_ClassDB_GetPropertyList(string className);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_ClassDB_HasProperty(string className, string propName);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern string godot_icall_ClassDB_GetSignalList(string className);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_ClassDB_HasSignal(string className, string signalName);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern string godot_icall_Object_GetClassName(object obj);
     }
 }

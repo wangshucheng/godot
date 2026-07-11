@@ -226,6 +226,9 @@ namespace Godot {
         public static int TestBclAsyncTest() {
             return Bridge.godot_icall_Test_BclAsyncTest();
         }
+        public static int TestGcStressTest(int count) {
+            return Bridge.godot_icall_Test_GcStressTest(count);
+        }
         public static void TestAssert(string name, int condition) {
             Bridge.godot_icall_Test_Assert(name, condition);
         }

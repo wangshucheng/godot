@@ -10,6 +10,7 @@
 #include "core/error/error_macros.h"
 #include "core/io/resource_loader.h"
 #include "core/io/resource_saver.h"
+#include "editor/bindings_generator.h"
 
 #ifdef TOOLS_ENABLED
 #include "mono_export_plugin.h"
@@ -55,6 +56,9 @@ void initialize_mono_module(ModuleInitializationLevel p_level) {
 	}
 
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SCENE) {
+		// Handle BindingsGenerator command-line args (--generate-csharp-bindings)
+		BindingsGenerator::handle_cmdline_args(OS::get_singleton()->get_cmdline_args());
+
 		if (mono_host) {
 			List<String> cmdline_args = OS::get_singleton()->get_cmdline_args();
 			bool run_test = false;

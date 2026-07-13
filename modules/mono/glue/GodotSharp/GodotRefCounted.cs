@@ -14,7 +14,7 @@ namespace Godot {
         // Strong GCHandle prevents C# wrapper from being GC'd until Dispose is called.
         // Users MUST call Dispose explicitly (same discipline as C++ Ref<T>).
 
-        public new void Dispose() {
+        public override void Dispose() {
             Dispose(true);
             GC.SuppressFinalize(this);
         }
@@ -37,7 +37,7 @@ namespace Godot {
         }
 
         // Free() is not used for RefCounted - use Dispose() instead
-        public new void Free() {
+        public override void Free() {
             Dispose();
         }
     }

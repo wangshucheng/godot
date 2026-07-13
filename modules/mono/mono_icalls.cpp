@@ -133,18 +133,22 @@ static MonoObject *godot_icall_Object_Call(intptr_t native_ptr, MonoString *p_me
 
 	int argcount = 0;
 	const Variant **args = nullptr;
+	Vector<Variant> arg_variants;
+	Vector<const Variant *> arg_ptrs;
 
 	if (p_args) {
-		uintptr_t iter = 0;
 		argcount = (int)mono_array_length(p_args);
 		if (argcount > 0) {
-			args = (const Variant **)alloca(sizeof(const Variant *) * argcount);
+			arg_variants.resize(argcount);
+			arg_ptrs.resize(argcount);
+			Variant *variants_buf = arg_variants.ptrw();
+			const Variant **ptrs_buf = arg_ptrs.ptrw();
 			for (int i = 0; i < argcount; i++) {
 				MonoObject *arg = mono_array_get(p_args, MonoObject *, i);
-				Variant *v = (Variant *)alloca(sizeof(Variant));
-				*v = mono_object_to_variant(arg);
-				args[i] = v;
+				variants_buf[i] = mono_object_to_variant(arg);
+				ptrs_buf[i] = &variants_buf[i];
 			}
+			args = ptrs_buf;
 		}
 	}
 
@@ -331,16 +335,21 @@ static MonoObject *godot_icall_Callable_Call(intptr_t p_callable_ptr, MonoArray 
 
 	int argcount = 0;
 	const Variant **args = nullptr;
+	Vector<Variant> arg_variants;
+	Vector<const Variant *> arg_ptrs;
 	if (p_args) {
 		argcount = (int)mono_array_length(p_args);
 		if (argcount > 0) {
-			args = (const Variant **)alloca(sizeof(const Variant *) * argcount);
+			arg_variants.resize(argcount);
+			arg_ptrs.resize(argcount);
+			Variant *variants_buf = arg_variants.ptrw();
+			const Variant **ptrs_buf = arg_ptrs.ptrw();
 			for (int i = 0; i < argcount; i++) {
 				MonoObject *arg = mono_array_get(p_args, MonoObject *, i);
-				Variant *v = (Variant *)alloca(sizeof(Variant));
-				*v = mono_object_to_variant(arg);
-				args[i] = v;
+				variants_buf[i] = mono_object_to_variant(arg);
+				ptrs_buf[i] = &variants_buf[i];
 			}
+			args = ptrs_buf;
 		}
 	}
 
@@ -411,16 +420,21 @@ static void godot_icall_Object_EmitSignal(intptr_t p_native_ptr, MonoString *p_s
 
 	int argcount = 0;
 	const Variant **args = nullptr;
+	Vector<Variant> arg_variants;
+	Vector<const Variant *> arg_ptrs;
 	if (p_args) {
 		argcount = (int)mono_array_length(p_args);
 		if (argcount > 0) {
-			args = (const Variant **)alloca(sizeof(const Variant *) * argcount);
+			arg_variants.resize(argcount);
+			arg_ptrs.resize(argcount);
+			Variant *variants_buf = arg_variants.ptrw();
+			const Variant **ptrs_buf = arg_ptrs.ptrw();
 			for (int i = 0; i < argcount; i++) {
 				MonoObject *arg = mono_array_get(p_args, MonoObject *, i);
-				Variant *v = (Variant *)alloca(sizeof(Variant));
-				*v = mono_object_to_variant(arg);
-				args[i] = v;
+				variants_buf[i] = mono_object_to_variant(arg);
+				ptrs_buf[i] = &variants_buf[i];
 			}
+			args = ptrs_buf;
 		}
 	}
 
@@ -1180,6 +1194,11 @@ static int32_t godot_icall_Test_IsWebPlatform() {
 #ifdef WEB_ENABLED
 	return 1;
 #else
+	// Fallback: check OS name at runtime (WASM template may not define WEB_ENABLED)
+	String os_name = OS::get_singleton()->get_name();
+	if (os_name == "Web") {
+		return 1;
+	}
 	return 0;
 #endif
 }

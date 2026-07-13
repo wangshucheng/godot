@@ -89,20 +89,27 @@ namespace Godot {
         }
 
         public void Dispose() {
-            if (!disposed) {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        protected virtual void Dispose(bool disposing) {
+            if (disposed) return;
+
+            if (disposing) {
                 if (NativePtr != IntPtr.Zero) {
                     Bridge.godot_icall_Callable_Free(NativePtr);
                     NativePtr = IntPtr.Zero;
                 }
-                disposed = true;
             }
-            GC.SuppressFinalize(this);
+            // When disposing==false (finalizer), do not call icall -
+            // it may be unsafe during runtime shutdown.
+
+            disposed = true;
         }
 
         ~Callable() {
-            if (!disposed && NativePtr != IntPtr.Zero) {
-                Bridge.godot_icall_Callable_Free(NativePtr);
-            }
+            Dispose(false);
         }
     }
 }

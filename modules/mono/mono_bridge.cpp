@@ -144,8 +144,6 @@ MonoObject *managed_get_or_create(Object *p_obj, MonoClass *p_class) {
 	MonoObject *exc = nullptr;
 	if (ctor) {
 		mono_runtime_invoke(ctor, cs_obj, args, &exc);
-	} else {
-		mono_runtime_object_init(cs_obj);
 	}
 	if (exc) {
 		char *msg = mono_string_to_utf8(mono_object_to_string(exc, nullptr));

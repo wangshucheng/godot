@@ -625,16 +625,6 @@ MonoObject *CSharpInstance::invoke_method(MonoMethod *p_method, const Variant **
 		return nullptr;
 	}
 
-	// Log every method invocation to trace signature mismatch errors.
-	{
-		const char *mname = mono_method_get_name(p_method);
-		MonoClass *decl_class = mono_method_get_class(p_method);
-		const char *dname = decl_class ? mono_class_get_name(decl_class) : "?";
-		printf("[Mono] invoke_method: '%s' (declared in '%s', argc=%d)\n",
-			   mname ? mname : "?", dname, p_argcount);
-		fflush(stdout);
-	}
-
 	MonoDomain *domain = mono_domain_get();
 	MonoMethodSignature *sig = mono_method_signature(p_method);
 	int param_count = mono_signature_get_param_count(sig);
@@ -1176,15 +1166,9 @@ void CSharpLanguage::reload_all_pending_scripts() {
 }
 
 void CSharpLanguage::frame() {
-	printf("[Mono] frame() start\n");
-	fflush(stdout);
-
 	if (MonoHost::get_singleton()) {
 		MonoHost::get_singleton()->pump_sync_context();
 	}
-
-	printf("[Mono] frame() end\n");
-	fflush(stdout);
 
 #ifdef TOOLS_ENABLED
 	if (build_pending && Engine::get_singleton() && Engine::get_singleton()->is_editor_hint()) {

@@ -378,8 +378,5 @@ def configure(env: "SConsEnvironment"):
     # We also only use WebGL2, and changing context version is not widely supported anyway.
     env.Append(LINKFLAGS=["-sGL_WORKAROUND_SAFARI_GETCONTEXT_BUG=0"])
 
-    # Allow multiple definitions for Mono static libraries (which may duplicate libc symbols).
-    env.Append(LINKFLAGS=["--allow-multiple-definition"])
-
     # Disable GDScript LSP (as the Web platform is not compatible with TCP).
     env.Append(CPPDEFINES=["GDSCRIPT_NO_LSP"])

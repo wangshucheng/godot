@@ -13,6 +13,7 @@ namespace Godot {
         private object[] _result;
         private Callable _callable;
         private Exception _exception;
+        private readonly object _lock = new object();
 
         public SignalAwaiter(Object source, string signal) {
             _source = source;
@@ -29,15 +30,20 @@ namespace Godot {
         }
 
         private void OnSignalCallback(object[] args) {
-            _isCompleted = true;
-            _result = args ?? new object[0];
-            if (_callable != null) {
-                _callable.Dispose();
-                _callable = null;
-            }
-            if (_continuation != null) {
-                var cont = _continuation;
+            Action cont = null;
+            lock (_lock) {
+                if (_isCompleted)
+                    return;
+                _isCompleted = true;
+                _result = args ?? new object[0];
+                if (_callable != null) {
+                    _callable.Dispose();
+                    _callable = null;
+                }
+                cont = _continuation;
                 _continuation = null;
+            }
+            if (cont != null) {
                 var ctx = SynchronizationContext.Current;
                 if (ctx != null && ctx is GodotSynchronizationContext) {
                     ctx.Post(_ => cont(), null);
@@ -50,10 +56,16 @@ namespace Godot {
         public bool IsCompleted => _isCompleted;
 
         public void OnCompleted(Action continuation) {
-            if (_isCompleted) {
+            bool invokeImmediately = false;
+            lock (_lock) {
+                if (_isCompleted) {
+                    invokeImmediately = true;
+                } else {
+                    _continuation = continuation;
+                }
+            }
+            if (invokeImmediately) {
                 continuation();
-            } else {
-                _continuation = continuation;
             }
         }
 

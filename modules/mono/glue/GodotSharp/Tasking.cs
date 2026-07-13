@@ -56,24 +56,60 @@ namespace Godot {
         }
 
         public static Task Delay(int millisecondsDelay) {
+            if (millisecondsDelay <= 0) return Task.CompletedTask;
+
             if (Platform.IsSingleThreaded) {
-                throw new PlatformNotSupportedException(
-                    "Task.Delay is not supported in single-threaded WASM mode. " +
-                    "Use await source.ToSignal(source, signal) for signal-based waiting instead.");
+                // Attempt BCL Task.Delay first. On Mono WASM, this typically
+                // works via the runtime's browser timer bridge.
+                try {
+                    return Task.Delay(millisecondsDelay);
+                } catch (Exception) {
+                    // BCL timer unavailable; fall through to frame-driven approach.
+                }
+
+                // Frame-driven delay via GodotSynchronizationContext. The check
+                // re-posts each frame until the target time is reached.
+                var ctx = SynchronizationContext.Current as GodotSynchronizationContext
+                          ?? GodotSynchronizationContext.Instance;
+                if (ctx != null) {
+                    var tcs = new TaskCompletionSource<bool>();
+                    var target = DateTime.UtcNow.AddMilliseconds(millisecondsDelay);
+                    PostDelayCheck(ctx, tcs, target);
+                    return tcs.Task;
+                }
+
+                // No frame-driven mechanism available. Throw via Task.FromException
+                // so the caller can observe the failure rather than awaiting a task
+                // that never completes (which would hang the application silently).
+                return Task.FromException(
+                    new NotSupportedException(
+                        "Task.Delay is not supported in single-threaded mode without GodotSynchronizationContext."));
             }
             return Task.Delay(millisecondsDelay);
         }
 
+        private static void PostDelayCheck(GodotSynchronizationContext ctx,
+                TaskCompletionSource<bool> tcs, DateTime target) {
+            ctx.Post(_ => {
+                if (tcs.Task.IsCompleted) return;
+                if (DateTime.UtcNow >= target) {
+                    tcs.TrySetResult(true);
+                } else {
+                    PostDelayCheck(ctx, tcs, target);
+                }
+            }, null);
+        }
+
         public static void StartNewThread(ThreadStart start) {
             Platform.ThrowIfNotSupported("System.Threading.Thread.Start");
-            var t = new Thread(start);
+            var t = new System.Threading.Thread(start);
             t.IsBackground = true;
             t.Start();
         }
 
         public static void StartNewThread(ParameterizedThreadStart start, object state) {
             Platform.ThrowIfNotSupported("System.Threading.Thread.Start");
-            var t = new Thread(start);
+            var t = new System.Threading.Thread(start);
             t.IsBackground = true;
             t.Start(state);
         }
@@ -112,10 +148,10 @@ namespace Godot {
         }
 
         private class ThreadPoolTimer : IDisposable {
-            private readonly Timer _timer;
+            private readonly System.Threading.Timer _timer;
 
             public ThreadPoolTimer(TimeSpan interval, Action callback) {
-                _timer = new Timer(_ => callback(), null, interval, interval);
+                _timer = new System.Threading.Timer(_ => callback(), null, interval, interval);
             }
 
             public void Dispose() {

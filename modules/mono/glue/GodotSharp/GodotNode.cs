@@ -68,7 +68,7 @@ namespace Godot {
             Bridge.godot_icall_Node_RemoveChild(NativePtr, child.NativePtr);
         }
 
-        public new void QueueFree() {
+        public override void QueueFree() {
             Bridge.godot_icall_Node_QueueFree(NativePtr);
         }
 
@@ -165,15 +165,15 @@ namespace Godot {
         Num0 = 48, Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9,
         Escape = 4194305,
         Enter = 4194309,
-        Tab = 4194308,
+        Tab = 4194306,
         Left = 4194319,
         Up = 4194320,
         Right = 4194321,
         Down = 4194322,
         Shift = 4194325,
-        Ctrl = 4194324,
-        Alt = 4194323,
-        F1 = 4194328, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12
+        Ctrl = 4194326,
+        Alt = 4194328,
+        F1 = 4194332, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12
     }
 
     public enum MouseButton {

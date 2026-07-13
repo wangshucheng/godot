@@ -44,6 +44,7 @@ private:
 	// static methods, which triggers signature mismatch in WASM interpreter.
 	MonoMethod *sync_context_pump_method = nullptr; // PumpInstance (instance method)
 	MonoObject *sync_context_instance = nullptr;     // GodotSynchronizationContext._instance
+	uint32_t sync_context_gchandle = 0;              // Strong GCHandle pinning sync_context_instance (prevents GC)
 	bool sync_context_lazy_attempted = false;         // Avoid repeated lazy cache attempts
 
 	static MonoHost *singleton;

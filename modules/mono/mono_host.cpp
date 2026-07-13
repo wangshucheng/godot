@@ -96,95 +96,31 @@ Error MonoHost::initialize() {
 	String exe_dir = OS::get_singleton()->get_executable_path().get_base_dir();
 
 #ifdef WEB_ENABLED
-	// On Web, the PCK is mounted at res:// but Mono uses standard C file I/O
-	// which goes through Emscripten's MEMFS, not Godot's FileAccess layer.
-	// We need to extract BCL assemblies from the PCK to the MEMFS so Mono
-	// can access them via fopen().
+	// On Web, BCL is embedded in WASM MEMFS via emcc --embed-file
+	// (SCsub_web.py). GodotSharp.dll and project assembly are in PCK and
+	// must be extracted to MEMFS for Mono to load them (and for hot updates).
 	String bcl_dir = "lib/mono/4.5";
 	String etc_dir = "etc";
 	String assemblies_dir = "lib";
 
-	// Create directories in MEMFS
+	// Create .mono/assemblies directory in MEMFS for project assemblies
 	{
 		Ref<DirAccess> da = DirAccess::create(DirAccess::ACCESS_FILESYSTEM);
 		if (da.is_valid()) {
-			da->make_dir_recursive(bcl_dir);
 			da->make_dir_recursive(".mono/assemblies");
 		}
 	}
 
-	// Extract BCL assemblies from PCK (res://lib/mono/4.5/) to MEMFS
-	{
-		String res_bcl = "res://lib/mono/4.5";
-		Ref<DirAccess> pck_da = DirAccess::open(res_bcl);
-		if (pck_da.is_valid()) {
-			pck_da->list_dir_begin();
-			String file = pck_da->get_next();
-			int count = 0;
-			while (!file.is_empty()) {
-				if (!pck_da->current_is_dir() && file.ends_with(".dll")) {
-					String res_path = res_bcl + "/" + file;
-					String memfs_path = bcl_dir + "/" + file;
-					Ref<FileAccess> src = FileAccess::open(res_path, FileAccess::READ);
-					if (src.is_valid()) {
-						Vector<uint8_t> data;
-						data.resize(src->get_length());
-						src->get_buffer(data.ptrw(), data.size());
-						Ref<FileAccess> dst = FileAccess::open(memfs_path, FileAccess::WRITE);
-						if (dst.is_valid()) {
-							dst->store_buffer(data.ptr(), data.size());
-							count++;
-						}
-					}
-				}
-				file = pck_da->get_next();
-			}
-			pck_da->list_dir_end();
-			printf("[Mono] Extracted %d BCL assemblies to MEMFS\n", count);
-			fflush(stdout);
-		} else {
-			ERR_PRINT("[Mono] Cannot open res://lib/mono/4.5 in PCK");
-		}
+	// Verify BCL is available in WASM MEMFS (embedded at build time)
+	if (!FileAccess::exists(bcl_dir + "/mscorlib.dll")) {
+		ERR_PRINT(String("[Mono] mscorlib.dll not found at " + bcl_dir +
+		                 " — BCL embedding may have failed in SCsub_web.py").utf8().get_data());
+	} else {
+		printf("[Mono] BCL available in WASM MEMFS at %s\n", bcl_dir.utf8().get_data());
+		fflush(stdout);
 	}
 
-	// Extract Facades subdirectory (contains netstandard.dll and other facade assemblies)
-	{
-		String res_facades = "res://lib/mono/4.5/Facades";
-		String memfs_facades = bcl_dir + "/Facades";
-		Ref<DirAccess> pck_da = DirAccess::open(res_facades);
-		if (pck_da.is_valid()) {
-			// Create the Facades directory in MEMFS
-			Ref<DirAccess> memfs_da = DirAccess::create(DirAccess::ACCESS_FILESYSTEM);
-			if (memfs_da.is_valid()) {
-				memfs_da->make_dir_recursive(memfs_facades);
-			}
-			pck_da->list_dir_begin();
-			String file = pck_da->get_next();
-			int count = 0;
-			while (!file.is_empty()) {
-				if (!pck_da->current_is_dir() && file.ends_with(".dll")) {
-					String res_path = res_facades + "/" + file;
-					String memfs_path = memfs_facades + "/" + file;
-					Ref<FileAccess> src = FileAccess::open(res_path, FileAccess::READ);
-					if (src.is_valid()) {
-						Vector<uint8_t> data;
-						data.resize(src->get_length());
-						src->get_buffer(data.ptrw(), data.size());
-						Ref<FileAccess> dst = FileAccess::open(memfs_path, FileAccess::WRITE);
-						if (dst.is_valid()) {
-							dst->store_buffer(data.ptr(), data.size());
-							count++;
-						}
-					}
-				}
-				file = pck_da->get_next();
-			}
-			pck_da->list_dir_end();
-			printf("[Mono] Extracted %d Facades assemblies to MEMFS\n", count);
-			fflush(stdout);
-		}}
-
-	// Also extract GodotSharp.dll and project assembly to MEMFS
+	// Extract GodotSharp.dll from PCK to MEMFS (NOT in WASM — for hot updates)
 	{
 		const char *extra_asms[] = {
 			"res://.mono/assemblies/GodotSharp.dll",
@@ -209,7 +145,7 @@ Error MonoHost::initialize() {
 		}
 	}
 
-	// Extract project assembly
+	// Extract project assembly from PCK to MEMFS (for hot updates)
 	{
 		String project_name = "CSharpTest";
 		if (ProjectSettings::get_singleton()) {
@@ -231,12 +167,6 @@ Error MonoHost::initialize() {
 		}
 	}
 
-	if (!FileAccess::exists(bcl_dir + "/mscorlib.dll")) {
-		ERR_PRINT(String("[Mono] mscorlib.dll not found at " + bcl_dir).utf8().get_data());
-	}
-
-	printf("[Mono] Setting mono_dirs: assemblies=%s, etc=%s\n", assemblies_dir.utf8().get_data(), etc_dir.utf8().get_data());
-	fflush(stdout);
 	mono_set_dirs(assemblies_dir.utf8().get_data(), etc_dir.utf8().get_data());
 
 	String search_path = bcl_dir + String(":") + String(".mono/assemblies") + String(":") + bcl_dir + "/Facades";
@@ -291,15 +221,22 @@ Error MonoHost::initialize() {
 	String godotsharp_api_debug = exe_dir.path_join("GodotSharp").path_join("Api").path_join("Debug");
 	String godotsharp_api_release = exe_dir.path_join("GodotSharp").path_join("Api").path_join("Release");
 	String godotsharp_tools = exe_dir.path_join("GodotSharp").path_join("Tools");
-	String search_path = bcl_dir + String(";") + exe_dir;
+// Mono accepts both ';' and ':' as separators in mono_set_assemblies_path on
+// all platforms, but the MONO_PATH environment variable is platform-specific.
+#ifdef WINDOWS_ENABLED
+	const char *path_sep = ";";
+#else
+	const char *path_sep = ":";
+#endif
+	String search_path = bcl_dir + String(path_sep) + exe_dir;
 	if (DirAccess::exists(godotsharp_api_debug)) {
-		search_path = search_path + ";" + godotsharp_api_debug;
+		search_path = search_path + path_sep + godotsharp_api_debug;
 	}
 	if (DirAccess::exists(godotsharp_api_release)) {
-		search_path = search_path + ";" + godotsharp_api_release;
+		search_path = search_path + path_sep + godotsharp_api_release;
 	}
 	if (DirAccess::exists(godotsharp_tools)) {
-		search_path = search_path + ";" + godotsharp_tools;
+		search_path = search_path + path_sep + godotsharp_tools;
 	}
 	mono_set_assemblies_path(search_path.utf8().get_data());
 
@@ -313,7 +250,9 @@ Error MonoHost::initialize() {
 	printf("[Mono] Initializing C# / Mono runtime...\n");
 	fflush(stdout);
 
-	// Enable Mono trace logging for type loading to debug mono_class_init failures
+	// Enable Mono trace logging for type loading to debug mono_class_init failures.
+	// Wrapped in DEBUG_ENABLED to avoid excessive logging in release builds.
+#ifdef DEBUG_ENABLED
 	mono_trace_set_level_string("debug");
 	mono_trace_set_mask_string("type");
 	// Set custom log handler to capture Mono trace output
@@ -323,6 +262,7 @@ Error MonoHost::initialize() {
 	}, nullptr);
 	printf("[Mono] Trace logging enabled (level=debug, mask=type)\n");
 	fflush(stdout);
+#endif
 
 #ifdef MONO_INTERP_MODE
 	// WASM doesn't support JIT compilation. Use interpreter mode instead.
@@ -639,6 +579,14 @@ void MonoHost::cache_sync_context_method() {
 	// Cache the instance method and the instance object.
 	sync_context_pump_method = mono_class_get_method_from_name(sync_ctx_class, "PumpInstance", 0);
 	if (sync_context_pump_method) {
+		// Pin the instance with a strong GCHandle to prevent GC from
+		// collecting it while C++ holds the raw pointer. The C# static
+		// _instance field also holds a reference, but the C++ side must
+		// not rely on C# GC root tracking alone.
+		if (sync_context_gchandle != 0) {
+			mono_gchandle_free(sync_context_gchandle);
+		}
+		sync_context_gchandle = mono_gchandle_new(instance, false);
 		sync_context_instance = instance;
 		printf("[Mono] GodotSynchronizationContext.PumpInstance() cached for main thread pumping.\n");
 		fflush(stdout);
@@ -658,6 +606,11 @@ void MonoHost::register_sync_context(MonoObject *p_instance) {
 		return;
 	}
 
+	// Free any previous GCHandle before storing the new instance.
+	if (sync_context_gchandle != 0) {
+		mono_gchandle_free(sync_context_gchandle);
+	}
+	sync_context_gchandle = mono_gchandle_new(p_instance, false);
 	sync_context_instance = p_instance;
 	sync_context_pump_method = pump_method;
 	printf("[Mono] Sync context registered for instance-based pumping.\n");
@@ -704,6 +657,10 @@ void MonoHost::shutdown() {
 	mono_aot_shutdown();
 
 	sync_context_pump_method = nullptr;
+	if (sync_context_gchandle != 0) {
+		mono_gchandle_free(sync_context_gchandle);
+		sync_context_gchandle = 0;
+	}
 	sync_context_instance = nullptr;
 	sync_context_lazy_attempted = false;
 

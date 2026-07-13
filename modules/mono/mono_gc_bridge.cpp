@@ -3,6 +3,7 @@
 #include "core/error/error_macros.h"
 #include <cstdio>
 #include <cstdint>
+#include <mutex>
 
 namespace mono_gc_bridge {
 
@@ -18,6 +19,9 @@ static HashMap<uint32_t, Object *> managed_to_native;
 
 // Track RefCounted bindings separately (strong GCHandle + reference())
 static HashSet<RefCounted *> refcounted_bindings;
+
+// Mutex protecting all global HashMap/HashSet access (thread safety).
+static std::mutex gc_bridge_mutex;
 
 static MonoClassField *find_nativeptr_field(MonoClass *p_klass) {
 	for (MonoClass *k = p_klass; k; k = mono_class_get_parent(k)) {
@@ -51,6 +55,7 @@ void init(MonoDomain *p_domain) {
 }
 
 void shutdown() {
+	std::lock_guard<std::mutex> lock(gc_bridge_mutex);
 	for (auto &pair : native_to_managed) {
 		mono_gchandle_free(pair.value.weak_gchandle);
 	}
@@ -64,6 +69,7 @@ void shutdown() {
 
 uint32_t tie_managed_to_native(MonoObject *p_cs_obj, Object *p_native_obj, bool p_weak) {
 	if (!p_cs_obj || !p_native_obj) return 0;
+	std::lock_guard<std::mutex> lock(gc_bridge_mutex);
 
 	if (native_to_managed.has(p_native_obj)) {
 		uint32_t old = native_to_managed[p_native_obj].weak_gchandle;
@@ -95,6 +101,7 @@ uint32_t tie_managed_to_native(MonoObject *p_cs_obj, Object *p_native_obj, bool 
 
 uint32_t tie_managed_to_refcounted(MonoObject *p_cs_obj, RefCounted *p_native_obj) {
 	if (!p_cs_obj || !p_native_obj) return 0;
+	std::lock_guard<std::mutex> lock(gc_bridge_mutex);
 
 	// If there's an existing binding, release it first
 	if (native_to_managed.has((Object *)p_native_obj)) {
@@ -128,34 +135,57 @@ uint32_t tie_managed_to_refcounted(MonoObject *p_cs_obj, RefCounted *p_native_ob
 
 void release_refcounted_binding(RefCounted *p_obj) {
 	if (!p_obj) return;
-	if (!refcounted_bindings.has(p_obj)) return;
-	if (!native_to_managed.has((Object *)p_obj)) return;
 
-	ObjectBinding &binding = native_to_managed[(Object *)p_obj];
+	// Phase 1: under lock, collect binding data and remove from maps.
+	// We must NOT call unreference()/memdelete() under the lock because
+	// the destructor chain may trigger callbacks (notification, signals,
+	// script callbacks) that re-enter the GC bridge and would deadlock.
+	MonoObject *cs_target = nullptr;
+	MonoClassField *nativeptr_field = nullptr;
+	MonoClassField *gch_field = nullptr;
+	uint32_t gch_to_free = 0;
+	bool should_delete = false;
 
-	// Clear C# NativePtr before releasing (prevents dangling pointer access)
-	MonoObject *cs_target = mono_gchandle_get_target(binding.weak_gchandle);
-	if (cs_target) {
-		MonoClass *klass = mono_object_get_class(cs_target);
-		MonoClassField *field = find_nativeptr_field(klass);
-		if (field) {
-			intptr_t zero = 0;
-			mono_field_set_value(cs_target, field, &zero);
+	{
+		std::lock_guard<std::mutex> lock(gc_bridge_mutex);
+		if (!refcounted_bindings.has(p_obj)) return;
+		if (!native_to_managed.has((Object *)p_obj)) return;
+
+		ObjectBinding &binding = native_to_managed[(Object *)p_obj];
+
+		// Capture data needed for C# field clearing (outside lock)
+		cs_target = mono_gchandle_get_target(binding.weak_gchandle);
+		if (cs_target) {
+			MonoClass *klass = mono_object_get_class(cs_target);
+			nativeptr_field = find_nativeptr_field(klass);
+			gch_field = find_gchandle_field(klass);
 		}
-		MonoClassField *gch_field = find_gchandle_field(klass);
+
+		gch_to_free = binding.weak_gchandle;
+
+		// Release strong GCHandle and remove from maps
+		mono_gchandle_free(binding.weak_gchandle);
+		managed_to_native.erase(binding.weak_gchandle);
+		native_to_managed.erase((Object *)p_obj);
+		refcounted_bindings.erase(p_obj);
+	}
+
+	// Phase 2: outside lock, clear C# fields and release native reference.
+	// Clear C# NativePtr before releasing (prevents dangling pointer access)
+	if (cs_target) {
+		if (nativeptr_field) {
+			intptr_t zero = 0;
+			mono_field_set_value(cs_target, nativeptr_field, &zero);
+		}
 		if (gch_field) {
 			uint32_t zero_gch = 0;
 			mono_field_set_value(cs_target, gch_field, &zero_gch);
 		}
 	}
 
-	// Release strong GCHandle
-	mono_gchandle_free(binding.weak_gchandle);
-	managed_to_native.erase(binding.weak_gchandle);
-	native_to_managed.erase((Object *)p_obj);
-	refcounted_bindings.erase(p_obj);
-
 	// Release C#'s reference. If refcount reaches 0, delete the object.
+	// This is safe outside the lock - unreference() is thread-safe (atomic),
+	// and memdelete's destructor chain can safely re-enter the GC bridge.
 	if (p_obj->unreference()) {
 		memdelete(p_obj);
 	}
@@ -165,46 +195,70 @@ bool is_refcounted_binding(Object *p_native_obj) {
 	if (!p_native_obj) return false;
 	RefCounted *rc = Object::cast_to<RefCounted>(p_native_obj);
 	if (!rc) return false;
+	std::lock_guard<std::mutex> lock(gc_bridge_mutex);
 	return refcounted_bindings.has(rc);
 }
 
 void notify_native_destroyed(Object *p_obj) {
-	if (!p_obj || !native_to_managed.has(p_obj)) return;
+	if (!p_obj) return;
 
-	ObjectBinding &binding = native_to_managed[p_obj];
+	// Phase 1: under lock, collect binding data and remove from maps.
+	MonoObject *cs_target = nullptr;
+	MonoClassField *nativeptr_field = nullptr;
+	MonoClassField *gch_field = nullptr;
+	uint32_t gch_to_free = 0;
+	bool is_rc_binding = false;
+	RefCounted *rc = nullptr;
 
-	// Check if this is a RefCounted binding
-	RefCounted *rc = Object::cast_to<RefCounted>(p_obj);
-	bool is_rc_binding = (rc && refcounted_bindings.has(rc));
+	{
+		std::lock_guard<std::mutex> lock(gc_bridge_mutex);
+		if (!native_to_managed.has(p_obj)) return;
 
-	MonoObject *cs_target = mono_gchandle_get_target(binding.weak_gchandle);
-	if (cs_target && domain) {
-		MonoClass *klass = mono_object_get_class(cs_target);
-		MonoClassField *field = find_nativeptr_field(klass);
-		if (field) {
-			intptr_t zero = 0;
-			mono_field_set_value(cs_target, field, &zero);
+		ObjectBinding &binding = native_to_managed[p_obj];
+
+		// Check if this is a RefCounted binding
+		rc = Object::cast_to<RefCounted>(p_obj);
+		is_rc_binding = (rc && refcounted_bindings.has(rc));
+
+		// Capture data for C# field clearing (outside lock)
+		cs_target = mono_gchandle_get_target(binding.weak_gchandle);
+		if (cs_target) {
+			MonoClass *klass = mono_object_get_class(cs_target);
+			nativeptr_field = find_nativeptr_field(klass);
+			gch_field = find_gchandle_field(klass);
 		}
-		MonoClassField *gch_field = find_gchandle_field(klass);
+
+		gch_to_free = binding.weak_gchandle;
+
+		mono_gchandle_free(binding.weak_gchandle);
+		managed_to_native.erase(binding.weak_gchandle);
+		native_to_managed.erase(p_obj);
+
+		// If RefCounted binding, remove from tracking set
+		// Note: do NOT call unreference() here - the native is already being destroyed
+		if (is_rc_binding) {
+			refcounted_bindings.erase(rc);
+		}
+	}
+
+	// Phase 2: outside lock, clear C# fields.
+	// Mono API calls are safe here since we no longer hold the mutex.
+	if (cs_target) {
+		if (nativeptr_field) {
+			intptr_t zero = 0;
+			mono_field_set_value(cs_target, nativeptr_field, &zero);
+		}
 		if (gch_field) {
 			uint32_t zero_gch = 0;
 			mono_field_set_value(cs_target, gch_field, &zero_gch);
 		}
 	}
-
-	mono_gchandle_free(binding.weak_gchandle);
-	managed_to_native.erase(binding.weak_gchandle);
-	native_to_managed.erase(p_obj);
-
-	// If RefCounted binding, remove from tracking set
-	// Note: do NOT call unreference() here - the native is already being destroyed
-	if (is_rc_binding) {
-		refcounted_bindings.erase(rc);
-	}
 }
 
 MonoObject *get_managed(Object *p_native) {
-	if (!p_native || !native_to_managed.has(p_native)) return nullptr;
+	if (!p_native) return nullptr;
+	std::lock_guard<std::mutex> lock(gc_bridge_mutex);
+	if (!native_to_managed.has(p_native)) return nullptr;
 	ObjectBinding &binding = native_to_managed[p_native];
 	MonoObject *target = mono_gchandle_get_target(binding.weak_gchandle);
 	if (!target) {
@@ -218,6 +272,7 @@ MonoObject *get_managed(Object *p_native) {
 
 Object *get_native(MonoObject *p_managed) {
 	if (!p_managed) return nullptr;
+	std::lock_guard<std::mutex> lock(gc_bridge_mutex);
 
 	MonoClass *klass = mono_object_get_class(p_managed);
 	MonoClassField *gch_field = find_gchandle_field(klass);
@@ -241,6 +296,7 @@ Object *get_native(MonoObject *p_managed) {
 
 bool is_native_alive(Object *p_native) {
 	if (!p_native) return false;
+	std::lock_guard<std::mutex> lock(gc_bridge_mutex);
 	if (!native_to_managed.has(p_native)) return false;
 	ObjectBinding &binding = native_to_managed[p_native];
 	MonoObject *target = mono_gchandle_get_target(binding.weak_gchandle);

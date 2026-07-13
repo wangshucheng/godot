@@ -51,12 +51,18 @@ namespace Godot {
             if (_initialized) return;
             _initialized = true;
 
-            GodotSynchronizationContext.Install();
-
             try {
                 _flags = (RuntimeFlags)Bridge.godot_icall_Platform_GetRuntimeInfo();
             } catch {
                 _flags = RuntimeFlags.None;
+            }
+
+            // Install sync context only on non-Web platforms.
+            // On Web (WASM interpreter), mono_runtime_invoke in pump_sync_context
+            // triggers function signature mismatch. Web is single-threaded and
+            // doesn't need cross-thread continuation pumping.
+            if ((_flags & RuntimeFlags.WebPlatform) == 0) {
+                GodotSynchronizationContext.Install();
             }
 
             if ((_flags & RuntimeFlags.WebPlatform) != 0) {
@@ -73,7 +79,7 @@ namespace Godot {
         }
 
         private static OSPlatform DetectPlatformFallback() {
-            PlatformID id = Environment.OSVersion.Platform;
+            PlatformID id = System.Environment.OSVersion.Platform;
             switch (id) {
                 case PlatformID.Win32NT:
                 case PlatformID.Win32S:

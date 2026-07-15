@@ -264,15 +264,74 @@ Error MonoHost::initialize() {
 	fflush(stdout);
 #endif
 
-#ifdef MONO_INTERP_MODE
-	// WASM doesn't support JIT compilation. Use interpreter mode instead.
-	// This sequence mirrors the official Mono WASM driver (sdks/wasm/src/driver.c):
-	//   1. Set AOT mode to INTERP_LLVMONLY (sets mono_use_interpreter = TRUE)
-	//   2. Initialize IL generators for marshal/method-builder/SGEN
-	//   3. mono_jit_init_version -> mini_init will call mono_ee_interp_init internally
-	//      (because mono_use_interpreter is TRUE and DISABLE_INTERPRETER is not defined)
-	// NOTE: We must NOT call mono_ee_interp_init ourselves - mini_init does it,
-	// and calling it twice triggers an assertion (g_assert(!interp_init_done)).
+#if defined(MONO_AOT_MODE) && defined(MONO_INTERP_MODE)
+	// ========================================
+	// Hybrid AOT + Interpreter mode (WASM)
+	// AOT-compiled methods run as native code,
+	// uncompiled methods fall back to Interpreter.
+	//
+	// Use MONO_AOT_MODE_INTERP_LLVMONLY (same as pure interpreter mode).
+	// Register AOT modules AFTER jit_init to avoid "not compiled with
+	// --aot=interp" check during runtime init.
+	// GodotSharp.dll load failure ("dependency cannot be found") is
+	// expected because System.Runtime/System.Collections/etc are not
+	// AOT-compiled. The load_godotsharp() call handles this gracefully
+	// (returns false, mono_host continues without managed bindings).
+	// ========================================
+	printf("[Mono] Hybrid AOT mode: AOT + Interpreter fallback (INTERP_LLVMONLY, deferred registration)\n");
+	fflush(stdout);
+
+	// Set AOT mode to INTERP_LLVMONLY (disables JIT, uses interpreter)
+	mono_jit_set_aot_mode(MONO_AOT_MODE_INTERP_LLVMONLY);
+
+	// Initialize IL generators (required for Interpreter fallback)
+	printf("[Mono] Initializing IL generators for Interpreter fallback...\n");
+	fflush(stdout);
+	mono_marshal_ilgen_init();
+	mono_method_builder_ilgen_init();
+	mono_sgen_mono_ilgen_init();
+	printf("[Mono] IL generators initialized.\n");
+	fflush(stdout);
+
+	// Initialize Mono runtime FIRST (no AOT modules registered yet,
+	// so INTERP_LLVMONLY won't enforce --aot=interp flag check)
+	printf("[Mono] Calling mono_jit_init_version (Hybrid AOT)...\n");
+	fflush(stdout);
+	domain = mono_jit_init_version("GodotMonoHybridAOT", "v4.0.30319");
+	if (!domain) {
+		ERR_PRINT("[Mono] Failed to initialize Hybrid AOT runtime (mono_jit_init_version returned NULL)");
+		return FAILED;
+	}
+
+	// Register AOT modules AFTER runtime init.
+	printf("[Mono] Registering AOT modules (post-init)...\n");
+	fflush(stdout);
+	mono_aot_init();
+	mono_aot_register_modules();
+
+#elif defined(MONO_AOT_MODE)
+	// ========================================
+	// Pure Full AOT mode (no Interpreter fallback)
+	// ========================================
+	printf("[Mono] Pure Full AOT mode (no Interpreter fallback)\n");
+	fflush(stdout);
+	mono_jit_set_aot_mode(MONO_AOT_MODE_FULL);
+
+	mono_aot_init();
+	mono_aot_register_modules();
+
+	printf("[Mono] Calling mono_jit_init_version (AOT mode)...\n");
+	fflush(stdout);
+	domain = mono_jit_init_version("GodotMonoAOT", "v4.0.30319");
+	if (!domain) {
+		ERR_PRINT("[Mono] Failed to initialize AOT runtime (mono_jit_init_version returned NULL)");
+		return FAILED;
+	}
+
+#elif defined(MONO_INTERP_MODE)
+	// ========================================
+	// Pure Interpreter mode (existing, WASM default)
+	// ========================================
 	printf("[Mono] Setting AOT mode to INTERP_LLVMONLY...\n");
 	fflush(stdout);
 	mono_jit_set_aot_mode(MONO_AOT_MODE_INTERP_LLVMONLY);
@@ -284,17 +343,7 @@ Error MonoHost::initialize() {
 	mono_sgen_mono_ilgen_init();
 	printf("[Mono] IL generators initialized.\n");
 	fflush(stdout);
-#endif
 
-#ifdef MONO_AOT_MODE
-	printf("[Mono] Calling mono_jit_init_version (AOT mode)...\n");
-	fflush(stdout);
-	domain = mono_jit_init_version("GodotMonoAOT", "v4.0.30319");
-	if (!domain) {
-		ERR_PRINT("[Mono] Failed to initialize AOT runtime (mono_jit_init_version returned NULL)");
-		return FAILED;
-	}
-#elif defined(MONO_INTERP_MODE)
 	printf("[Mono] Calling mono_jit_init_version (interpreter mode)...\n");
 	fflush(stdout);
 	domain = mono_jit_init_version("GodotMonoInterp", "v4.0.30319");
@@ -302,6 +351,7 @@ Error MonoHost::initialize() {
 		ERR_PRINT("[Mono] Failed to initialize interpreter runtime (mono_jit_init_version returned NULL)");
 		return FAILED;
 	}
+
 #else
 	printf("[Mono] Calling mono_jit_init_version (JIT mode)...\n");
 	fflush(stdout);
@@ -314,8 +364,12 @@ Error MonoHost::initialize() {
 	printf("[Mono] mono_jit_init_version succeeded, domain=%p\n", (void *)domain);
 	fflush(stdout);
 
+#ifndef MONO_AOT_MODE
+	// For non-AOT modes (Interpreter/JIT), register AOT modules after runtime init.
+	// In AOT modes, mono_aot_init/register_modules are called before jit_init above.
 	mono_aot_init();
 	mono_aot_register_modules();
+#endif
 
 	mono_bridge::init(domain);
 	mono_gc_bridge::init(domain);
@@ -419,6 +473,10 @@ bool MonoHost::load_godotsharp() {
 
 	printf("[Mono] Loading GodotSharp from: %s\n", gs_path.utf8().get_data());
 	fflush(stdout);
+
+	// GodotSharp and ProjectScripts are NOT in the AOT module table (set to nullptr).
+	// Mono will load them as regular interpreted assemblies — no AOT dependency check.
+	// BCL (mscorlib, System, System.Core) still runs as AOT native code.
 
 	godotsharp_assembly = mono_domain_assembly_open(domain, gs_path.utf8().get_data());
 	if (!godotsharp_assembly) {

@@ -176,6 +176,9 @@ namespace Godot {
         internal static extern void godot_icall_DebugUi_AddLineInt(string prefix, int value);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_DebugUi_AddRow4(string prefix, int a, int b, int c, int d);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern void godot_icall_DebugUi_AddPassFail(string testName, int passed);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
@@ -183,6 +186,19 @@ namespace Godot {
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern int godot_icall_DebugUi_GetLineCount();
+
+        // Game UI icalls - 2048 visual grid (global pointer model, WASM-safe)
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_GameUI_Init();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_GameUI_SetTile(int row, int col, int value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_GameUI_SetScore(int score);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_GameUI_SetStatus(int state);
 
         // Test support icalls - global pointer model (WASM-safe)
         [MethodImpl(MethodImplOptions.InternalCall)]

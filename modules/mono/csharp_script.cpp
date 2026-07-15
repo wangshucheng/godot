@@ -1103,6 +1103,50 @@ MonoAssembly *CSharpLanguage::load_scripts_assembly() {
 void CSharpLanguage::init() {
 	ensure_project_file();
 	load_scripts_assembly();
+
+#ifdef MONO_AOT_MODE
+	// Register generic roots for Full AOT mode.
+	// This forces the runtime to instantiate generic types that may be
+	// accessed via reflection but were not statically detected by the AOT compiler.
+	printf("[Mono] AOT: Registering generic roots...\n");
+	fflush(stdout);
+	{
+		MonoImage *roots_image = nullptr;
+		if (scripts_assembly) {
+			roots_image = mono_assembly_get_image(scripts_assembly);
+		}
+		MonoClass *roots_class = nullptr;
+		if (roots_image) {
+			roots_class = mono_class_from_name(roots_image, "", "GenericRoots");
+		}
+		if (!roots_class && MonoHost::get_singleton() && MonoHost::get_singleton()->get_godotsharp_assembly()) {
+			roots_class = mono_class_from_name(
+				mono_assembly_get_image(MonoHost::get_singleton()->get_godotsharp_assembly()),
+				"", "GenericRoots");
+		}
+		if (roots_class) {
+			MonoMethod *register_method = mono_class_get_method_from_name(
+				roots_class, "Register", 0);
+			if (register_method) {
+				MonoObject *exc = nullptr;
+				mono_runtime_invoke(register_method, nullptr, nullptr, &exc);
+				if (exc) {
+					ERR_PRINT("[Mono] AOT: Exception during generic root registration");
+				} else {
+					printf("[Mono] AOT: Generic roots registered.\n");
+					fflush(stdout);
+				}
+			} else {
+				printf("[Mono] AOT: WARNING: GenericRoots.Register method not found\n");
+				fflush(stdout);
+			}
+		} else {
+			printf("[Mono] AOT: WARNING: GenericRoots class not found in any assembly\n");
+			fflush(stdout);
+		}
+	}
+#endif
+
 #ifdef TOOLS_ENABLED
 	if (Engine::get_singleton() && Engine::get_singleton()->is_editor_hint()) {
 		if (!scripts_assembly) {

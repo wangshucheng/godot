@@ -88,6 +88,9 @@ namespace Godot {
         public static void DebugUiAddLineInt(string prefix, int value) {
             Bridge.godot_icall_DebugUi_AddLineInt(prefix, value);
         }
+        public static void DebugUiAddRow4(string prefix, int a, int b, int c, int d) {
+            Bridge.godot_icall_DebugUi_AddRow4(prefix, a, b, c, d);
+        }
         public static void DebugUiAddPassFail(string testName, bool passed) {
             Bridge.godot_icall_DebugUi_AddPassFail(testName, passed ? 1 : 0);
         }
@@ -96,6 +99,31 @@ namespace Godot {
         }
         public static int DebugUiGetLineCount() {
             return Bridge.godot_icall_DebugUi_GetLineCount();
+        }
+
+        // =============================================
+        // Game UI helpers: 2048 visual grid (WASM-safe).
+        // All operations are void or int return; no string ops in C#.
+        // =============================================
+
+        // Initialize the 4x4 game grid UI. Call once.
+        public static int GameUiInit() {
+            return Bridge.godot_icall_GameUI_Init();
+        }
+
+        // Update a tile's value (row/col 0-3, value 0=empty)
+        public static void GameUiSetTile(int row, int col, int value) {
+            Bridge.godot_icall_GameUI_SetTile(row, col, value);
+        }
+
+        // Update the score display
+        public static void GameUiSetScore(int score) {
+            Bridge.godot_icall_GameUI_SetScore(score);
+        }
+
+        // Set status text: 0=playing, 1=win, 2=gameover
+        public static void GameUiSetStatus(int state) {
+            Bridge.godot_icall_GameUI_SetStatus(state);
         }
 
         // =============================================

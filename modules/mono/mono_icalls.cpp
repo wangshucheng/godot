@@ -15,6 +15,7 @@
 #include "scene/resources/packed_scene.h"
 #include "core/config/engine.h"
 #include "scene/gui/label.h"
+#include "scene/gui/color_rect.h"
 #include "scene/gui/control.h"
 #include "scene/main/scene_tree.h"
 #include "scene/main/canvas_layer.h"
@@ -745,6 +746,190 @@ static void godot_icall_DebugUi_AddLineInt(MonoString *prefix, int32_t value) {
 		_g_debug_lines.remove_at(0);
 	}
 	_refresh_debug_label();
+}
+
+// Append a line: prefix + 4 ints formatted as a grid row (e.g. "[   2][   4][   0][   0]")
+static void godot_icall_DebugUi_AddRow4(MonoString *prefix, int32_t a, int32_t b, int32_t c, int32_t d) {
+	if (!_ensure_debug_label()) return;
+	char *utf8 = prefix ? mono_string_to_utf8(prefix) : nullptr;
+	char buf[80];
+	snprintf(buf, sizeof(buf), "%s[%4d][%4d][%4d][%4d]", utf8 ? utf8 : "", a, b, c, d);
+	if (utf8) mono_free(utf8);
+	_g_debug_lines.append(String(buf));
+	while (_g_debug_lines.size() > MAX_DEBUG_LINES) {
+		_g_debug_lines.remove_at(0);
+	}
+	_refresh_debug_label();
+}
+
+// ============================================================
+// Game UI icalls: WASM-safe 2048 game UI.
+// C++ creates and manages a 4x4 grid of ColorRect + Label tiles.
+// All string/int ops done in C++ to avoid Mono WASM interpreter
+// signature mismatch bugs. C# only passes int parameters.
+// ============================================================
+
+static ColorRect *_g_game_tiles[4][4] = { { nullptr } };
+static Label *_g_game_labels[4][4] = { { nullptr } };
+static Label *_g_game_score_label = nullptr;
+static Label *_g_game_status_label = nullptr;
+static Label *_g_game_title_label = nullptr;
+static CanvasLayer *_g_game_layer = nullptr;
+static bool _g_game_ui_inited = false;
+
+// Get color for a tile value (classic 2048 color scheme)
+static Color _game_tile_color(int value) {
+	if (value == 0) return Color(0.35f, 0.32f, 0.30f, 1.0f);    // empty
+	if (value == 2) return Color(0.93f, 0.89f, 0.85f, 1.0f);    // #EEE4DA
+	if (value == 4) return Color(0.93f, 0.88f, 0.78f, 1.0f);    // #EDE0C8
+	if (value == 8) return Color(0.95f, 0.69f, 0.47f, 1.0f);    // #F2B179
+	if (value == 16) return Color(0.95f, 0.58f, 0.39f, 1.0f);   // #F59563
+	if (value == 32) return Color(0.96f, 0.48f, 0.37f, 1.0f);   // #F67C5F
+	if (value == 64) return Color(0.96f, 0.37f, 0.23f, 1.0f);   // #F65E3B
+	if (value == 128) return Color(0.93f, 0.81f, 0.45f, 1.0f);  // #EDCF72
+	if (value == 256) return Color(0.93f, 0.80f, 0.38f, 1.0f);  // #EDCC61
+	if (value == 512) return Color(0.93f, 0.78f, 0.31f, 1.0f);  // #EDC850
+	if (value == 1024) return Color(0.93f, 0.77f, 0.25f, 1.0f); // #EDC53F
+	if (value == 2048) return Color(0.93f, 0.76f, 0.18f, 1.0f); // #EDC22E
+	return Color(0.0f, 0.0f, 0.0f, 1.0f); // >2048
+}
+
+static Color _game_text_color(int value) {
+	if (value <= 4) return Color(0.47f, 0.43f, 0.39f, 1.0f); // dark text
+	return Color(1.0f, 1.0f, 1.0f, 1.0f); // white text
+}
+
+static int _game_font_size(int value) {
+	if (value < 100) return 42;
+	if (value < 1000) return 36;
+	if (value < 10000) return 28;
+	return 22;
+}
+
+// Init game UI: creates 4x4 grid of tiles + score + status labels
+static int32_t godot_icall_GameUI_Init() {
+	if (_g_game_ui_inited) return 0;
+
+	SceneTree *tree = Object::cast_to<SceneTree>(OS::get_singleton()->get_main_loop());
+	if (!tree) {
+		printf("[Mono] ERROR: Cannot get SceneTree for Game UI\n");
+		fflush(stdout);
+		return -1;
+	}
+	Window *root = tree->get_root();
+	if (!root) return -1;
+
+	CanvasLayer *layer = memnew(CanvasLayer);
+	layer->set_layer(100);
+	root->add_child(layer);
+	_g_game_layer = layer;
+
+	// Background panel
+	ColorRect *bg = memnew(ColorRect);
+	bg->set_position(Vector2(180, 40));
+	bg->set_size(Vector2(480, 480));
+	bg->set_color(Color(0.46f, 0.43f, 0.40f, 1.0f)); // #776E64
+	layer->add_child(bg);
+
+	// Title
+	_g_game_title_label = memnew(Label);
+	_g_game_title_label->set_position(Vector2(180, 8));
+	_g_game_title_label->set_size(Vector2(480, 30));
+	_g_game_title_label->set_horizontal_alignment(HORIZONTAL_ALIGNMENT_CENTER);
+	_g_game_title_label->add_theme_font_size_override("font_size", 28);
+	_g_game_title_label->add_theme_color_override("font_color", Color(1, 1, 1, 1));
+	_g_game_title_label->set_text("2048");
+	layer->add_child(_g_game_title_label);
+
+	// 4x4 grid of tiles
+	float tile_size = 105;
+	float gap = 10;
+	float start_x = 190;
+	float start_y = 50;
+
+	for (int r = 0; r < 4; r++) {
+		for (int c = 0; c < 4; c++) {
+			ColorRect *tile = memnew(ColorRect);
+			float x = start_x + c * (tile_size + gap);
+			float y = start_y + r * (tile_size + gap);
+			tile->set_position(Vector2(x, y));
+			tile->set_size(Vector2(tile_size, tile_size));
+			tile->set_color(_game_tile_color(0));
+			layer->add_child(tile);
+			_g_game_tiles[r][c] = tile;
+
+			Label *lbl = memnew(Label);
+			lbl->set_position(Vector2(x, y));
+			lbl->set_size(Vector2(tile_size, tile_size));
+			lbl->set_horizontal_alignment(HORIZONTAL_ALIGNMENT_CENTER);
+			lbl->set_vertical_alignment(VERTICAL_ALIGNMENT_CENTER);
+			lbl->add_theme_font_size_override("font_size", 42);
+			lbl->add_theme_color_override("font_color", Color(1, 1, 1, 1));
+			lbl->set_text("");
+			layer->add_child(lbl);
+			_g_game_labels[r][c] = lbl;
+		}
+	}
+
+	// Score label
+	_g_game_score_label = memnew(Label);
+	_g_game_score_label->set_position(Vector2(180, 530));
+	_g_game_score_label->set_size(Vector2(480, 35));
+	_g_game_score_label->set_horizontal_alignment(HORIZONTAL_ALIGNMENT_CENTER);
+	_g_game_score_label->add_theme_font_size_override("font_size", 22);
+	_g_game_score_label->add_theme_color_override("font_color", Color(1, 1, 1, 1));
+	_g_game_score_label->set_text("Score: 0");
+	layer->add_child(_g_game_score_label);
+
+	// Status label
+	_g_game_status_label = memnew(Label);
+	_g_game_status_label->set_position(Vector2(180, 570));
+	_g_game_status_label->set_size(Vector2(480, 30));
+	_g_game_status_label->set_horizontal_alignment(HORIZONTAL_ALIGNMENT_CENTER);
+	_g_game_status_label->add_theme_font_size_override("font_size", 18);
+	_g_game_status_label->add_theme_color_override("font_color", Color(0.9f, 0.9f, 0.5f, 1.0f));
+	_g_game_status_label->set_text("Arrows: move   R: restart");
+	layer->add_child(_g_game_status_label);
+
+	_g_game_ui_inited = true;
+	printf("[Mono] Game UI created (4x4 grid + score + status)\n");
+	fflush(stdout);
+	return 0;
+}
+
+// Set a tile's value (updates color + text)
+static void godot_icall_GameUI_SetTile(int32_t row, int32_t col, int32_t value) {
+	if (row < 0 || row >= 4 || col < 0 || col >= 4) return;
+	if (!_g_game_tiles[row][col] || !_g_game_labels[row][col]) return;
+
+	_g_game_tiles[row][col]->set_color(_game_tile_color(value));
+	_g_game_labels[row][col]->add_theme_color_override("font_color", _game_text_color(value));
+	_g_game_labels[row][col]->add_theme_font_size_override("font_size", _game_font_size(value));
+
+	if (value == 0) {
+		_g_game_labels[row][col]->set_text("");
+	} else {
+		char buf[16];
+		snprintf(buf, sizeof(buf), "%d", value);
+		_g_game_labels[row][col]->set_text(buf);
+	}
+}
+
+// Set the score
+static void godot_icall_GameUI_SetScore(int32_t score) {
+	if (!_g_game_score_label) return;
+	char buf[32];
+	snprintf(buf, sizeof(buf), "Score: %d", score);
+	_g_game_score_label->set_text(buf);
+}
+
+// Set the status text (0=playing, 1=win, 2=gameover)
+static void godot_icall_GameUI_SetStatus(int32_t state) {
+	if (!_g_game_status_label) return;
+	const char *text = "Arrows: move   R: restart";
+	if (state == 1) text = "YOU WIN! Press R for new game";
+	else if (state == 2) text = "GAME OVER! Press R to restart";
+	_g_game_status_label->set_text(text);
 }
 
 // ============================================================
@@ -1901,9 +2086,16 @@ void godot_register_icalls() {
 	mono_add_internal_call("Godot.Bridge::godot_icall_DebugUi_Clear", (const void *)godot_icall_DebugUi_Clear);
 	mono_add_internal_call("Godot.Bridge::godot_icall_DebugUi_AddLine", (const void *)godot_icall_DebugUi_AddLine);
 	mono_add_internal_call("Godot.Bridge::godot_icall_DebugUi_AddLineInt", (const void *)godot_icall_DebugUi_AddLineInt);
+	mono_add_internal_call("Godot.Bridge::godot_icall_DebugUi_AddRow4", (const void *)godot_icall_DebugUi_AddRow4);
 	mono_add_internal_call("Godot.Bridge::godot_icall_DebugUi_AddPassFail", (const void *)godot_icall_DebugUi_AddPassFail);
 	mono_add_internal_call("Godot.Bridge::godot_icall_DebugUi_AddSeparator", (const void *)godot_icall_DebugUi_AddSeparator);
 	mono_add_internal_call("Godot.Bridge::godot_icall_DebugUi_GetLineCount", (const void *)godot_icall_DebugUi_GetLineCount);
+
+	// Game UI icalls (global pointer model - WASM-safe, no string ops in C#)
+	mono_add_internal_call("Godot.Bridge::godot_icall_GameUI_Init", (const void *)godot_icall_GameUI_Init);
+	mono_add_internal_call("Godot.Bridge::godot_icall_GameUI_SetTile", (const void *)godot_icall_GameUI_SetTile);
+	mono_add_internal_call("Godot.Bridge::godot_icall_GameUI_SetScore", (const void *)godot_icall_GameUI_SetScore);
+	mono_add_internal_call("Godot.Bridge::godot_icall_GameUI_SetStatus", (const void *)godot_icall_GameUI_SetStatus);
 
 	// Test support icalls (global pointer model - WASM-safe)
 	mono_add_internal_call("Godot.Bridge::godot_icall_Test_Create", (const void *)godot_icall_Test_Create);

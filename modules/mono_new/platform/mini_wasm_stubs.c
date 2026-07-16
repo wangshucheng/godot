@@ -2,6 +2,176 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <errno.h>
+
+/*
+ * WASM-compatible implementations of mono_file_map and mono_file_unmap.
+ *
+ * The original implementations in libmonosgen-2.0.a and libmonoutils.a use
+ * mmap/munmap, which do not work for Emscripten MEMFS files. These implementations
+ * use lseek/read instead, which work correctly on WASM MEMFS.
+ *
+ * The library symbols were localized (GLOBAL -> LOCAL) via binary patching so
+ * that these GLOBAL definitions take precedence for external references.
+ */
+
+typedef struct _MonoFileMap MonoFileMap;
+
+/*
+ * MonoFileMap is actually just an int fd (file descriptor) cast to a pointer.
+ * - mono_file_map_open(path) returns fd as MonoFileMap*
+ * - mono_file_map_fd(fmap) returns fmap directly (the fd)
+ * - mono_file_map_size(fmap) calls fstat(fd, ...)
+ * - mono_file_map_close(fmap) calls close(fd)
+ *
+ * The library's mono_file_map_open was localized because it may fail on WASM
+ * for unknown reasons. This reimplementation adds diagnostics.
+ */
+
+/* mono_file_map_fd - return the file descriptor from the MonoFileMap pointer.
+ * MonoFileMap is actually int fd cast to pointer.
+ * This implementation was added because the library's version may misbehave on WASM.
+ */
+int mono_file_map_fd(MonoFileMap *fmap) {
+	int fd = (int)(long)fmap;
+return fd;
+}
+
+/*
+ * mono_file_map_open - open a file for memory mapping.
+ * Returns MonoFileMap* (actually int fd as pointer) on success, NULL on failure.
+ */
+MonoFileMap *mono_file_map_open(const char *path) {
+if (!path) {
+		printf("[DIAG] mono_file_map_open: NULL path\n"); fflush(stdout);
+return NULL;
+	}
+
+	int fd = open(path, O_RDONLY);
+if (fd < 0) {
+		printf("[DIAG] mono_file_map_open: FAILED to open '%s' (errno=%d)\n", path, errno); fflush(stdout);
+return NULL;
+	}
+
+	/* Verify file is accessible by reading size */
+	struct stat st;
+	unsigned long long sz = 0;
+	if (fstat(fd, &st) == 0) {
+		sz = (unsigned long long)st.st_size;
+	}
+	/* Also check with lseek */
+	off_t old_pos = lseek(fd, 0, SEEK_CUR);
+	off_t end_pos = lseek(fd, 0, SEEK_END);
+	lseek(fd, old_pos, SEEK_SET);
+	printf("[DIAG] mono_file_map_open: opened '%s' fd=%d fstat_size=%llu lseek_size=%lld\n", path, fd, sz, (long long)end_pos); fflush(stdout);
+
+return (MonoFileMap *)(long)fd;
+}
+/* mono_file_map_size - return the file size.
+ * Uses fstat first, then falls back to lseek if fstat returns 0
+ * (fstat may return 0 for files in Emscripten MEMFS that were written
+ * via Godot's FileAccess but not through standard POSIX write()).
+ * Returning 0 causes mono_pe_file_map to fail with "too small: 0", which
+ * prevents the PE image from being memory-mapped. The assembly may still
+ * load via a fallback path, but method signature resolution from IL tokens
+ * fails because the raw metadata is not properly mapped, causing
+ * MissingMethodException at runtime.
+ */
+unsigned long long mono_file_map_size(MonoFileMap *fmap) {
+	int fd = (int)(long)fmap;
+
+	/* Try fstat first */
+	struct stat st;
+	unsigned long long fstat_sz = 0;
+	if (fstat(fd, &st) == 0) {
+		fstat_sz = (unsigned long long)st.st_size;
+	}
+
+	/* Fallback: use lseek to get file size */
+	off_t old_pos = lseek(fd, 0, SEEK_CUR);
+	off_t end_pos = -1;
+	if (old_pos >= 0) {
+		end_pos = lseek(fd, 0, SEEK_END);
+		lseek(fd, old_pos, SEEK_SET);
+	}
+
+	unsigned long long result = 0;
+	if (fstat_sz > 0) {
+		result = fstat_sz;
+	} else if (end_pos > 0) {
+		result = (unsigned long long)end_pos;
+	}
+	printf("[DIAG] mono_file_map_size: fd=%d fstat=%llu lseek=%lld -> returning %llu\n", fd, fstat_sz, (long long)end_pos, result); fflush(stdout);
+
+	return result;
+}
+
+/*
+ * Correct signature matching libmonosgen-2.0.a:
+ *   (i32, i32, i32, i64, i32) -> i32
+ *   = (MonoFileMap*, gsize length, gpointer contents, guint64 offset, MonoFileMapError* error) -> gpointer
+ *
+ * The library's original implementation uses mmap (broken on WASM MEMFS).
+ * This implementation uses lseek/read instead.
+ */
+void *mono_file_map(void *contents, size_t length, MonoFileMap *fmap, unsigned long long offset, void *error) {
+	(void)error;
+
+	int fd = mono_file_map_fd(fmap);
+
+	/* mmap semantics: map the ENTIRE file, not just 'length' bytes.
+	 * Mono reads PE headers at various offsets (e.g. 0x3C for e_lfanew, 0x80 for PE sig)
+	 * which may be beyond 'length'. We must read the full file to avoid out-of-bounds access. */
+	size_t file_size = mono_file_map_size(fmap);
+
+	/* Use the larger of file_size and length to ensure we read enough data */
+	size_t read_size = (file_size > length) ? file_size : length;
+/* Always allocate our own buffer - we must control the memory so mono_file_unmap can free it */
+	void *addr = malloc(read_size);
+	if (!addr) {
+return NULL;
+	}
+
+	if (fd < 0) {
+free(addr);
+		return NULL;
+	}
+
+	off_t seek_result = lseek(fd, (off_t)offset, SEEK_SET);
+	if (seek_result < 0) {
+free(addr);
+		return NULL;
+	}
+
+	size_t total_read = 0;
+	char *buf = (char *)addr;
+	while (total_read < read_size) {
+		ssize_t bytes_read = read(fd, buf + total_read, read_size - total_read);
+		if (bytes_read <= 0) {
+			break;
+		}
+		total_read += (size_t)bytes_read;
+	}
+
+	/* If caller provided a buffer, copy data to it as well (for compatibility) */
+	if (contents) {
+		memcpy(contents, addr, length < total_read ? length : total_read);
+	}
+
+	return addr;
+}
+
+int mono_file_unmap(void *addr, size_t length) {
+(void)length;
+	if (addr)
+		free(addr);
+	return 0;
+}
 
 #if defined(__GNUC__) || defined(__clang__)
 #define WEAK __attribute__((weak))
@@ -280,6 +450,7 @@ WEAK void mono_runtime_cleanup_handlers(void) {
 WEAK void mono_runtime_setup_stat_profiler(void) {
 }
 
-WEAK void mono_thread_state_init_from_handle(void *thread, void *jit_info, void *lmf, gpointer addr) {
-	(void)thread; (void)jit_info; (void)lmf; (void)addr;
+WEAK int mono_thread_state_init_from_handle(void *thread, void *jit_info, void *lmf) {
+	(void)thread; (void)jit_info; (void)lmf;
+	return 0;
 }

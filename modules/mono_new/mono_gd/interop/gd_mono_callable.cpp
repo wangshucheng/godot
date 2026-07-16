@@ -74,21 +74,6 @@ void MonoCallableCustom::call(const Variant **p_arguments, int p_argcount, Varia
 		return;
 	}
 
-	MonoObject *exc = nullptr;
-	MonoArray *args_arr = mono_array_new(domain, mono_get_object_class(), p_argcount);
-	if (!args_arr) {
-		r_call_error.error = Callable::CallError::CALL_ERROR_INSTANCE_IS_NULL;
-		return;
-	}
-
-	for (int i = 0; i < p_argcount; i++) {
-		MonoObject *arg_obj = GDMonoInterop::variant_to_mono_object(domain, *p_arguments[i]);
-		if (arg_obj) {
-			MonoObject **slot = (MonoObject **)mono_array_addr_with_size(args_arr, sizeof(MonoObject *), i);
-			if (slot) *slot = arg_obj;
-		}
-	}
-
 	MonoClass *delegate_class = mono_object_get_class(delegate_handle);
 	MonoMethod *invoke_method = mono_class_get_method_from_name(delegate_class, "Invoke", p_argcount);
 	if (!invoke_method) {
@@ -96,7 +81,66 @@ void MonoCallableCustom::call(const Variant **p_arguments, int p_argcount, Varia
 		return;
 	}
 
-	MonoObject *ret = mono_runtime_invoke(invoke_method, delegate_handle, (void **)mono_array_addr_with_size(args_arr, sizeof(void *), 0), &exc);
+	// Build params array for mono_runtime_invoke.
+	// For value types (double, int, bool), allocate directly on the C++ heap
+	// and pass the pointer. This avoids SGen GC boxing/pinning issues in WASM
+	// where pinned handles may not be respected by the interpreter.
+	// Same approach as CSharpInstance::callp.
+	void **params = nullptr;
+	void **value_storage = nullptr;
+	if (p_argcount > 0) {
+		params = (void **)memalloc(sizeof(void *) * p_argcount);
+		value_storage = (void **)memalloc(sizeof(void *) * p_argcount);
+		for (int i = 0; i < p_argcount; i++) {
+			value_storage[i] = nullptr;
+			params[i] = nullptr;
+		}
+		for (int i = 0; i < p_argcount; i++) {
+			Variant::Type vt = p_arguments[i]->get_type();
+			if (vt == Variant::FLOAT) {
+				value_storage[i] = memalloc(sizeof(double));
+				*(double *)value_storage[i] = (double)*p_arguments[i];
+				params[i] = value_storage[i];
+			} else if (vt == Variant::INT) {
+				value_storage[i] = memalloc(sizeof(int64_t));
+				*(int64_t *)value_storage[i] = (int64_t)*p_arguments[i];
+				params[i] = value_storage[i];
+			} else if (vt == Variant::BOOL) {
+				value_storage[i] = memalloc(sizeof(uint8_t));
+				*(uint8_t *)value_storage[i] = (bool)*p_arguments[i] ? 1 : 0;
+				params[i] = value_storage[i];
+			} else {
+				MonoObject *arg_obj = GDMonoInterop::variant_to_mono_object(domain, *p_arguments[i]);
+				if (arg_obj) {
+					MonoClass *cls = mono_object_get_class(arg_obj);
+					if (cls && mono_class_is_valuetype(cls)) {
+						// For value type structs (Vector2, Color, etc.), pass
+						// pointer to unboxed data. Safe in WASM interpreter
+						// mode (no moving GC).
+						params[i] = mono_object_unbox(arg_obj);
+					} else {
+						params[i] = arg_obj;
+					}
+				}
+			}
+		}
+	}
+
+	MonoObject *exc = nullptr;
+	MonoObject *ret = mono_runtime_invoke(invoke_method, delegate_handle, params, &exc);
+
+	// Free heap-allocated value type memory
+	if (value_storage) {
+		for (int i = 0; i < p_argcount; i++) {
+			if (value_storage[i]) {
+				memfree(value_storage[i]);
+			}
+		}
+		memfree(value_storage);
+	}
+	if (params) {
+		memfree(params);
+	}
 
 	if (exc) {
 		mono_print_unhandled_exception(exc);
@@ -146,7 +190,9 @@ static MonoObject *icall_Callable_CreateFromDelegate(MonoObject *p_delegate) {
 	GDMono *gdmono = GDMono::get_singleton();
 	if (!gdmono) return nullptr;
 	MonoDomain *domain = gdmono->get_scripts_domain();
-	MonoClass *cls = mono_class_from_name(mono_get_corlib(), "Godot", "Callable");
+	MonoImage *gsharp_img = gdmono->get_godotsharp_image();
+	if (!gsharp_img) return nullptr;
+	MonoClass *cls = mono_class_from_name(gsharp_img, "Godot", "Callable");
 	if (!cls) return nullptr;
 	MonoObject *obj = mono_object_new(domain, cls);
 	if (!obj) return nullptr;
@@ -160,21 +206,12 @@ static MonoObject *icall_Callable_CreateFromDelegate(MonoObject *p_delegate) {
 	return obj;
 }
 
-static void icall_Callable_Call(MonoObject *p_native_callable, MonoArray *p_args, MonoObject **r_ret, MonoObject **r_exc) {
-	if (!p_native_callable) return;
-	Callable *callable = nullptr;
-	void *ptr = nullptr;
+static void icall_Callable_Call(void *p_callable_ptr, MonoArray *p_args, MonoObject **r_ret) {
+	if (!p_callable_ptr) return;
+	Callable *callable = (Callable *)p_callable_ptr;
 	GDMono *gdmono = GDMono::get_singleton();
 	if (!gdmono) return;
 	MonoDomain *domain = gdmono->get_scripts_domain();
-	MonoClass *cls = mono_object_get_class(p_native_callable);
-	MonoClassField *field = mono_class_get_field_from_name(cls, "nativeCallable");
-	if (!field) field = mono_class_get_field_from_name(cls, "_nativeCallable");
-	if (field) {
-		mono_field_get_value(p_native_callable, field, &ptr);
-		callable = (Callable *)ptr;
-	}
-	if (!callable) return;
 
 	int argcount = mono_array_length(p_args);
 	Vector<Variant> args;
@@ -199,8 +236,9 @@ static void icall_Callable_Call(MonoObject *p_native_callable, MonoArray *p_args
 static mono_bool icall_Object_ConnectSignal(void *p_native_ptr, MonoString *p_signal, MonoObject *p_callable, mono_bool p_oneshot) {
 	if (!p_native_ptr || !p_signal || !p_callable) return false;
 	Object *obj = (Object *)p_native_ptr;
-	String signal_str = String::utf8(mono_string_to_utf8(p_signal));
-	StringName signal_name(signal_str);
+	char *_sig_utf8 = mono_string_to_utf8(p_signal);
+	StringName signal_name(String::utf8(_sig_utf8));
+	mono_free(_sig_utf8);
 	if (!obj->has_signal(signal_name)) return false;
 
 	Callable target = GDMonoCallable::create_callable_from_mono_delegate(p_callable);
@@ -214,8 +252,9 @@ static mono_bool icall_Object_ConnectSignal(void *p_native_ptr, MonoString *p_si
 static mono_bool icall_Object_DisconnectSignal(void *p_native_ptr, MonoString *p_signal, MonoObject *p_callable) {
 	if (!p_native_ptr || !p_signal || !p_callable) return false;
 	Object *obj = (Object *)p_native_ptr;
-	String signal_str = String::utf8(mono_string_to_utf8(p_signal));
-	StringName signal_name(signal_str);
+	char *_sig_utf8 = mono_string_to_utf8(p_signal);
+	StringName signal_name(String::utf8(_sig_utf8));
+	mono_free(_sig_utf8);
 	if (!obj->has_signal(signal_name)) return false;
 
 	Callable target = GDMonoCallable::create_callable_from_mono_delegate(p_callable);
@@ -223,9 +262,17 @@ static mono_bool icall_Object_DisconnectSignal(void *p_native_ptr, MonoString *p
 	return true;
 }
 
+// Free a native Callable pointer allocated by icall_Callable_CreateFromDelegate or icall_Callable_CreateFromTarget.
+static void icall_Callable_Free(void *p_callable_ptr) {
+	if (!p_callable_ptr) return;
+	Callable *callable = (Callable *)p_callable_ptr;
+	memdelete(callable);
+}
+
 void GDMonoCallable::register_icalls() {
 	mono_add_internal_call("Godot.Callable::godot_icall_Callable_CreateFromDelegate", (const void *)icall_Callable_CreateFromDelegate);
 	mono_add_internal_call("Godot.Callable::godot_icall_Callable_Call", (const void *)icall_Callable_Call);
+	mono_add_internal_call("Godot.Callable::godot_icall_Callable_Free", (const void *)icall_Callable_Free);
 	mono_add_internal_call("Godot.GodotObject::godot_icall_Object_ConnectSignal", (const void *)icall_Object_ConnectSignal);
 	mono_add_internal_call("Godot.GodotObject::godot_icall_Object_DisconnectSignal", (const void *)icall_Object_DisconnectSignal);
 }

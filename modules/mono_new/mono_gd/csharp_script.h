@@ -71,6 +71,7 @@ public:
 
 	virtual Error load_source_code(const String &p_path);
 	String get_script_path() const { return script_path; }
+	void set_script_path(const String &p_path) { script_path = p_path; }
 	GDMonoClass *get_mono_class() { return mono_class; }
 
 	CSharpScript();

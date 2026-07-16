@@ -1,4 +1,6 @@
-#include "gd_mono.h"
+﻿#include "gd_mono.h"
+// mono_image_open_from_data, mono_assembly_load_from, MonoImageOpenStatus
+// are already declared in Mono headers (mono/metadata/image.h, assembly.h).
 
 #ifdef WEB_ENABLED
 #include <emscripten.h>
@@ -28,6 +30,7 @@ const char *mono_check_corlib_version(void);
 MonoImage *mono_get_corlib(void);
 const char *mono_image_get_name(MonoImage *image);
 MonoImage *mono_image_open_full(const char *fname, MonoImageOpenStatus *status, mono_bool refonly);
+MonoImage *mono_image_open_from_data(char *data, uint32_t data_len, mono_bool need_copy, MonoImageOpenStatus *status);
 const char *mono_image_strerror(MonoImageOpenStatus status);
 void mono_image_close(MonoImage *image);
 void mono_trace_set_level_string(const char *value);
@@ -40,6 +43,7 @@ void mono_trace_set_printerr_handler(MonoPrintCallback callback);
 const void *mono_image_get_table_info(MonoImage *image, int table_id);
 int mono_table_info_get_rows(const void *table);
 MonoClass *mono_class_get(MonoImage *image, uint32_t type_token);
+MonoAssembly *mono_assembly_load_from(MonoImage *image, const char *fname, MonoImageOpenStatus *status);
 }
 
 #ifdef WEB_ENABLED
@@ -199,23 +203,17 @@ bool GDMono::initialize() {
 	const char *runtime_version = "v4.0.30319";
 
 #ifdef WEB_ENABLED
-	MonoLogger::log("Setting up interpreter mode (AOT_MODE_INTERP with arch trampoline fallback)...");
-	mono_jit_set_aot_mode(MONO_AOT_MODE_INTERP);
+	MonoLogger::log("Setting up interpreter mode (EE_MODE_INTERP, no AOT trampolines)...");
+	mono_jit_set_aot_mode(MONO_EE_MODE_INTERP);
+	setenv("MONO_NO_VERIFY", "1", 1);
+	MonoLogger::log("Set MONO_NO_VERIFY=1 to skip CIL verification");
 #endif
 
 	MonoLogger::log(vformat("Calling mono_jit_init_version with runtime: %s", runtime_version));
 
-#ifdef WEB_ENABLED
-	printf("[Mono-Diag] BEFORE mono_jit_init_version call\n");
-	fflush(stdout);
-#endif
 
 	root_domain = mono_jit_init_version("GodotEngine", runtime_version);
 
-#ifdef WEB_ENABLED
-	printf("[Mono-Diag] AFTER mono_jit_init_version call, root_domain=%p\n", (void*)root_domain);
-	fflush(stdout);
-#endif
 
 	MonoLogger::log(vformat("mono_jit_init_version returned, root_domain=%s", root_domain ? "non-null" : "null"));
 
@@ -237,7 +235,6 @@ bool GDMono::initialize() {
 		}
 	}
 #endif
-
 	if (!root_domain) {
 		MonoLogger::log_warning(vformat("Mono JIT init reported issues (BCL not found at %s or %s). Managed code execution will be unavailable until BCL assemblies are deployed.", mono_lib_dir, mono_bcl_dir));
 		MonoLogger::log_warning("Place mscorlib.dll and BCL assemblies in: <exe_dir>/mono/lib/ (for DISABLE_DESKTOP_LOADER) or <exe_dir>/mono/lib/mono/4.5/");
@@ -262,17 +259,56 @@ bool GDMono::initialize() {
 	GDMonoInterop::variant_register_icalls();
 	GDMonoCallable::register_icalls();
 
-	mono_glue_init();
+	// mono_glue_init() removed - was overriding real icalls with stubs
 
 	if (scripts_domain) {
 		Vector<String> search_paths;
 		search_paths.push_back(exe_dir.path_join("GodotSharp.dll"));
 		search_paths.push_back(exe_dir.path_join(".mono").path_join("assemblies").path_join("GodotSharp.dll"));
 		search_paths.push_back(assemblies_path.path_join("GodotSharp.dll"));
+		// Web: PCK assemblies live under the res:// VFS (e.g. res://.mono/assemblies/),
+		// which is NOT reachable via the bare /-rooted filesystem paths above.
+		// Keep the res:// prefix so FileAccess can read the PCK entry (matching the
+		// user-assembly scanning logic at line ~324).
+		search_paths.push_back(String("res://.mono/assemblies/GodotSharp.dll"));
 
 		for (const String &path : search_paths) {
 			if (FileAccess::exists(path)) {
 				MonoLogger::log(vformat("Loading GodotSharp from: %s", path));
+#ifdef WEB_ENABLED
+				// In WASM, mono_pe_file_map fails because the library's internal
+				// mono_file_map_size returns 0 for MEMFS files. Load from buffer instead.
+				PackedByteArray gs_data = FileAccess::get_file_as_bytes(path);
+				if (gs_data.size() > 0) {
+					MonoLogger::log(vformat("Reading GodotSharp.dll into buffer: %d bytes", gs_data.size()));
+					MonoImageOpenStatus status = MONO_IMAGE_OK;
+					MonoImage *gs_image = mono_image_open_from_data(
+						(char *)gs_data.ptrw(), (unsigned int)gs_data.size(), 1, &status);
+					if (gs_image && status == 0) {
+						godotsharp_assembly = mono_assembly_load_from(gs_image, path.utf8().get_data(), &status);
+						if (godotsharp_assembly) {
+							godotsharp_image = mono_assembly_get_image(godotsharp_assembly);
+							if (godotsharp_image) {
+								MonoLogger::log("GodotSharp loaded successfully (from buffer)");
+								break;
+							}
+						}
+					}
+					if (!godotsharp_assembly) {
+						MonoLogger::log_error(vformat("mono_image_open_from_data/load_from failed (status=%d), falling back to mono_domain_assembly_open", status));
+						godotsharp_assembly = mono_domain_assembly_open(scripts_domain, path.utf8().get_data());
+						if (godotsharp_assembly) {
+							godotsharp_image = mono_assembly_get_image(godotsharp_assembly);
+							if (godotsharp_image) {
+								MonoLogger::log("GodotSharp loaded successfully (fallback)");
+								break;
+							}
+						}
+					}
+				} else {
+					MonoLogger::log_error(vformat("Failed to read GodotSharp.dll: %s", path));
+				}
+#else
 				godotsharp_assembly = mono_domain_assembly_open(scripts_domain, path.utf8().get_data());
 				if (godotsharp_assembly) {
 					godotsharp_image = mono_assembly_get_image(godotsharp_assembly);
@@ -281,6 +317,7 @@ bool GDMono::initialize() {
 						break;
 					}
 				}
+#endif
 			}
 		}
 	}
@@ -294,7 +331,18 @@ bool GDMono::initialize() {
 		Vector<String> user_dll_paths;
 
 		for (const String &search_dir : search_dirs) {
-			String abs_dir = ProjectSettings::get_singleton() ? ProjectSettings::get_singleton()->globalize_path(search_dir) : search_dir;
+			String abs_dir;
+#ifdef WEB_ENABLED
+			// In WASM, keep res:// prefix so DirAccess can scan PCK directories.
+			// globalize_path strips res:// prefix which breaks PCK directory access.
+			if (search_dir.begins_with("res://")) {
+				abs_dir = search_dir;
+			} else {
+				abs_dir = ProjectSettings::get_singleton() ? ProjectSettings::get_singleton()->globalize_path(search_dir) : search_dir;
+			}
+#else
+			abs_dir = ProjectSettings::get_singleton() ? ProjectSettings::get_singleton()->globalize_path(search_dir) : search_dir;
+#endif
 			MonoLogger::log(vformat("Scanning for user assemblies in: %s", abs_dir));
 
 			if (FileAccess::exists(abs_dir) || DirAccess::exists(abs_dir)) {
@@ -312,6 +360,8 @@ bool GDMono::initialize() {
 						fname = dir->get_next();
 					}
 					dir->list_dir_end();
+				} else {
+					MonoLogger::log_warning(vformat("DirAccess::open failed for: %s", abs_dir));
 				}
 			}
 		}
@@ -320,7 +370,60 @@ bool GDMono::initialize() {
 
 		for (const String &path : user_dll_paths) {
 			MonoLogger::log(vformat("Loading user assembly from: %s", path));
-			MonoAssembly *assy = mono_domain_assembly_open(scripts_domain, path.utf8().get_data());
+			MonoAssembly *assy = nullptr;
+#ifdef WEB_ENABLED
+			// In WASM, Mono's fopen can only access MEMFS, not PCK.
+			// If the path is res:// (PCK), copy the assembly to MEMFS first.
+			if (path.begins_with("res://")) {
+				PackedByteArray data = FileAccess::get_file_as_bytes(path);
+				if (data.size() > 0) {
+					MonoLogger::log(vformat("Loading assembly from buffer: %s (%d bytes)", path, data.size()));
+					MonoImageOpenStatus status = MONO_IMAGE_OK;
+					MonoImage *img = mono_image_open_from_data(
+						(char *)data.ptrw(), (unsigned int)data.size(), 1, &status);
+					if (img && status == 0) {
+						assy = mono_assembly_load_from(img, path.utf8().get_data(), &status);
+					}
+					if (!assy) {
+						MonoLogger::log_error(vformat("Buffer load failed (status=%d), trying MEMFS copy: %s", status, path));
+						// Fallback: copy to MEMFS and try mono_domain_assembly_open
+						String memfs_path = assemblies_path.path_join(path.get_file());
+						Ref<FileAccess> f = FileAccess::open(memfs_path, FileAccess::WRITE);
+						if (f.is_valid()) {
+							f->store_buffer(data.ptr(), data.size());
+							f->close();
+							assy = mono_domain_assembly_open(scripts_domain, memfs_path.utf8().get_data());
+						}
+					}
+				} else {
+					MonoLogger::log_error(vformat("Failed to read from PCK: %s", path));
+				}
+			} else {
+#ifdef WEB_ENABLED
+				// Also load non-res:// paths from buffer in WASM
+				PackedByteArray data = FileAccess::get_file_as_bytes(path);
+				if (data.size() > 0) {
+					MonoLogger::log(vformat("Loading assembly from buffer: %s (%d bytes)", path, data.size()));
+					MonoImageOpenStatus status = MONO_IMAGE_OK;
+					MonoImage *img = mono_image_open_from_data(
+						(char *)data.ptrw(), (unsigned int)data.size(), 1, &status);
+					if (img && status == 0) {
+						assy = mono_assembly_load_from(img, path.utf8().get_data(), &status);
+					}
+					if (!assy) {
+						MonoLogger::log_error(vformat("Buffer load failed (status=%d), falling back: %s", status, path));
+						assy = mono_domain_assembly_open(scripts_domain, path.utf8().get_data());
+					}
+				} else {
+					assy = mono_domain_assembly_open(scripts_domain, path.utf8().get_data());
+				}
+#else
+				assy = mono_domain_assembly_open(scripts_domain, path.utf8().get_data());
+#endif
+			}
+#else
+			assy = mono_domain_assembly_open(scripts_domain, path.utf8().get_data());
+#endif
 			if (assy) {
 				MonoImage *img = mono_assembly_get_image(assy);
 				if (img) {
@@ -394,7 +497,25 @@ bool GDMono::load_assembly(const String &p_path, bool p_is_proj_assembly) {
 		return false;
 	}
 
-	MonoAssembly *assembly = mono_domain_assembly_open(scripts_domain, p_path.utf8().get_data());
+	MonoAssembly *assembly = nullptr;
+#ifdef WEB_ENABLED
+	{
+		PackedByteArray data = FileAccess::get_file_as_bytes(p_path);
+		if (data.size() > 0) {
+			MonoImageOpenStatus status = MONO_IMAGE_OK;
+			MonoImage *img = mono_image_open_from_data(
+				(char *)data.ptrw(), (unsigned int)data.size(), 1, &status);
+			if (img && status == 0) {
+				assembly = mono_assembly_load_from(img, p_path.utf8().get_data(), &status);
+			}
+		}
+		if (!assembly) {
+			assembly = mono_domain_assembly_open(scripts_domain, p_path.utf8().get_data());
+		}
+	}
+#else
+	assembly = mono_domain_assembly_open(scripts_domain, p_path.utf8().get_data());
+#endif
 	if (!assembly) {
 		MonoLogger::log_error(vformat("Failed to load assembly: %s", p_path));
 		return false;

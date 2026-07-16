@@ -6,6 +6,7 @@
 #include "../utils/mono_logger.h"
 #include "core/io/file_access.h"
 #include "core/object/object.h"
+#include <cstdio>
 #include "scene/main/node.h"
 
 extern "C" {
@@ -17,6 +18,62 @@ const char *mono_class_get_name(MonoClass *klass);
 MonoObject *mono_runtime_invoke(MonoMethod *method, void *obj, void **params, MonoObject **exc);
 MonoObject *mono_object_new(MonoDomain *domain, MonoClass *klass);
 void mono_runtime_object_init(MonoObject *obj);
+MonoObject *mono_value_box(MonoDomain *domain, MonoClass *klass, void *val);
+void *mono_object_unbox(MonoObject *obj);
+uint32_t mono_gchandle_new(MonoObject *obj, int pinned);
+void mono_gchandle_free(uint32_t handle);
+MonoClass *mono_get_double_class(void);
+MonoClass *mono_get_int64_class(void);
+MonoClass *mono_get_boolean_class(void);
+char *mono_object_to_string(MonoObject *obj, MonoObject **exc);
+MonoClass *mono_object_get_class(MonoObject *obj);
+struct _MonoProperty;
+typedef struct _MonoProperty MonoProperty;
+MonoProperty *mono_class_get_property_from_name(MonoClass *klass, const char *name);
+MonoObject *mono_property_get_value(MonoProperty *prop, void *obj, void **params, MonoObject **exc);
+char *mono_string_to_utf8(MonoString *s);
+void mono_free(void *ptr);
+MonoClass *mono_class_from_name(MonoImage *image, const char *name_space, const char *name);
+MonoMethod *mono_class_get_method_from_name(MonoClass *klass, const char *name, int param_count);
+const char *mono_image_get_name(MonoImage *image);
+MonoImage *mono_get_corlib();
+}
+
+// Convert Godot snake_case method names to C# PascalCase.
+// e.g. "_unhandled_input" -> "_UnhandledInput", "set_position" -> "SetPosition"
+static StringName snake_to_pascal_case(const StringName &p_name) {
+	String s = String(p_name);
+	if (s.is_empty()) {
+		return p_name;
+	}
+	bool has_underscore_lower = false;
+	for (int i = 0; i < s.length(); i++) {
+		if (s[i] == '_' && i + 1 < s.length() && s[i + 1] >= 'a' && s[i + 1] <= 'z') {
+			has_underscore_lower = true;
+			break;
+		}
+	}
+	if (!has_underscore_lower) {
+		return p_name;
+	}
+	String result;
+	for (int i = 0; i < s.length(); i++) {
+		char32_t c = s[i];
+		if (c == '_' && i + 1 < s.length() && s[i + 1] >= 'a' && s[i + 1] <= 'z') {
+			if (i == 0) {
+				// Leading underscore: keep it (e.g. _process -> _Process)
+				result += '_';
+				result += String::chr(s[i + 1]).to_upper();
+			} else {
+				// Internal underscore: remove it (e.g. _unhandled_input -> _UnhandledInput)
+				result += String::chr(s[i + 1]).to_upper();
+			}
+			i++;
+		} else {
+			result += c;
+		}
+	}
+	return StringName(result);
 }
 
 CSharpLanguage *CSharpLanguage::singleton = nullptr;
@@ -32,6 +89,12 @@ Ref<Resource> ResourceFormatLoaderCSharpScript::load(const String &p_path, const
 		if (r_error) *r_error = err;
 		return Ref<Resource>();
 	}
+
+	// Set the script path and reload to find the C# class from the loaded assembly.
+	// This must happen here so can_instantiate() returns true when the scene loader
+	// tries to create a script instance for a node.
+	script->set_script_path(path);
+	script->reload();
 
 	if (r_error) *r_error = OK;
 	return script;
@@ -102,7 +165,6 @@ ScriptInstance *CSharpScript::instance_create(Object *p_this) {
 		memdelete(instance);
 		return nullptr;
 	}
-
 	return instance;
 }
 
@@ -257,6 +319,10 @@ CSharpScript::CSharpScript() : script_list(this) {
 
 CSharpScript::~CSharpScript() {
 	script_list.remove_from_list();
+	if (mono_class) {
+		delete mono_class;
+		mono_class = nullptr;
+}
 }
 
 bool CSharpInstance::set(const StringName &p_name, const Variant &p_value) {
@@ -295,7 +361,16 @@ bool CSharpInstance::has_method(const StringName &p_method) const {
 	if (!mono_class) {
 		return false;
 	}
-	return mono_class->has_method(p_method);
+	if (mono_class->has_method(p_method)) {
+		return true;
+	}
+	// Try PascalCase conversion for snake_case names from GDVIRTUAL
+	StringName pascal_name = snake_to_pascal_case(p_method);
+	if (pascal_name != p_method) {
+		bool found = mono_class->has_method(pascal_name);
+		return found;
+	}
+	return false;
 }
 
 Variant CSharpInstance::callp(const StringName &p_method, const Variant **p_args, int p_argcount, Callable::CallError &r_error) {
@@ -306,26 +381,70 @@ Variant CSharpInstance::callp(const StringName &p_method, const Variant **p_args
 
 	MonoMethod *method = mono_class->get_method(p_method, p_argcount);
 	if (!method) {
+		// Try PascalCase conversion for snake_case names from GDVIRTUAL
+		StringName pascal_name = snake_to_pascal_case(p_method);
+		if (pascal_name != p_method) {
+			method = mono_class->get_method(pascal_name, p_argcount);
+		}
+	}
+	if (!method) {
 		r_error.error = Callable::CallError::CALL_ERROR_INVALID_METHOD;
 		return Variant();
 	}
 
 	r_error.error = Callable::CallError::CALL_OK;
 
-	// Build params array for mono_runtime_invoke. Previously this passed
-	// nullptr, which crashed for any method that takes parameters.
+	// Build params array for mono_runtime_invoke.
+	// For value types (double, int, bool), use mono_value_box to create a
+	// GC-managed boxed object, pin it with mono_gchandle_new(pinned=1), then
+	// get the unboxed pointer via mono_object_unbox. This ensures the value
+	// resides in GC-managed memory that the WASM Mono interpreter can access
+	// correctly. The pin prevents SGen from moving the object during the call.
+	// Reference types are converted via variant_to_mono_object as before.
 	void **params = nullptr;
-	MonoObject **boxed_params = nullptr;
+	uint32_t *gchandles = nullptr;  // tracks pinned GC handles for value types
 	if (p_argcount > 0) {
 		params = (void **)memalloc(sizeof(void *) * p_argcount);
-		boxed_params = (MonoObject **)memalloc(sizeof(MonoObject *) * p_argcount);
+		gchandles = (uint32_t *)memalloc(sizeof(uint32_t) * p_argcount);
+		for (int i = 0; i < p_argcount; i++) {
+			gchandles[i] = 0;
+			params[i] = nullptr;
+		}
 		MonoDomain *domain = GDMono::get_singleton() ? GDMono::get_singleton()->get_scripts_domain() : nullptr;
 		for (int i = 0; i < p_argcount; i++) {
-			if (domain) {
-				boxed_params[i] = GDMonoInterop::variant_to_mono_object(domain, *p_args[i]);
-				params[i] = boxed_params[i];
-			} else {
-				params[i] = nullptr;
+			Variant::Type vt = p_args[i]->get_type();
+			if (vt == Variant::FLOAT) {
+				double val = (double)*p_args[i];
+				MonoClass *cls = mono_get_double_class();
+				if (cls && domain) {
+					MonoObject *boxed = mono_value_box(domain, cls, &val);
+					if (boxed) {
+						gchandles[i] = mono_gchandle_new(boxed, 1); // pinned
+						params[i] = mono_object_unbox(boxed);
+					}
+				}
+			} else if (vt == Variant::INT) {
+				int64_t val = (int64_t)*p_args[i];
+				MonoClass *cls = mono_get_int64_class();
+				if (cls && domain) {
+					MonoObject *boxed = mono_value_box(domain, cls, &val);
+					if (boxed) {
+						gchandles[i] = mono_gchandle_new(boxed, 1);
+						params[i] = mono_object_unbox(boxed);
+					}
+				}
+			} else if (vt == Variant::BOOL) {
+				int val = (bool)*p_args[i] ? 1 : 0;
+				MonoClass *cls = mono_get_boolean_class();
+				if (cls && domain) {
+					MonoObject *boxed = mono_value_box(domain, cls, &val);
+					if (boxed) {
+						gchandles[i] = mono_gchandle_new(boxed, 1);
+						params[i] = mono_object_unbox(boxed);
+					}
+				}
+			} else if (domain) {
+				params[i] = GDMonoInterop::variant_to_mono_object(domain, *p_args[i]);
 			}
 		}
 	}
@@ -333,16 +452,44 @@ Variant CSharpInstance::callp(const StringName &p_method, const Variant **p_args
 	MonoObject *exc = nullptr;
 	MonoObject *result = mono_runtime_invoke(method, mono_object, params, &exc);
 
+	// Free pinned GC handles for boxed value types
+	if (gchandles) {
+		for (int i = 0; i < p_argcount; i++) {
+			if (gchandles[i]) {
+				mono_gchandle_free(gchandles[i]);
+			}
+		}
+		memfree(gchandles);
+	}
 	if (params) {
 		memfree(params);
-	}
-	if (boxed_params) {
-		memfree(boxed_params);
 	}
 
 	if (exc) {
 		r_error.error = Callable::CallError::CALL_ERROR_INVALID_METHOD;
-		MonoLogger::log_error("Exception in C# method call: " + String(p_method));
+		// Use C API only to get exception class name (avoid calling ToString() which may crash)
+		MonoClass *exc_class = mono_object_get_class(exc);
+		const char *exc_name = exc_class ? mono_class_get_name(exc_class) : "unknown";
+		const char *exc_ns = exc_class ? mono_class_get_namespace(exc_class) : "";
+		// Try to extract Message property via mono_property_get_value (safer than ToString)
+		char *exc_msg_utf8 = nullptr;
+		if (exc_class) {
+			MonoProperty *msg_prop = mono_class_get_property_from_name(exc_class, "Message");
+			if (msg_prop) {
+				MonoObject *msg_exc2 = nullptr;
+				MonoObject *msg_obj = mono_property_get_value(msg_prop, exc, nullptr, &msg_exc2);
+				if (msg_obj && !msg_exc2) {
+					exc_msg_utf8 = mono_string_to_utf8((MonoString*)msg_obj);
+				}
+			}
+		}
+		printf("[DIAG] callp: EXCEPTION in '%s': %s.%s (exc=%p) msg=%s\n",
+			String(p_method).utf8().get_data(), exc_ns, exc_name, (void*)exc,
+			exc_msg_utf8 ? exc_msg_utf8 : "(no msg)");
+		fflush(stdout);
+		MonoLogger::log_error(vformat("Exception in C# method call '%s': %s.%s %s",
+			String(p_method), exc_ns, exc_name, exc_msg_utf8 ? exc_msg_utf8 : ""));
+		if (exc_msg_utf8) mono_free(exc_msg_utf8);
 		return Variant();
 	}
 
@@ -353,6 +500,10 @@ Variant CSharpInstance::callp(const StringName &p_method, const Variant **p_args
 }
 
 void CSharpInstance::notification(int p_notification, bool p_reversed) {
+	// GDVIRTUAL system in Node::_notification() handles _Ready, _Process, _PhysicsProcess
+	// by calling callp() which uses snake_to_pascal_case() to find C# methods.
+	// Node::_call_unhandled_input/_call_input handle _UnhandledInput/_Input.
+	// Safety: ensure processing flags are set on READY (idempotent with engine's GDVIRTUAL_IS_OVERRIDDEN check).
 	if (!mono_object || !mono_class) {
 		return;
 	}
@@ -362,13 +513,12 @@ void CSharpInstance::notification(int p_notification, bool p_reversed) {
 			return;
 		}
 		ready_called = true;
-		MonoMethod *ready_method = mono_class->get_method("_Ready");
-		if (ready_method) {
-			MonoObject *exc = nullptr;
-			mono_runtime_invoke(ready_method, mono_object, nullptr, &exc);
-			if (exc) {
-				MonoLogger::log_error("Exception calling _Ready()");
-			}
+		Node *node = Object::cast_to<Node>(owner);
+		if (node) {
+			node->set_process(true);
+			node->set_physics_process(true);
+			node->set_process_unhandled_input(true);
+			node->set_process_input(true);
 		}
 	}
 }
@@ -407,14 +557,25 @@ bool CSharpInstance::initialize(Object *p_owner) {
 		return false;
 	}
 
-	MonoObject *exc = nullptr;
-	mono_object = mono_object_new(GDMono::get_singleton()->get_scripts_domain(), mono_class->get_raw_class());
+	MonoDomain *domain = GDMono::get_singleton() ? GDMono::get_singleton()->get_scripts_domain() : nullptr;
+	if (!domain) {
+		return false;
+	}
+	MonoClass *raw_class = mono_class->get_raw_class();
+	if (!raw_class) {
+		return false;
+	}
+
+	mono_object = mono_object_new(domain, raw_class);
 	if (!mono_object) {
 		return false;
 	}
 
-	mono_runtime_object_init(mono_object);
-
+	// Set nativeInstance BEFORE calling the constructor, so C# constructors
+	// can check `if (nativeInstance == IntPtr.Zero)` and skip native object
+	// creation for scene-loaded nodes (which already have a native object).
+	// This prevents native object leaks when constructors also call
+	// godot_icall_CreateObject.
 	MonoClass *base_class = mono_class->get_raw_class();
 	while (base_class) {
 		const char *ns = mono_class_get_namespace(base_class);
@@ -430,6 +591,59 @@ bool CSharpInstance::initialize(Object *p_owner) {
 		if (native_field) {
 			void *value = p_owner;
 			mono_field_set_value(mono_object, native_field, &value);
+		}
+	}
+
+	// Now call the C# constructor. For scene-loaded nodes, nativeInstance is
+	// already set, so constructors skip CreateObject. For user `new Node2D()`,
+	// nativeInstance is zero, so constructors create the native object.
+	printf("[DIAG] initialize: calling constructor for %s\n", mono_class_get_name(raw_class));
+	fflush(stdout);
+	mono_runtime_object_init(mono_object);
+	printf("[DIAG] initialize: constructor returned OK\n");
+	fflush(stdout);
+
+	// Diagnostic: check if Godot.GD class and Print method are findable
+	{
+		GDMono *gdmono = GDMono::get_singleton();
+		if (gdmono && gdmono->get_godotsharp_image()) {
+			MonoImage *gs_image = gdmono->get_godotsharp_image();
+			printf("[DIAG] init: GodotSharp image name=%s\n", mono_image_get_name(gs_image));
+			fflush(stdout);
+
+			MonoClass *gd_class = mono_class_from_name(gs_image, "Godot", "GD");
+			printf("[DIAG] init: Godot.GD class=%p\n", (void*)gd_class);
+			fflush(stdout);
+
+			if (gd_class) {
+				// Try to find Print method with param_count=1 (should match Print(string))
+				MonoMethod *print_str = mono_class_get_method_from_name(gd_class, "Print", 1);
+				printf("[DIAG] init: GD.Print(1 param)=%p\n", (void*)print_str);
+				fflush(stdout);
+
+				// Try with param_count=-1 (any)
+				MonoMethod *print_any = mono_class_get_method_from_name(gd_class, "Print", -1);
+				printf("[DIAG] init: GD.Print(-1 param)=%p\n", (void*)print_any);
+				fflush(stdout);
+
+				// Try to find PrintErr with param_count=1
+				MonoMethod *printerr_str = mono_class_get_method_from_name(gd_class, "PrintErr", 1);
+				printf("[DIAG] init: GD.PrintErr(1 param)=%p\n", (void*)printerr_str);
+				fflush(stdout);
+
+				// Try Randi (no params)
+				MonoMethod *randi = mono_class_get_method_from_name(gd_class, "Randi", 0);
+				printf("[DIAG] init: GD.Randi(0 param)=%p\n", (void*)randi);
+				fflush(stdout);
+
+				// Try godot_icall_GD_Print (the internal call)
+				MonoMethod *icall_print = mono_class_get_method_from_name(gd_class, "godot_icall_GD_Print", 1);
+				printf("[DIAG] init: GD.godot_icall_GD_Print(1 param)=%p\n", (void*)icall_print);
+				fflush(stdout);
+			}
+		} else {
+			printf("[DIAG] init: GodotSharp image is NULL!\n");
+			fflush(stdout);
 		}
 	}
 

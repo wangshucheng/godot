@@ -52,6 +52,7 @@
 #include "core/object/message_queue.h"
 #include "core/object/script_language.h"
 #include "core/os/os.h"
+#include "core/string/print_string.h"
 #include "core/os/process_id.h"
 #include "core/os/time.h"
 #include "core/profiling/profiling.h"

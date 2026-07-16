@@ -348,13 +348,28 @@ def configure(env: "SConsEnvironment"):
     env.Append(LINKFLAGS=["-sMODULARIZE=1", "-sEXPORT_NAME='Godot'"])
 
     # Force long jump mode to 'wasm'
-    env.Append(CCFLAGS=["-sSUPPORT_LONGJMP='wasm'"])
-    env.Append(LINKFLAGS=["-sSUPPORT_LONGJMP='wasm'"])
+    env.Append(CCFLAGS=["-sSUPPORT_LONGJMP='emscripten'"])
+    env.Append(LINKFLAGS=["-sSUPPORT_LONGJMP='emscripten'"])
 
     # Allow increasing memory buffer size during runtime. This is efficient
     # when using WebAssembly (in comparison to asm.js) and works well for
     # us since we don't know requirements at compile-time.
     env.Append(LINKFLAGS=["-sALLOW_MEMORY_GROWTH=1"])
+
+    # Emulate function pointer casts for the Mono runtime.
+    #
+    # WASM function tables are typed: calling a function pointer through a
+    # signature that does not match the original function signature raises
+    # "RuntimeError: function signature mismatch". Mono's interpreter
+    # (interp_exec_method_full -> do_icall) registers icalls with varying
+    # signatures via mono_add_internal_call and later invokes them through
+    # a uniform function-pointer calling convention. Without this flag,
+    # the first icall dispatched through a mismatched signature crashes
+    # the runtime. The flag makes Emscripten emit trampoline wrappers so
+    # that arbitrary function pointer casts behave like the C ABI on native
+    # targets. Required for module_mono_new_enabled on the web platform.
+    if env.get("module_mono_new_enabled", True):
+        env.Append(LINKFLAGS=["-sEMULATE_FUNCTION_POINTER_CASTS=1"])
 
     # Do not call main immediately when the support code is ready.
     env.Append(LINKFLAGS=["-sINVOKE_RUN=0"])

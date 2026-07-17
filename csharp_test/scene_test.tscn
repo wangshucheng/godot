@@ -1,0 +1,9 @@
+[gd_scene load_steps=1 format=3]
+
+[node name="Root" type="Node"]
+
+[node name="Label" type="Label" parent="."]
+text = "Scene Test"
+
+[node name="Button" type="Button" parent="."]
+text = "Click Me"

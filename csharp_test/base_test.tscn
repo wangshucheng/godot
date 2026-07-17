@@ -1,0 +1,9 @@
+[gd_scene load_steps=1 format=3]
+
+[node name="Root" type="Node"]
+
+[node name="Child1" type="Node" parent="."]
+
+[node name="Child2" type="Node" parent="."]
+
+[node name="Timer" type="Timer" parent="."]

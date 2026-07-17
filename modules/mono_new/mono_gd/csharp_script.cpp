@@ -919,7 +919,7 @@ String CSharpLanguage::debug_get_error() const {
 	// CSharpDebugger::on_unhandled_exception hook). When an IDE is attached
 	// via SDB, breakpoints/stepping are handled directly by VS Code; this
 	// hook only surfaces runtime exceptions to the Godot debugger panel.
-	const CSharpDebugger::ExceptionInfo &ex = CSharpDebugger::get_last_exception();
+	CSharpDebugger::ExceptionInfo ex = CSharpDebugger::get_last_exception();
 	if (ex.valid) {
 		return ex.message;
 	}
@@ -927,24 +927,24 @@ String CSharpLanguage::debug_get_error() const {
 }
 
 int CSharpLanguage::debug_get_stack_level_count() const {
-	const CSharpDebugger::ExceptionInfo &ex = CSharpDebugger::get_last_exception();
+	CSharpDebugger::ExceptionInfo ex = CSharpDebugger::get_last_exception();
 	return ex.valid ? ex.frames.size() : 0;
 }
 
 int CSharpLanguage::debug_get_stack_level_line(int p_level) const {
-	const CSharpDebugger::ExceptionInfo &ex = CSharpDebugger::get_last_exception();
+	CSharpDebugger::ExceptionInfo ex = CSharpDebugger::get_last_exception();
 	if (!ex.valid || p_level < 0 || p_level >= ex.frames.size()) return -1;
 	return ex.frames[p_level].line;
 }
 
 String CSharpLanguage::debug_get_stack_level_function(int p_level) const {
-	const CSharpDebugger::ExceptionInfo &ex = CSharpDebugger::get_last_exception();
+	CSharpDebugger::ExceptionInfo ex = CSharpDebugger::get_last_exception();
 	if (!ex.valid || p_level < 0 || p_level >= ex.frames.size()) return "";
 	return ex.frames[p_level].function;
 }
 
 String CSharpLanguage::debug_get_stack_level_source(int p_level) const {
-	const CSharpDebugger::ExceptionInfo &ex = CSharpDebugger::get_last_exception();
+	CSharpDebugger::ExceptionInfo ex = CSharpDebugger::get_last_exception();
 	if (!ex.valid || p_level < 0 || p_level >= ex.frames.size()) return "";
 	return ex.frames[p_level].source;
 }

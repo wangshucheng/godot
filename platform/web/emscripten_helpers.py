@@ -32,6 +32,8 @@ def create_engine_file(env, target, source, externs, threads_enabled):
 
 def create_template_zip(env, js, wasm, side):
     binary_name = "godot.editor" if env.editor_build else "godot"
+    # Editor builds go to bin/<platform>/, export templates go to templates/<platform>/.
+    output_prefix = "#bin/web" if env.editor_build else "#templates/web"
     zip_dir = env.Dir(env.GetTemplateZipPath())
     in_files = [
         js,
@@ -75,7 +77,7 @@ def create_template_zip(env, js, wasm, side):
             "___GODOT_THREADS_ENABLED___": "true" if env["threads"] else "false",
             "___GODOT_ENSURE_CROSSORIGIN_ISOLATION_HEADERS___": "true",
         }
-        html = env.Substfile(target="#bin/godot${PROGSUFFIX}.html", source=html, SUBST_DICT=subst_dict)
+        html = env.Substfile(target=output_prefix + "/godot${PROGSUFFIX}.html", source=html, SUBST_DICT=subst_dict)
         in_files.append(html)
         out_files.append(zip_dir.File(binary_name + ".html"))
         # And logo/favicon
@@ -85,7 +87,7 @@ def create_template_zip(env, js, wasm, side):
         out_files.append(zip_dir.File("favicon.png"))
         # PWA
         service_worker = env.Substfile(
-            target="#bin/godot${PROGSUFFIX}.service.worker.js",
+            target=output_prefix + "/godot${PROGSUFFIX}.service.worker.js",
             source=service_worker,
             SUBST_DICT=subst_dict,
         )
@@ -111,7 +113,7 @@ def create_template_zip(env, js, wasm, side):
     zip_files = env.NoCache(env.InstallAs(out_files, in_files))
     env.NoCache(
         env.Zip(
-            "#bin/godot",
+            output_prefix + "/godot",
             zip_files,
             ZIPROOT=zip_dir,
             ZIPSUFFIX="${PROGSUFFIX}${ZIPSUFFIX}",
@@ -120,7 +122,8 @@ def create_template_zip(env, js, wasm, side):
 
 
 def get_template_zip_path(env):
-    return "#bin/.web_zip"
+    output_prefix = "#bin/web" if env.editor_build else "#templates/web"
+    return output_prefix + "/.web_zip"
 
 
 def add_js_libraries(env, libraries):

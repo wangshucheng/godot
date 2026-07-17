@@ -25,8 +25,11 @@ env_ios.Append(CCFLAGS=["-fmodules", "-fcxx-modules"])
 if "LIBS_EXTERNAL" in env_ios:
     env_ios.Depends(ios_lib, env_ios["LIBS_EXTERNAL"])
 
+# Editor builds go to bin/<platform>/, export templates go to templates/<platform>/.
+output_prefix = "#bin/ios" if env.editor_build else "#templates/ios"
+
 combine_command = env_ios.CommandNoCache(
-    "#bin/libgodot" + env_ios["LIBSUFFIX"], [ios_lib] + env_ios["LIBS"], env.Run(combine_libs_apple_embedded)
+    output_prefix + "/libgodot" + env_ios["LIBSUFFIX"], [ios_lib] + env_ios["LIBS"], env.Run(combine_libs_apple_embedded)
 )
 
 if env["generate_bundle"]:

@@ -47,8 +47,11 @@ env_thirdparty.disable_warnings()
 thirdparty_obj = env_thirdparty.SharedObject("#thirdparty/misc/ifaddrs-android.cc")
 android_objects.append(thirdparty_obj)
 
+# Editor builds go to bin/<platform>/, export templates go to templates/<platform>/.
+output_prefix = "#bin/android" if env.editor_build else "#templates/android"
+
 # FIXME: Hardcoded to bin to ensure the directory exists if not redirecting build objects.
-lib = env_android.add_shared_library("#bin/libgodot", android_objects, redirect_build_objects=False)
+lib = env_android.add_shared_library(output_prefix + "/libgodot", android_objects, redirect_build_objects=False)
 
 # Needed to force rebuilding the platform files when the thirdparty code is updated.
 env.Depends(lib, thirdparty_obj)
@@ -104,7 +107,7 @@ if lib_arch_dir != "" and host_subpath != "":
 
     if env["debug_symbols"] and env["separate_debug_symbols"]:
         debug_symbols_zip_file = (
-            ("#bin/android-editor-" if env.editor_build else "#bin/android-template-")
+            (output_prefix + "/android-editor-" if env.editor_build else output_prefix + "/android-template-")
             + lib_type_dir
             + "-native-symbols.zip"
         )

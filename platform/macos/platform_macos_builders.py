@@ -9,7 +9,9 @@ from platform_methods import lipo
 
 
 def generate_bundle(target, source, env):
-    bin_dir = env.Dir("#bin").abspath
+    # Editor builds go to bin/macos/, export templates go to templates/macos/.
+    output_prefix = "#bin/macos" if env.editor_build else "#templates/macos"
+    bin_dir = env.Dir(output_prefix).abspath
 
     if env.editor_build:
         # Editor bundle.
@@ -24,7 +26,7 @@ def generate_bundle(target, source, env):
 
         # Assemble .app bundle and update version info.
         app_dir = env.Dir(
-            "#bin/" + (prefix + env.extra_suffix + env.module_version_string).replace(".", "_") + ".app"
+            output_prefix + "/" + (prefix + env.extra_suffix + env.module_version_string).replace(".", "_") + ".app"
         ).abspath
         templ = env.Dir("#misc/dist/macos_tools.app").abspath
         if os.path.exists(app_dir):
@@ -44,7 +46,7 @@ def generate_bundle(target, source, env):
         if target_bin != "":
             shutil.copy(target_bin, app_dir + "/Contents/MacOS/Godot")
         if "mono" in env.module_version_string:
-            shutil.copytree(env.Dir("#bin/GodotSharp").abspath, app_dir + "/Contents/Resources/GodotSharp")
+            shutil.copytree(env.Dir(output_prefix + "/GodotSharp").abspath, app_dir + "/Contents/Resources/GodotSharp")
         version = get_version_info("", True)
         with open(env.Dir("#misc/dist/macos").abspath + "/editor_info_plist.template", "rt", encoding="utf-8") as fin:
             with open(app_dir + "/Contents/Info.plist", "wt", encoding="utf-8", newline="\n") as fout:
@@ -92,7 +94,7 @@ def generate_bundle(target, source, env):
         dbg_target_bin = lipo(bin_dir + "/" + dbg_prefix, env.extra_suffix + env.module_version_string)
 
         # Assemble .app bundle.
-        app_dir = env.Dir("#bin/macos_template.app").abspath
+        app_dir = env.Dir(output_prefix + "/macos_template.app").abspath
         templ = env.Dir("#misc/dist/macos_template.app").abspath
         if os.path.exists(app_dir):
             shutil.rmtree(app_dir)
@@ -106,7 +108,7 @@ def generate_bundle(target, source, env):
 
         # ZIP .app bundle.
         zip_dir = env.Dir(
-            "#bin/" + (app_prefix + env.extra_suffix + env.module_version_string).replace(".", "_")
+            output_prefix + "/" + (app_prefix + env.extra_suffix + env.module_version_string).replace(".", "_")
         ).abspath
         shutil.make_archive(zip_dir, "zip", root_dir=bin_dir, base_dir="macos_template.app")
         shutil.rmtree(app_dir)

@@ -10,6 +10,11 @@ import platform_windows_builders
 
 from methods import get_compiler_version, redirect_emitter
 
+# Output directory: editor builds go to bin/<platform>/, export templates go
+# to templates/<platform>/. Only the editor is placed under bin/ to keep the
+# editor and shipped game templates clearly separated.
+output_prefix = "#bin/windows" if env.editor_build else "#templates/windows"
+
 sources = []
 
 common_win = [
@@ -65,7 +70,7 @@ def arrange_program_clean(prog):
     extensions_to_clean = [".ilk", ".exp", ".pdb", ".lib"]
     for program in prog:
         executable_stem = Path(program.name).stem
-        extra_files_to_clean = [f"#bin/{executable_stem}{extension}" for extension in extensions_to_clean]
+        extra_files_to_clean = [f"{output_prefix}/{executable_stem}{extension}" for extension in extensions_to_clean]
         Clean(prog, extra_files_to_clean)
 
 
@@ -112,11 +117,11 @@ if env["accesskit"] and not env.msvc:
     sources += env.DEFLIB("uiautomationcore")
 
 if env["library_type"] == "static_library":
-    prog = env.add_library("#bin/godot", sources, PROGSUFFIX=env["PROGSUFFIX"])
+    prog = env.add_library(output_prefix + "/godot", sources, PROGSUFFIX=env["PROGSUFFIX"])
 elif env["library_type"] == "shared_library":
-    prog = env.add_shared_library("#bin/godot", sources, PROGSUFFIX=env["PROGSUFFIX"])
+    prog = env.add_shared_library(output_prefix + "/godot", sources, PROGSUFFIX=env["PROGSUFFIX"])
 else:
-    prog = env.add_program("#bin/godot", sources, PROGSUFFIX=env["PROGSUFFIX"])
+    prog = env.add_program(output_prefix + "/godot", sources, PROGSUFFIX=env["PROGSUFFIX"])
 arrange_program_clean(prog)
 
 env.Depends(prog, "godot.manifest")
@@ -141,7 +146,7 @@ if env["windows_subsystem"] == "gui":
         env_wrap.Append(LINKFLAGS=["-Wl,--subsystem,console"])
         env_wrap.Append(LIBS=["version"])
 
-    prog_wrap = env_wrap.add_program("#bin/godot", common_win_wrap + res_wrap_obj, PROGSUFFIX=env["PROGSUFFIX_WRAP"])
+    prog_wrap = env_wrap.add_program(output_prefix + "/godot", common_win_wrap + res_wrap_obj, PROGSUFFIX=env["PROGSUFFIX_WRAP"])
     arrange_program_clean(prog_wrap)
     env_wrap.Depends(prog_wrap, prog)
     sources += common_win_wrap + res_wrap_obj
@@ -164,13 +169,13 @@ if env["d3d12"]:
     agility_arch_subdir = agility_target_aliases[env["arch"]]
 
     # Used in cases where we can have multiple archs side-by-side.
-    arch_bin_dir = "#bin/" + env["arch"]
+    arch_bin_dir = output_prefix + "/" + env["arch"]
 
     # Agility SDK
     if env["agility_sdk_path"] != "" and os.path.exists(env["agility_sdk_path"]):
         agility_dlls = ["D3D12Core.dll", "d3d12SDKLayers.dll"]
         # Whether these are loaded from arch-specific directory or not has to be known at build time.
-        target_dir = arch_bin_dir if env["agility_sdk_multiarch"] else "#bin"
+        target_dir = arch_bin_dir if env["agility_sdk_multiarch"] else output_prefix
         for dll in agility_dlls:
             env.CommandNoCache(
                 target_dir + "/" + dll,
@@ -182,7 +187,7 @@ if env["d3d12"]:
     if env["use_pix"]:
         pix_dll = "WinPixEventRuntime.dll"
         env.CommandNoCache(
-            "#bin/" + pix_dll,
+            output_prefix + "/" + pix_dll,
             env["pix_path"] + "/bin/" + dxc_arch_subdir + "/" + pix_dll,
             Copy("$TARGET", "$SOURCE"),
         )

@@ -23,15 +23,27 @@ typedef MonoObject MonoString;
 // Lifecycle:
 //   1. parse_command_line()   — called at CORE initialization level (very early)
 //   2. configure_before_jit_init() — called from GDMono::initialize() before
-//      mono_jit_init_version(); sets the MONO_DEBUG env var so the SDB agent
-//      starts listening when the JIT is initialized.
+//      mono_jit_init_version(); configures the SDB agent via
+//      mono_jit_parse_options() so the agent starts listening when the JIT
+//      is initialized. MUST be called before mono_jit_init_version(); enforced
+//      by an ERR_FAIL_COND check against mark_jit_initialized().
 //   3. install_exception_hook() — called after mono_jit_init_version() succeeds;
 //      registers on_unhandled_exception() as the Mono unhandled exception hook.
+//   4. mark_jit_initialized() — called from GDMono immediately after
+//      mono_jit_init_version() returns; arms the ordering guard so any later
+//      call to configure_before_jit_init() fails loudly instead of invoking
+//      undefined behavior inside Mono.
 //
 // Why command-line + restart (no hot-swap):
 //   Mono SDB agent must be configured BEFORE mono_jit_init_version(). After
 //   JIT init the agent cannot be toggled. Toggling the debugger at runtime
 //   therefore requires restarting the engine.
+//
+// Thread safety:
+//   The unhandled exception hook may fire on any Mono internal thread
+//   (finalizer, timer, etc.). s_last_exception is protected by an internal
+//   mutex. Callers of get_last_exception() receive a deep copy and may
+//   safely use it from any thread.
 //
 // WebAssembly note:
 //   Mono interpreter mode (MONO_EE_MODE_INTERP) does not support SDB. All
@@ -40,6 +52,10 @@ namespace CSharpDebugger {
 
 // Default port for the SDB agent if --mono-debugger is passed without a value.
 constexpr int DEFAULT_DEBUGGER_PORT = 56000;
+
+// Maximum number of stack frames captured per exception to bound memory and
+// UI rendering cost in pathological recursion cases.
+constexpr int MAX_FRAMES = 200;
 
 // --- Stack frame / exception info -------------------------------------------
 
@@ -62,14 +78,21 @@ struct ExceptionInfo {
 // internal global; does not touch env vars or Mono state.
 void parse_command_line(const List<String> &p_args);
 
-// Set the MONO_DEBUG env var so the SDB agent starts listening when
-// mono_jit_init_version() is called. No-op if no port was requested or
-// on WASM (interpreter mode doesn't support SDB).
+// Configure the SDB agent via mono_jit_parse_options() so the agent starts
+// listening when mono_jit_init_version() is called. No-op if no port was
+// requested or on WASM (interpreter mode doesn't support SDB).
+// Precondition: must be called BEFORE mono_jit_init_version(); enforced by
+// an ERR_FAIL_COND against mark_jit_initialized().
 void configure_before_jit_init();
 
 // Register on_unhandled_exception() as the Mono unhandled exception hook.
 // Should be called after mono_jit_init_version() succeeds.
 void install_exception_hook();
+
+// Mark that mono_jit_init_version() has been called. Arms the ordering guard
+// for configure_before_jit_init(). Called from GDMono::initialize() right
+// after mono_jit_init_version() returns.
+void mark_jit_initialized();
 
 // --- State queries (for UI + debug hooks) -----------------------------------
 
@@ -84,8 +107,12 @@ int get_requested_port();
 bool is_attached();
 
 // --- Exception info (consumed by CSharpLanguage::debug_get_* hooks) ---------
+//
+// Returns a deep copy of the last captured exception under the internal mutex.
+// Safe to call from any thread. The returned copy is independent of any
+// later exception capture or clear_last_exception() call.
 
-const ExceptionInfo &get_last_exception();
+ExceptionInfo get_last_exception();
 void clear_last_exception();
 
 } // namespace CSharpDebugger

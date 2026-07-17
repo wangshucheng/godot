@@ -195,9 +195,11 @@ bool GDMono::initialize() {
 
 	MonoLogger::log("Initializing Mono runtime (static linkage mode)...");
 
-	// Configure the SDB agent BEFORE mono_jit_init_version(). The agent reads
-	// the MONO_DEBUG env var at JIT init time and starts listening on the
-	// requested port. No-op if --mono-debugger was not passed.
+	// Configure the SDB agent BEFORE mono_jit_init_version(). The agent is
+	// configured via mono_jit_parse_options() (NOT the MONO_DEBUG env var,
+	// which Mono 6.12 does not honor for --debugger-agent). The agent starts
+	// listening on the requested port once the JIT is initialized.
+	// No-op if --mono-debugger was not passed.
 	CSharpDebugger::configure_before_jit_init();
 
 	// Initialize Mono debug support (enables source location / stack frame info)
@@ -289,6 +291,11 @@ bool GDMono::initialize() {
 
 
 	root_domain = mono_jit_init_version("GodotEngine", runtime_version);
+
+	// Mark JIT as initialized so any later call to configure_before_jit_init()
+	// is rejected (calling mono_jit_parse_options after JIT init is undefined
+	// behavior and typically aborts the process).
+	CSharpDebugger::mark_jit_initialized();
 
 	MonoLogger::log(vformat("mono_jit_init_version returned, root_domain=%s", root_domain ? "non-null" : "null"));
 

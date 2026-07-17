@@ -5,6 +5,9 @@ import platform_macos_builders
 
 Import("env")
 
+# Editor builds go to bin/<platform>/, export templates go to templates/<platform>/.
+output_prefix = "#bin/macos" if env.editor_build else "#templates/macos"
+
 files = [
     "os_macos.mm",
     "godot_application.mm",
@@ -48,11 +51,11 @@ else:
     files += ["libgodot_macos.mm"]
 
 if env["library_type"] == "static_library":
-    prog = env.add_library("#bin/godot", files)
+    prog = env.add_library(output_prefix + "/godot", files)
 elif env["library_type"] == "shared_library":
-    prog = env.add_shared_library("#bin/godot", files)
+    prog = env.add_shared_library(output_prefix + "/godot", files)
 else:
-    prog = env.add_program("#bin/godot", files)
+    prog = env.add_program(output_prefix + "/godot", files)
 
 if env["debug_symbols"] and env["separate_debug_symbols"]:
     env.AddPostAction(prog, env.Run(platform_macos_builders.make_debug_macos))

@@ -2,9 +2,12 @@
 
 #include "../utils/mono_logger.h"
 
+#include "core/error/error_macros.h"
+#include "core/os/mutex.h"
 #include "core/string/ustring.h"
 #include "core/string/print_string.h"
 #include "core/templates/list.h"
+#include "core/templates/local_vector.h"
 #include "core/variant/variant.h" // for vformat
 
 #include <mono/mono-publib.h>
@@ -33,6 +36,16 @@ namespace CSharpDebugger {
 
 static int s_requested_port = 0; // 0 = not requested
 static ExceptionInfo s_last_exception;
+// Guards s_last_exception: the unhandled exception hook may fire on any Mono
+// internal thread (finalizer, timer, etc.), while debug_get_* hooks read it
+// from the main thread. Without this lock, Vector<StackFrame> replacement
+// could race with reader iteration and cause use-after-free.
+static Mutex s_exception_mutex;
+// Ordering guard: configure_before_jit_init() must run BEFORE
+// mono_jit_init_version(). Once mark_jit_initialized() is called, any later
+// attempt to configure the SDB agent is rejected to avoid undefined behavior
+// inside Mono (mono_jit_parse_options after JIT init typically aborts).
+static bool s_jit_init_done = false;
 
 // ---------------------------------------------------------------------------
 // Command-line parsing
@@ -72,6 +85,14 @@ void configure_before_jit_init() {
 	}
 	return;
 #else
+	// Ordering guard: mono_jit_parse_options() must be called BEFORE
+	// mono_jit_init_version(). Calling it after JIT init is undefined
+	// behavior (typically aborts the process).
+	ERR_FAIL_COND_MSG(s_jit_init_done,
+			"CSharpDebugger::configure_before_jit_init() must be called BEFORE "
+			"mono_jit_init_version(). Call it from GDMono::initialize() before "
+			"the JIT init call, and call mark_jit_initialized() right after.");
+
 	if (s_requested_port == 0) {
 		return;
 	}
@@ -87,11 +108,23 @@ void configure_before_jit_init() {
 			s_requested_port);
 
 	CharString opt_utf8 = agent_option.utf8();
-	char *argv[1] = { opt_utf8.ptrw() };
+	// Copy the option into a writable buffer we own. mono_jit_parse_options
+	// takes char **argv (non-const), and Mono may modify the string in place
+	// (e.g. write '\0' delimiters). Using CharString::ptrw() directly risks
+	// corrupting CharString's internal state. The buffer is null-terminated
+	// by CharString contract (size() excludes the terminator).
+	LocalVector<char> opt_buf;
+	opt_buf.resize(opt_utf8.size() + 1);
+	memcpy(opt_buf.ptr(), opt_utf8.get_data(), opt_utf8.size() + 1);
+	char *argv[1] = { opt_buf.ptr() };
 	mono_jit_parse_options(1, argv);
 
 	MonoLogger::log(vformat("Mono SDB agent configured on port %d (attach IDE to 127.0.0.1:%d)", s_requested_port, s_requested_port));
 #endif
+}
+
+void mark_jit_initialized() {
+	s_jit_init_done = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -111,7 +144,7 @@ static Vector<StackFrame> parse_stack_trace(const String &p_trace) {
 
 	// Split by newlines; skip the first line (the exception type + message).
 	Vector<String> lines = p_trace.split("\n", false);
-	for (int i = 0; i < lines.size(); i++) {
+	for (int i = 0; i < lines.size() && frames.size() < MAX_FRAMES; i++) {
 		String line = lines[i].strip_edges();
 		if (!line.begins_with("at ")) {
 			continue;
@@ -211,9 +244,14 @@ static void on_unhandled_exception(MonoObject *p_exc, void *p_user_data) {
 	}
 
 	// Store for the Godot debugger panel to query via debug_get_* hooks.
-	s_last_exception.message = message;
-	s_last_exception.frames = frames;
-	s_last_exception.valid = true;
+	// Lock: the hook may fire on any Mono internal thread (finalizer, timer),
+	// while debug_get_* hooks read s_last_exception from the main thread.
+	{
+		MutexLock lock(s_exception_mutex);
+		s_last_exception.message = message;
+		s_last_exception.frames = frames;
+		s_last_exception.valid = true;
+	}
 
 	MonoLogger::log_error("Unhandled C# exception:\n" + formatted);
 }
@@ -254,11 +292,16 @@ bool is_attached() {
 // Exception info access
 // ---------------------------------------------------------------------------
 
-const ExceptionInfo &get_last_exception() {
+ExceptionInfo get_last_exception() {
+	// Return a deep copy under the lock. The hook may overwrite s_last_exception
+	// while the caller is still inspecting the returned value; a copy makes the
+	// caller independent of any later capture or clear_last_exception() call.
+	MutexLock lock(s_exception_mutex);
 	return s_last_exception;
 }
 
 void clear_last_exception() {
+	MutexLock lock(s_exception_mutex);
 	s_last_exception.valid = false;
 	s_last_exception.message = String();
 	s_last_exception.frames.clear();

@@ -1,0 +1,15 @@
+[gd_scene load_steps=2 format=3 uid="uid://testgamelabel"]
+
+[ext_resource type="Script" path="res://main.gd" id="1"]
+
+[node name="Main" type="Node2D"]
+
+[node name="Label" type="Label" parent="."]
+offset_left = 100.0
+offset_top = 200.0
+offset_right = 700.0
+offset_bottom = 400.0
+text = "Hello from Godot 4.7 Mono!"
+horizontal_alignment = 1
+vertical_alignment = 1
+script = ExtResource("1")

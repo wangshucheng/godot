@@ -5,6 +5,9 @@ Import("env")
 
 import platform_linuxbsd_builders
 
+# Editor builds go to bin/<platform>/, export templates go to templates/<platform>/.
+output_prefix = "#bin/linuxbsd" if env.editor_build else "#templates/linuxbsd"
+
 common_linuxbsd = [
     "crash_handler_linuxbsd.cpp",
     "os_linuxbsd.cpp",
@@ -41,11 +44,11 @@ if env["dbus"]:
         common_linuxbsd.append("dbus-so_wrap.c")
 
 if env["library_type"] == "static_library":
-    prog = env.add_library("#bin/godot", common_linuxbsd)
+    prog = env.add_library(output_prefix + "/godot", common_linuxbsd)
 elif env["library_type"] == "shared_library":
-    prog = env.add_shared_library("#bin/godot", common_linuxbsd)
+    prog = env.add_shared_library(output_prefix + "/godot", common_linuxbsd)
 else:
-    prog = env.add_program("#bin/godot", common_linuxbsd)
+    prog = env.add_program(output_prefix + "/godot", common_linuxbsd)
 
 if env["debug_symbols"] and env["separate_debug_symbols"]:
     env.AddPostAction(prog, env.Run(platform_linuxbsd_builders.make_debug_linuxbsd))

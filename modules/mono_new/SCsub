@@ -63,8 +63,13 @@ else:
         else:
             mono_lib_path = mono_lib_base
 
+        # System Mono fallback: only for dynamic linking (not stub, not static).
+        # The system-installed mono-2.0-sgen.lib is a DLL import library (~274 KB),
+        # NOT a static library. Using it in mono_static mode would silently link
+        # against the DLL instead of the 32 MB static lib in thirdparty/, causing
+        # runtime error 0xC0000135 (STATUS_DLL_NOT_FOUND) when the DLL is absent.
         system_mono_lib = "C:/Program Files/Mono/lib"
-        if os.path.isdir(system_mono_lib) and not mono_stub:
+        if os.path.isdir(system_mono_lib) and not mono_stub and not mono_static:
             mono_lib_path = system_mono_lib
 
 env_mono.add_source_files(env.modules_sources, "*.cpp")

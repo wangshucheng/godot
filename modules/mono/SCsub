@@ -279,16 +279,10 @@ elif env["platform"] == "web":
         import os as _os_mod
         if _os_mod.environ.get("MONO_AOT_PRECOMPILED", "") == "1":
             print("[Mono] AOT: Using pre-compiled AOT objects (MONO_AOT_PRECOMPILED=1)")
-            # Use generated module table if it exists
-            _gen_cpp_path = _os_mod.path.join(str(Dir("#").abspath), "modules", "mono", "mono_aot_modules.gen.cpp")
-            if _os_mod.path.exists(_gen_cpp_path):
-                if "mono_aot_modules.cpp" in mono_sources:
-                    mono_sources.remove("mono_aot_modules.cpp")
-                if "mono_aot_modules.gen.cpp" not in mono_sources:
-                    mono_sources.append("mono_aot_modules.gen.cpp")
-                print("[Mono] AOT: Using pre-generated module table: %s" % _gen_cpp_path)
-            else:
-                print("[Mono] AOT WARNING: mono_aot_modules.gen.cpp not found, using default")
+            # Use the hand-maintained mono_aot_modules.cpp (tracked in git).
+            # No need to swap in a generated .gen.cpp — the .cpp file already
+            # contains the correct hybrid AOT module table for this configuration.
+            print("[Mono] AOT: Using hand-maintained module table: mono_aot_modules.cpp")
         else:
             _run_aot_workflow(env, env_mono, mono_sources)
 
@@ -353,12 +347,14 @@ elif env["platform"] == "web":
         # Embed BCL assemblies into WASM MEMFS via emcc --embed-file
         bcl_wasm_dir = os.environ.get("BCL_WASM_DIR", "")
         if not bcl_wasm_dir:
-            bcl_wasm_dir = os.path.normpath(os.path.join(str(Dir("#").abspath), "..", "mono-wasm-output", "bcl", "lib", "mono"))
+            # Try Mono source BCL (WASM-specific, from illinker-test-assets)
+            bcl_wasm_dir = r"E:\workspace\godot\mono\external\illinker-test-assets\wasm\HelloWorld\bin\Release\netstandard2.0\dist\_framework\_bin"
         if not os.path.isdir(bcl_wasm_dir):
-            bcl_wasm_dir = r"E:\workspace\godot\mono-wasm-output\bcl\lib\mono"
+            # Fallback to local mono/lib/mono/4.5 (desktop BCL)
+            bcl_wasm_dir = os.path.join(str(Dir("#").abspath), "mono", "lib", "mono", "4.5")
         if os.path.isdir(bcl_wasm_dir):
             env.Append(LINKFLAGS=[
-                "--embed-file", bcl_wasm_dir + "@/lib/mono",
+                "--embed-file", bcl_wasm_dir + "@/lib/mono/4.5",
             ])
             print("[Mono] WASM AOT: BCL assemblies embedded from %s" % bcl_wasm_dir)
         else:
@@ -431,17 +427,17 @@ elif env["platform"] == "web":
         # BCL .dll files are accessible at /lib/mono/ in MEMFS at runtime.
         # Path resolution order:
         #   1. BCL_WASM_DIR environment variable (absolute path)
-        #   2. <GodotSource>/../mono-wasm-output/bcl/lib/mono (legacy layout)
-        #   3. E:\workspace\godot\mono-wasm-output\bcl\lib\mono (default SDK path)
+        #   2. Mono source WASM BCL (illinker-test-assets)
+        #   3. Local mono/lib/mono/4.5 (desktop BCL fallback)
         import os
         bcl_wasm_dir = os.environ.get("BCL_WASM_DIR", "")
         if not bcl_wasm_dir:
-            bcl_wasm_dir = os.path.normpath(os.path.join(str(Dir("#").abspath), "..", "mono-wasm-output", "bcl", "lib", "mono"))
+            bcl_wasm_dir = r"E:\workspace\godot\mono\external\illinker-test-assets\wasm\HelloWorld\bin\Release\netstandard2.0\dist\_framework\_bin"
         if not os.path.isdir(bcl_wasm_dir):
-            bcl_wasm_dir = r"E:\workspace\godot\mono-wasm-output\bcl\lib\mono"
+            bcl_wasm_dir = os.path.join(str(Dir("#").abspath), "mono", "lib", "mono", "4.5")
         if os.path.isdir(bcl_wasm_dir):
             env.Append(LINKFLAGS=[
-                "--embed-file", bcl_wasm_dir + "@/lib/mono",
+                "--embed-file", bcl_wasm_dir + "@/lib/mono/4.5",
             ])
             print("[Mono] WASM: BCL assemblies embedded from %s" % bcl_wasm_dir)
         else:

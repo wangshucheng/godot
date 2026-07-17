@@ -53,8 +53,9 @@ def _run_aot_workflow(env, env_mono, mono_sources_list):
             "/opt/mono-aot-cross/bin/mono-aot-cross")
     if not os.path.exists(mono_aot_cross):
         raise SCons.Errors.StopError(
-            "mono-aot-cross not found. Run tools/build_wasm_aot_cross_v4.sh first."
-            " Expected at /opt/mono-aot-cross-wasm/bin/mono")
+            "mono-aot-cross not found. Build it from Mono 6.12 source with LLVM 10"
+            " WASM backend (see docs/superpowers/specs/2026-07-14-mono-full-aot-workflow-design.md)."
+            " Expected at /opt/mono-aot-cross-wasm/bin/mono-aot-cross or /opt/mono-aot-cross/bin/mono-aot-cross.")
 
     # 2. Determine DLL paths
     bcl_dir = os.environ.get("BCL_WASM_DIR",

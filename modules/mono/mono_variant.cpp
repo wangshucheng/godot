@@ -368,10 +368,12 @@ MonoObject *variant_to_mono_bool(MonoDomain *p_domain, bool p_val) {
 }
 
 MonoObject *variant_to_mono_int(MonoDomain *p_domain, int64_t p_val) {
-	int32_t i32 = (int32_t)p_val;
-	if (p_val == (int64_t)i32) {
-		return mono_value_box(p_domain, mono_class_int32, &i32);
-	}
+	// Godot Variant::INT is always int64, and the generated C# bindings unbox
+	// int getters as `(long)` (Int64). Dynamically boxing small values as
+	// Int32 broke this contract: any long getter receiving an Int32 box threw
+	// InvalidCastException at runtime, and int (Int32) getters also broke for
+	// values outside the int32 range. Always box as Int64 to match the
+	// binding contract. (H6)
 	return mono_value_box(p_domain, mono_class_int64, &p_val);
 }
 
@@ -419,17 +421,20 @@ MonoObject *variant_to_mono_rect2(MonoDomain *p_domain, real_t p_x, real_t p_y, 
 	if (!mono_class_rect2) return nullptr;
 	MonoObject *obj = mono_object_new(p_domain, mono_class_rect2);
 	if (!obj) return nullptr;
-	const char *names[] = {"position", "size"};
-	MonoObject *pos = variant_to_mono_vector2(p_domain, p_x, p_y);
-	MonoObject *siz = variant_to_mono_vector2(p_domain, p_w, p_h);
-	if (pos) {
-		MonoClassField *fp = mono_class_get_field_from_name(mono_class_rect2, "position");
-		if (fp) mono_field_set_value(obj, fp, &pos);
-	}
-	if (siz) {
-		MonoClassField *fs = mono_class_get_field_from_name(mono_class_rect2, "size");
-		if (fs) mono_field_set_value(obj, fs, &siz);
-	}
+	// Rect2.position and Rect2.size are value-type Vector2 fields.
+	// mono_field_set_value copies sizeof(field) bytes from the source pointer
+	// into the field. We pass a pointer to a 2-float buffer (matching the
+	// memory layout of Vector2: float x, float y), so the bytes get written
+	// directly into the parent's value-type field. The previous code created a
+	// boxed Vector2 MonoObject and passed &box, which wrote a MonoObject*
+	// pointer value (8 bytes of pointer) into a field expecting 8 bytes of
+	// (x, y) float data — corrupting the Rect2 layout. (H4 / M9)
+	float pos_vals[2] = { (float)p_x, (float)p_y };
+	float siz_vals[2] = { (float)p_w, (float)p_h };
+	MonoClassField *fp = mono_class_get_field_from_name(mono_class_rect2, "position");
+	if (fp) mono_field_set_value(obj, fp, pos_vals);
+	MonoClassField *fs = mono_class_get_field_from_name(mono_class_rect2, "size");
+	if (fs) mono_field_set_value(obj, fs, siz_vals);
 	return obj;
 }
 
@@ -507,13 +512,6 @@ String mono_object_to_native_string(MonoObject *p_obj) {
 	return result;
 }
 
-Object *mono_object_to_godot_object(MonoObject *p_obj) {
-	bool ok;
-	intptr_t ptr = mono_object_to_intptr(p_obj, &ok);
-	if (ok) return (Object *)ptr;
-	return nullptr;
-}
-
 static bool get_struct_float_field(MonoObject *p_obj, MonoClass *p_class, const char *p_name, float &r_val) {
 	if (!p_obj || !p_class) return false;
 	MonoClassField *field = mono_class_get_field_from_name(p_class, p_name);
@@ -569,20 +567,26 @@ bool mono_object_to_rect2(MonoObject *p_obj, real_t *r_x, real_t *r_y, real_t *r
 	MonoClassField *pos_field = mono_class_get_field_from_name(mono_class_rect2, "position");
 	MonoClassField *size_field = mono_class_get_field_from_name(mono_class_rect2, "size");
 	if (!pos_field || !size_field) return false;
-	MonoObject *pos_obj = nullptr;
-	MonoObject *size_obj = nullptr;
-	mono_field_get_value(p_obj, pos_field, &pos_obj);
-	mono_field_get_value(p_obj, size_field, &size_obj);
-	real_t px = 0, py = 0, sx = 0, sy = 0;
-	bool ok = mono_object_to_vector2(pos_obj, &px, &py);
-	ok &= mono_object_to_vector2(size_obj, &sx, &sy);
-	if (ok) {
-		if (r_x) *r_x = px;
-		if (r_y) *r_y = py;
-		if (r_w) *r_w = sx;
-		if (r_h) *r_h = sy;
-	}
-	return ok;
+	// Rect2.position and Rect2.size are value-type Vector2 fields (layout:
+	// float x, y = 8 bytes). mono_field_get_value copies sizeof(field) bytes
+	// into the destination buffer. We read into 2-float buffers and interpret
+	// the bytes as (x, y) directly. The previous code read into a MonoObject*
+	// variable (8 bytes) and then called mono_object_to_vector2 on the
+	// "pointer" — which actually contained the (x, y) float bytes reinterpreted
+	// as a pointer value, causing crashes / garbage. This was masked before
+	// the write-side fix because the field previously held a real MonoObject*
+	// pointer; the write-side fix (variant_to_mono_rect2) now stores the raw
+	// (x, y) floats, so the read side must match. (M9 read side, paired with
+	// H4 write side fix.)
+	float pos_buf[2] = { 0, 0 };
+	float size_buf[2] = { 0, 0 };
+	mono_field_get_value(p_obj, pos_field, pos_buf);
+	mono_field_get_value(p_obj, size_field, size_buf);
+	if (r_x) *r_x = pos_buf[0];
+	if (r_y) *r_y = pos_buf[1];
+	if (r_w) *r_w = size_buf[0];
+	if (r_h) *r_h = size_buf[1];
+	return true;
 }
 
 // ============================================================
@@ -634,17 +638,20 @@ MonoObject *variant_to_mono_rect2i(MonoDomain *p_domain, int32_t p_x, int32_t p_
 	if (!mono_class_rect2i) return nullptr;
 	MonoObject *obj = mono_object_new(p_domain, mono_class_rect2i);
 	if (!obj) return nullptr;
-	// Rect2I has position (Vector2I) and size (Vector2I)
-	MonoObject *pos = variant_to_mono_vector2i(p_domain, p_x, p_y);
-	MonoObject *siz = variant_to_mono_vector2i(p_domain, p_w, p_h);
-	if (pos) {
-		MonoClassField *fp = mono_class_get_field_from_name(mono_class_rect2i, "position");
-		if (fp) mono_field_set_value(obj, fp, &pos);
-	}
-	if (siz) {
-		MonoClassField *fs = mono_class_get_field_from_name(mono_class_rect2i, "size");
-		if (fs) mono_field_set_value(obj, fs, &siz);
-	}
+	// Rect2I.position and Rect2I.size are value-type Vector2I fields
+	// (layout: int32_t x, int32_t y). mono_field_set_value copies sizeof(field)
+	// bytes from the source pointer into the field. We pass a pointer to a
+	// 2-int32 buffer so the bytes get written directly into the parent's
+	// value-type field. The previous code created a boxed Vector2I MonoObject
+	// and passed &box, which wrote a MonoObject* pointer value into a field
+	// expecting 8 bytes of (x, y) int32 data — corrupting the Rect2I layout.
+	// (M9, same pattern as H4 Rect2 fix)
+	int32_t pos_vals[2] = { p_x, p_y };
+	int32_t siz_vals[2] = { p_w, p_h };
+	MonoClassField *fp = mono_class_get_field_from_name(mono_class_rect2i, "position");
+	if (fp) mono_field_set_value(obj, fp, pos_vals);
+	MonoClassField *fs = mono_class_get_field_from_name(mono_class_rect2i, "size");
+	if (fs) mono_field_set_value(obj, fs, siz_vals);
 	return obj;
 }
 
@@ -663,13 +670,18 @@ MonoObject *variant_to_mono_plane(MonoDomain *p_domain, real_t p_nx, real_t p_ny
 	if (!mono_class_plane) return nullptr;
 	MonoObject *obj = mono_object_new(p_domain, mono_class_plane);
 	if (!obj) return nullptr;
-	// Plane has normal (Vector3) and d (float)
-	MonoObject *normal = variant_to_mono_vector3(p_domain, p_nx, p_ny, p_nz);
-	if (normal) {
-		MonoClassField *fn = mono_class_get_field_from_name(mono_class_plane, "normal");
-		if (fn) mono_field_set_value(obj, fn, &normal);
-	}
+	// Plane.normal is a value-type Vector3 field (layout: float x, y, z) and
+	// Plane.d is a value-type float field. mono_field_set_value copies
+	// sizeof(field) bytes from the source pointer into the field. We pass a
+	// 3-float buffer for the normal and a 1-float buffer for d. The previous
+	// code created a boxed Vector3 MonoObject and passed &normal, which wrote a
+	// MonoObject* pointer value (8 bytes of pointer) into a field expecting
+	// 12 bytes of (x, y, z) float data — both corrupting the layout and
+	// underwriting 4 bytes. (M9, same pattern as H4 Rect2 fix)
+	float normal_vals[3] = { (float)p_nx, (float)p_ny, (float)p_nz };
 	float d_val = (float)p_d;
+	MonoClassField *fn = mono_class_get_field_from_name(mono_class_plane, "normal");
+	if (fn) mono_field_set_value(obj, fn, normal_vals);
 	MonoClassField *fd = mono_class_get_field_from_name(mono_class_plane, "d");
 	if (fd) mono_field_set_value(obj, fd, &d_val);
 	return obj;
@@ -679,17 +691,21 @@ MonoObject *variant_to_mono_aabb(MonoDomain *p_domain, real_t p_px, real_t p_py,
 	if (!mono_class_aabb) return nullptr;
 	MonoObject *obj = mono_object_new(p_domain, mono_class_aabb);
 	if (!obj) return nullptr;
-	// Aabb has position (Vector3) and size (Vector3)
-	MonoObject *pos = variant_to_mono_vector3(p_domain, p_px, p_py, p_pz);
-	MonoObject *siz = variant_to_mono_vector3(p_domain, p_sx, p_sy, p_sz);
-	if (pos) {
-		MonoClassField *fp = mono_class_get_field_from_name(mono_class_aabb, "position");
-		if (fp) mono_field_set_value(obj, fp, &pos);
-	}
-	if (siz) {
-		MonoClassField *fs = mono_class_get_field_from_name(mono_class_aabb, "size");
-		if (fs) mono_field_set_value(obj, fs, &siz);
-	}
+	// Aabb.position and Aabb.size are value-type Vector3 fields
+	// (layout: float x, y, z = 12 bytes each). mono_field_set_value copies
+	// sizeof(field) bytes from the source pointer into the field. We pass a
+	// 3-float buffer so the bytes get written directly into the parent's
+	// value-type field. The previous code created a boxed Vector3 MonoObject
+	// and passed &pos, which wrote a MonoObject* pointer value (8 bytes) into
+	// a field expecting 12 bytes of (x, y, z) float data — corrupting the
+	// layout and leaving the last 4 bytes uninitialized. (M9, same pattern as
+	// H4 Rect2 fix)
+	float pos_vals[3] = { (float)p_px, (float)p_py, (float)p_pz };
+	float siz_vals[3] = { (float)p_sx, (float)p_sy, (float)p_sz };
+	MonoClassField *fp = mono_class_get_field_from_name(mono_class_aabb, "position");
+	if (fp) mono_field_set_value(obj, fp, pos_vals);
+	MonoClassField *fs = mono_class_get_field_from_name(mono_class_aabb, "size");
+	if (fs) mono_field_set_value(obj, fs, siz_vals);
 	return obj;
 }
 
@@ -743,17 +759,24 @@ MonoObject *variant_to_mono_transform3d(MonoDomain *p_domain, const real_t *p_ba
 	if (!mono_class_transform3d) return nullptr;
 	MonoObject *obj = mono_object_new(p_domain, mono_class_transform3d);
 	if (!obj) return nullptr;
-	// Transform3D has basis (Basis) and origin (Vector3)
-	MonoObject *basis_obj = variant_to_mono_basis(p_domain, p_basis);
-	if (basis_obj) {
-		MonoClassField *fb = mono_class_get_field_from_name(mono_class_transform3d, "basis");
-		if (fb) mono_field_set_value(obj, fb, &basis_obj);
+	// Transform3D.basis (value-type Basis = 9 floats = 36 bytes) and
+	// Transform3D.origin (value-type Vector3 = 3 floats = 12 bytes) are value
+	// types. mono_field_set_value copies sizeof(field) bytes from the source
+	// pointer into the field. We pass flat float buffers so the bytes get
+	// written directly into the parent's value-type fields. The previous code
+	// created boxed Basis/Vector3 MonoObjects and passed &basis_obj / &origin,
+	// which wrote MonoObject* pointer values (8 bytes each) into fields
+	// expecting 36 / 12 bytes of float data — corrupting the layout and
+	// leaving most bytes uninitialized. (M9, same pattern as H4 Rect2 fix)
+	float basis_vals[9];
+	for (int i = 0; i < 9; i++) {
+		basis_vals[i] = (float)p_basis[i];
 	}
-	MonoObject *origin = variant_to_mono_vector3(p_domain, p_ox, p_oy, p_oz);
-	if (origin) {
-		MonoClassField *fo = mono_class_get_field_from_name(mono_class_transform3d, "origin");
-		if (fo) mono_field_set_value(obj, fo, &origin);
-	}
+	float origin_vals[3] = { (float)p_ox, (float)p_oy, (float)p_oz };
+	MonoClassField *fb = mono_class_get_field_from_name(mono_class_transform3d, "basis");
+	if (fb) mono_field_set_value(obj, fb, basis_vals);
+	MonoClassField *fo = mono_class_get_field_from_name(mono_class_transform3d, "origin");
+	if (fo) mono_field_set_value(obj, fo, origin_vals);
 	return obj;
 }
 
@@ -820,20 +843,18 @@ bool mono_object_to_rect2i(MonoObject *p_obj, int32_t *r_x, int32_t *r_y, int32_
 	MonoClassField *pos_field = mono_class_get_field_from_name(mono_class_rect2i, "position");
 	MonoClassField *size_field = mono_class_get_field_from_name(mono_class_rect2i, "size");
 	if (!pos_field || !size_field) return false;
-	MonoObject *pos_obj = nullptr;
-	MonoObject *size_obj = nullptr;
-	mono_field_get_value(p_obj, pos_field, &pos_obj);
-	mono_field_get_value(p_obj, size_field, &size_obj);
-	int32_t px = 0, py = 0, sx = 0, sy = 0;
-	bool ok = mono_object_to_vector2i(pos_obj, &px, &py);
-	ok &= mono_object_to_vector2i(size_obj, &sx, &sy);
-	if (ok) {
-		if (r_x) *r_x = px;
-		if (r_y) *r_y = py;
-		if (r_w) *r_w = sx;
-		if (r_h) *r_h = sy;
-	}
-	return ok;
+	// Rect2I.position and Rect2I.size are value-type Vector2I fields (layout:
+	// int32_t x, y = 8 bytes). Read into 2-int32 buffers. (M9 read side,
+	// paired with the variant_to_mono_rect2i write-side fix.)
+	int32_t pos_buf[2] = { 0, 0 };
+	int32_t size_buf[2] = { 0, 0 };
+	mono_field_get_value(p_obj, pos_field, pos_buf);
+	mono_field_get_value(p_obj, size_field, size_buf);
+	if (r_x) *r_x = pos_buf[0];
+	if (r_y) *r_y = pos_buf[1];
+	if (r_w) *r_w = size_buf[0];
+	if (r_h) *r_h = size_buf[1];
+	return true;
 }
 
 bool mono_object_to_quaternion(MonoObject *p_obj, real_t *r_x, real_t *r_y, real_t *r_z, real_t *r_w) {
@@ -854,29 +875,24 @@ bool mono_object_to_quaternion(MonoObject *p_obj, real_t *r_x, real_t *r_y, real
 
 bool mono_object_to_plane(MonoObject *p_obj, real_t *r_nx, real_t *r_ny, real_t *r_nz, real_t *r_d) {
 	if (!p_obj || !mono_class_plane || mono_object_get_class(p_obj) != mono_class_plane) return false;
-	// Plane has normal (Vector3) and d (float)
 	MonoClassField *normal_field = mono_class_get_field_from_name(mono_class_plane, "normal");
 	MonoClassField *d_field = mono_class_get_field_from_name(mono_class_plane, "d");
 	if (!normal_field || !d_field) return false;
-	MonoObject *normal_obj = nullptr;
-	mono_field_get_value(p_obj, normal_field, &normal_obj);
-	real_t nx = 0, ny = 0, nz = 0;
-	bool ok = mono_object_to_vector3(normal_obj, &nx, &ny, &nz);
-	float d = 0;
-	if (get_struct_float_field(p_obj, mono_class_plane, "d", d)) {
-		ok = true;
-	} else {
-		// Try field directly
-		mono_field_get_value(p_obj, d_field, &d);
-		ok = true;
-	}
-	if (ok) {
-		if (r_nx) *r_nx = nx;
-		if (r_ny) *r_ny = ny;
-		if (r_nz) *r_nz = nz;
-		if (r_d) *r_d = (real_t)d;
-	}
-	return ok;
+	// Plane.normal is a value-type Vector3 field (layout: float x, y, z = 12
+	// bytes) and Plane.d is a value-type float field. Read into appropriately
+	// sized buffers. The previous code read 12 bytes of normal-field data into
+	// a MonoObject* variable (8 bytes) — a 4-byte stack overwrite — and then
+	// dereferenced the garbage "pointer". (M9 read side, paired with the
+	// variant_to_mono_plane write-side fix.)
+	float normal_buf[3] = { 0, 0, 0 };
+	float d_val = 0;
+	mono_field_get_value(p_obj, normal_field, normal_buf);
+	mono_field_get_value(p_obj, d_field, &d_val);
+	if (r_nx) *r_nx = normal_buf[0];
+	if (r_ny) *r_ny = normal_buf[1];
+	if (r_nz) *r_nz = normal_buf[2];
+	if (r_d) *r_d = (real_t)d_val;
+	return true;
 }
 
 bool mono_object_to_aabb(MonoObject *p_obj, real_t *r_px, real_t *r_py, real_t *r_pz, real_t *r_sx, real_t *r_sy, real_t *r_sz) {
@@ -884,22 +900,22 @@ bool mono_object_to_aabb(MonoObject *p_obj, real_t *r_px, real_t *r_py, real_t *
 	MonoClassField *pos_field = mono_class_get_field_from_name(mono_class_aabb, "position");
 	MonoClassField *size_field = mono_class_get_field_from_name(mono_class_aabb, "size");
 	if (!pos_field || !size_field) return false;
-	MonoObject *pos_obj = nullptr;
-	MonoObject *size_obj = nullptr;
-	mono_field_get_value(p_obj, pos_field, &pos_obj);
-	mono_field_get_value(p_obj, size_field, &size_obj);
-	real_t px = 0, py = 0, pz = 0, sx = 0, sy = 0, sz = 0;
-	bool ok = mono_object_to_vector3(pos_obj, &px, &py, &pz);
-	ok &= mono_object_to_vector3(size_obj, &sx, &sy, &sz);
-	if (ok) {
-		if (r_px) *r_px = px;
-		if (r_py) *r_py = py;
-		if (r_pz) *r_pz = pz;
-		if (r_sx) *r_sx = sx;
-		if (r_sy) *r_sy = sy;
-		if (r_sz) *r_sz = sz;
-	}
-	return ok;
+	// Aabb.position and Aabb.size are value-type Vector3 fields (layout:
+	// float x, y, z = 12 bytes each). Read into 3-float buffers. The previous
+	// code read 12 bytes into a MonoObject* variable (8 bytes) — a 4-byte
+	// stack overwrite — and then dereferenced the garbage "pointer".
+	// (M9 read side, paired with the variant_to_mono_aabb write-side fix.)
+	float pos_buf[3] = { 0, 0, 0 };
+	float size_buf[3] = { 0, 0, 0 };
+	mono_field_get_value(p_obj, pos_field, pos_buf);
+	mono_field_get_value(p_obj, size_field, size_buf);
+	if (r_px) *r_px = pos_buf[0];
+	if (r_py) *r_py = pos_buf[1];
+	if (r_pz) *r_pz = pos_buf[2];
+	if (r_sx) *r_sx = size_buf[0];
+	if (r_sy) *r_sy = size_buf[1];
+	if (r_sz) *r_sz = size_buf[2];
+	return true;
 }
 
 }

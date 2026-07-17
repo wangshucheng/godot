@@ -39,7 +39,6 @@ int64_t mono_object_to_int(MonoObject *p_obj, bool *r_ok = nullptr);
 double mono_object_to_float(MonoObject *p_obj, bool *r_ok = nullptr);
 intptr_t mono_object_to_intptr(MonoObject *p_obj, bool *r_ok = nullptr);
 String mono_object_to_native_string(MonoObject *p_obj);
-Object *mono_object_to_godot_object(MonoObject *p_obj);
 
 bool mono_object_to_vector2(MonoObject *p_obj, real_t *r_x, real_t *r_y);
 bool mono_object_to_vector3(MonoObject *p_obj, real_t *r_x, real_t *r_y, real_t *r_z);

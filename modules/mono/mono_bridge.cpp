@@ -120,8 +120,11 @@ MonoObject *managed_get_or_create(Object *p_obj, MonoClass *p_class) {
 
 	void *args[1];
 	intptr_t ptr_val = (intptr_t)p_obj;
-	MonoObject *box = mono_value_box(domain, system_intptr_class, &ptr_val);
-	args[0] = box;
+	// mono_runtime_invoke expects each element of args to point at the *value*
+	// to be passed. For IntPtr (a value type), the value is the pointer itself,
+	// so we point at the stack-allocated ptr_val directly. Boxing the value and
+	// passing &box would instead write the MonoObject* pointer into the field.
+	args[0] = &ptr_val;
 
 	MonoMethod *ctor = nullptr;
 	void *iter = nullptr;
@@ -130,7 +133,7 @@ MonoObject *managed_get_or_create(Object *p_obj, MonoClass *p_class) {
 		if (strcmp(name, ".ctor") == 0) {
 			MonoMethodSignature *sig = mono_method_signature(m);
 			int param_count = mono_signature_get_param_count(sig);
-			if (param_count >= 1) {
+			if (param_count == 1) {
 				void *arg_iter = nullptr;
 				MonoType *param_type = mono_signature_get_params(sig, &arg_iter);
 				if (param_type && mono_type_get_class(param_type) == system_intptr_class) {
@@ -148,7 +151,7 @@ MonoObject *managed_get_or_create(Object *p_obj, MonoClass *p_class) {
 	if (exc) {
 		char *msg = mono_string_to_utf8(mono_object_to_string(exc, nullptr));
 		printf("[Mono] Exception in Godot.Object ctor: %s\n", msg ? msg : "unknown");
-		mono_free(msg);
+		if (msg) mono_free(msg);
 	}
 
 	return cs_obj;

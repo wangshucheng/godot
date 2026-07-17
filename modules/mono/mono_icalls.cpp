@@ -106,6 +106,7 @@ static MonoObject *godot_icall_Object_Get(intptr_t native_ptr, MonoString *p_nam
 	Object *obj = (Object *)native_ptr;
 	if (!mono_gc_bridge::is_native_alive(obj)) return nullptr;
 	char *name_utf8 = mono_string_to_utf8(p_name);
+	if (!name_utf8) return nullptr;
 	StringName prop_name(name_utf8);
 	mono_free(name_utf8);
 	Variant result = obj->get(prop_name);
@@ -117,6 +118,7 @@ static void godot_icall_Object_Set(intptr_t native_ptr, MonoString *p_name, Mono
 	Object *obj = (Object *)native_ptr;
 	if (!mono_gc_bridge::is_native_alive(obj)) return;
 	char *name_utf8 = mono_string_to_utf8(p_name);
+	if (!name_utf8) return;
 	StringName prop_name(name_utf8);
 	mono_free(name_utf8);
 	Variant v = mono_object_to_variant(p_value);
@@ -129,6 +131,7 @@ static MonoObject *godot_icall_Object_Call(intptr_t native_ptr, MonoString *p_me
 	if (!mono_gc_bridge::is_native_alive(obj)) return nullptr;
 
 	char *method_utf8 = mono_string_to_utf8(p_method);
+	if (!method_utf8) return nullptr;
 	StringName method_name(method_utf8);
 	mono_free(method_utf8);
 
@@ -172,6 +175,7 @@ static intptr_t godot_icall_Node_GetNode(intptr_t native_ptr, MonoString *p_path
 	if (!node) return 0;
 
 	char *path_utf8 = mono_string_to_utf8(p_path);
+	if (!path_utf8) return 0;
 	NodePath np(path_utf8);
 	mono_free(path_utf8);
 
@@ -376,6 +380,7 @@ static bool godot_icall_Object_Connect(intptr_t p_native_ptr, MonoString *p_sign
 	if (!mono_gc_bridge::is_native_alive(obj)) return false;
 
 	char *signal_utf8 = mono_string_to_utf8(p_signal);
+	if (!signal_utf8) return false;
 	StringName signal_name(signal_utf8);
 	mono_free(signal_utf8);
 
@@ -390,6 +395,7 @@ static void godot_icall_Object_Disconnect(intptr_t p_native_ptr, MonoString *p_s
 	if (!mono_gc_bridge::is_native_alive(obj)) return;
 
 	char *signal_utf8 = mono_string_to_utf8(p_signal);
+	if (!signal_utf8) return;
 	StringName signal_name(signal_utf8);
 	mono_free(signal_utf8);
 
@@ -403,6 +409,7 @@ static bool godot_icall_Object_IsConnected(intptr_t p_native_ptr, MonoString *p_
 	if (!mono_gc_bridge::is_native_alive(obj)) return false;
 
 	char *signal_utf8 = mono_string_to_utf8(p_signal);
+	if (!signal_utf8) return false;
 	StringName signal_name(signal_utf8);
 	mono_free(signal_utf8);
 
@@ -416,6 +423,7 @@ static void godot_icall_Object_EmitSignal(intptr_t p_native_ptr, MonoString *p_s
 	if (!mono_gc_bridge::is_native_alive(obj)) return;
 
 	char *signal_utf8 = mono_string_to_utf8(p_signal);
+	if (!signal_utf8) return;
 	StringName signal_name(signal_utf8);
 	mono_free(signal_utf8);
 
@@ -447,6 +455,7 @@ static bool godot_icall_Object_HasSignal(intptr_t p_native_ptr, MonoString *p_si
 	Object *obj = (Object *)p_native_ptr;
 	if (!mono_gc_bridge::is_native_alive(obj)) return false;
 	char *signal_utf8 = mono_string_to_utf8(p_signal);
+	if (!signal_utf8) return false;
 	StringName signal_name(signal_utf8);
 	mono_free(signal_utf8);
 	return obj->has_signal(signal_name);
@@ -588,6 +597,7 @@ static void godot_icall_Object_SetIntText(intptr_t obj_ptr, MonoString *prop_nam
 	if (!mono_gc_bridge::is_native_alive(obj)) return;
 
 	char *name_utf8 = mono_string_to_utf8(prop_name);
+	if (!name_utf8) return;
 	StringName prop(name_utf8);
 	mono_free(name_utf8);
 

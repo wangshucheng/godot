@@ -13,6 +13,7 @@
 #include "core/io/resource.h"
 #include "core/config/project_settings.h"
 #include "core/config/engine.h"
+#include <cstring>
 #include "scene/main/node.h"
 #include <mono/metadata/object.h>
 #include <mono/metadata/assembly.h>
@@ -24,6 +25,17 @@
 
 using namespace mono_variant;
 using namespace mono_bridge;
+
+// Verbose Mono-side logging. In release templates (target=template_release)
+// the per-frame notification prints below would flood stdout and add real
+// overhead (printf + fflush every frame for every script instance), so they
+// are compiled out via DEBUG_ENABLED. Editor / debug builds still emit them
+// for diagnostics. (M13)
+#ifdef DEBUG_ENABLED
+#define MONO_LOG(...) do { printf(__VA_ARGS__); fflush(stdout); } while (0)
+#else
+#define MONO_LOG(...) do {} while (0)
+#endif
 
 class ResourceFormatLoaderCSharpScript : public ResourceFormatLoader {
 	GDSOFTCLASS(ResourceFormatLoaderCSharpScript, ResourceFormatLoader);
@@ -507,8 +519,7 @@ CSharpInstance::CSharpInstance(const Ref<CSharpScript> &p_script, Object *p_owne
 		while (k && depth < 10) {
 			const char *kname = mono_class_get_name(k);
 			const char *kns = mono_class_get_namespace(k);
-			printf("[Mono]   class[%d]: '%s' (ns='%s')\n", depth, kname ? kname : "?", kns ? kns : "?");
-			fflush(stdout);
+			MONO_LOG("[Mono]   class[%d]: '%s' (ns='%s')\n", depth, kname ? kname : "?", kns ? kns : "?");
 			k = mono_class_get_parent(k);
 			depth++;
 		}
@@ -535,7 +546,16 @@ CSharpInstance::CSharpInstance(const Ref<CSharpScript> &p_script, Object *p_owne
 	}
 
 	MonoObject *exc = nullptr;
-	mono_runtime_object_init(cs_obj);
+	// mono_runtime_object_init_checked is not available in Mono 6.12.
+	// Use mono_runtime_invoke on the parameterless .ctor() to get exception
+	// output support. (Prior code used the non-existent _checked variant.)
+	MonoMethod *ctor = mono_class_get_method_from_name(klass, ".ctor", 0);
+	if (ctor) {
+		mono_runtime_invoke(ctor, cs_obj, nullptr, &exc);
+	} else {
+		// No parameterless constructor — fall back to the plain init.
+		mono_runtime_object_init(cs_obj);
+	}
 
 	if (exc) {
 		MonoClass *exc_class = mono_object_get_class(exc);
@@ -661,13 +681,41 @@ MonoObject *CSharpInstance::invoke_method(MonoMethod *p_method, const Variant **
 			if (i < pt_count && param_types[i]) {
 				MonoClass *pc = mono_class_from_mono_type(param_types[i]);
 				if (pc && mono_class_is_valuetype(pc)) {
-					args[i] = mo ? mono_object_unbox(mo) : nullptr;
+					if (mo) {
+						args[i] = mono_object_unbox(mo);
+					} else {
+						// NULL Variant → default (zeroed) value type buffer.
+						// Passing nullptr would crash mono_runtime_invoke when it
+						// dereferences the parameter pointer.
+						size_t val_size = mono_class_value_size(pc, nullptr);
+						if (val_size > 0) {
+							void *buf = alloca(val_size);
+							memset(buf, 0, val_size);
+							args[i] = buf;
+						} else {
+							args[i] = nullptr;
+						}
+					}
 					continue;
 				}
 			}
 			args[i] = mo;
 		}
 		for (int i = copy_count; i < param_count; i++) {
+			// Trailing missing args: pass default (zeroed) value type buffer
+			// for value type params, nullptr for ref type params.
+			if (i < pt_count && param_types[i]) {
+				MonoClass *pc = mono_class_from_mono_type(param_types[i]);
+				if (pc && mono_class_is_valuetype(pc)) {
+					size_t val_size = mono_class_value_size(pc, nullptr);
+					if (val_size > 0) {
+						void *buf = alloca(val_size);
+						memset(buf, 0, val_size);
+						args[i] = buf;
+						continue;
+					}
+				}
+			}
 			args[i] = nullptr;
 		}
 	}
@@ -782,8 +830,16 @@ bool CSharpInstance::get(const StringName &p_name, Variant &r_ret) const {
 		field = mono_class_get_field_from_name(k, pname_cstr);
 	}
 	if (field) {
-		MonoObject *val = nullptr;
-		mono_field_get_value(mono_object, field, &val);
+		// mono_field_get_value reads sizeof(field) bytes into the destination
+		// buffer. For value-type fields (int, float, Vector3, etc.) this is
+		// wrong when the destination is a MonoObject* variable: it reads raw
+		// value bytes into a pointer-sized slot — for fields larger than 8
+		// bytes (e.g. Vector3 = 12 bytes) this is a stack overwrite, and for
+		// smaller fields the resulting "pointer" is garbage that crashes
+		// mono_object_to_variant. Use mono_field_get_value_object instead,
+		// which boxes value-type fields into a fresh MonoObject and returns
+		// the stored reference for reference-type fields. (H2)
+		MonoObject *val = mono_field_get_value_object(mono_domain_get(), field, mono_object);
 		r_ret = mono_object_to_variant(val);
 		return true;
 	}
@@ -912,8 +968,7 @@ void CSharpInstance::notification(int p_notification, bool p_reversed) {
 
 	if (!mono_object) return;
 
-	printf("[Mono] notification(id=%d) for '%s'\n", p_notification, script->class_name.utf8().get_data());
-	fflush(stdout);
+	MONO_LOG("[Mono] notification(id=%d) for '%s'\n", p_notification, script->class_name.utf8().get_data());
 
 	struct NotificationMap {
 		int notification;
@@ -945,8 +1000,7 @@ void CSharpInstance::notification(int p_notification, bool p_reversed) {
 					break;
 				}
 
-				printf("[Mono] notification: calling %s for '%s'\n", notif_map[i].method_name, script->class_name.utf8().get_data());
-				fflush(stdout);
+				MONO_LOG("[Mono] notification: calling %s for '%s'\n", notif_map[i].method_name, script->class_name.utf8().get_data());
 				Variant result;
 				Callable::CallError err;
 				if (notif_map[i].arg_count == 1) {
@@ -977,8 +1031,7 @@ void CSharpInstance::notification(int p_notification, bool p_reversed) {
 		bool notif_overridden = !(script.is_valid() && script->mono_class &&
 								  notif_declaring_class != script->mono_class);
 		if (notif_overridden) {
-			printf("[Mono] notification: calling _Notification(%d) for '%s'\n", p_notification, script->class_name.utf8().get_data());
-			fflush(stdout);
+			MONO_LOG("[Mono] notification: calling _Notification(%d) for '%s'\n", p_notification, script->class_name.utf8().get_data());
 			Variant arg = p_notification;
 			const Variant *args[1] = { &arg };
 			Variant result;

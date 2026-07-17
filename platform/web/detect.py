@@ -250,9 +250,8 @@ def configure(env: "SConsEnvironment"):
 
     # Convert Windows backslash paths to forward slashes in response files.
     # emcc's shlex response file parser strips backslashes, breaking paths.
-    import re as _re
     from SCons.Subst import quote_spaces as _quote_spaces
-    _WINPATHSEP_RE = _re.compile(r"\\([^\"'\\]|$)")
+    _WINPATHSEP_RE = re.compile(r"\\([^\"'\\]|$)")
 
     def _tempfile_arg_esc_func(arg):
         arg = _quote_spaces(arg)
@@ -355,6 +354,10 @@ def configure(env: "SConsEnvironment"):
 
     # Allow multiple definitions (needed for Mono static libraries that may
     # duplicate symbols like pthread_sigmask from libc).
+    # L18: This flag masks real ODR (one-definition-rule) violations in the
+    # Mono static libraries. It is practical (the build would fail without it)
+    # but hides potential linking issues. Removing it requires fixing the
+    # upstream Mono static library symbol conflicts.
     env.Append(LINKFLAGS=["-Wl,--allow-multiple-definition"])
     # Show all undefined symbols, not just the first 20.
     env.Append(LINKFLAGS=["-Wl,--error-limit=0"])

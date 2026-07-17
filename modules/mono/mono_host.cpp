@@ -29,7 +29,6 @@
 // method-builder.h, sgen-bridge.h) but we avoid including them to prevent
 // conflicts; simple extern "C" declarations suffice.
 #ifdef MONO_INTERP_MODE
-extern "C" void mono_ee_interp_init(const char *);
 extern "C" void mono_marshal_ilgen_init(void);
 extern "C" void mono_method_builder_ilgen_init(void);
 extern "C" void mono_sgen_mono_ilgen_init(void);
@@ -178,16 +177,9 @@ Error MonoHost::initialize() {
 	String mono_root = find_mono_root(exe_dir);
 
 #ifdef WINDOWS_ENABLED
-	if (!mono_root.is_empty()) {
-		String bin_dir = mono_root + "/bin";
-		if (DirAccess::exists(bin_dir)) {
-			SetDllDirectoryA(bin_dir.utf8().get_data());
-		}
-		String bin_x64_dir = mono_root + "/bin/windows/x64";
-		if (DirAccess::exists(bin_x64_dir)) {
-			SetDllDirectoryA(bin_x64_dir.utf8().get_data());
-		}
-	}
+	// SetDllDirectoryA replaces (not appends) the previous setting, so only the
+	// final call takes effect. We point it at the exe directory to allow Mono
+	// DLLs placed alongside the executable to be found by the loader.
 	SetDllDirectoryA(exe_dir.utf8().get_data());
 #endif
 

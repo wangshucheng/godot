@@ -219,6 +219,86 @@ bool csharp_editor_ensure_project_solution() {
 // Compiler discovery and invocation
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// NuGet package restore
+// ---------------------------------------------------------------------------
+
+// Run the nuget_restore.py script to restore packages from packages.config.
+// Returns a list of absolute DLL reference paths (POSIX slashes).
+// If packages.config is absent or restore fails, returns an empty list
+// and logs a warning (compilation proceeds without NuGet references).
+static Vector<String> nuget_restore(const String &p_project_dir) {
+	String packages_config = p_project_dir.path_join("packages.config");
+	if (!FileAccess::exists(packages_config)) {
+		return Vector<String>();
+	}
+
+	MonoLogger::log("Found packages.config - running NuGet restore...");
+
+	// Locate the restore script relative to the module directory.
+	// The script ships at modules/mono_new/scripts/nuget_restore.py
+	String exe_dir = OS::get_singleton()->get_executable_path().get_base_dir();
+	String script_path = exe_dir.path_join("..").path_join("modules").path_join("mono_new").path_join("scripts").path_join("nuget_restore.py");
+	if (!FileAccess::exists(script_path)) {
+		// Try relative to source tree (dev builds)
+		script_path = "modules/mono_new/scripts/nuget_restore.py";
+	}
+	if (!FileAccess::exists(script_path)) {
+		MonoLogger::log_warning("nuget_restore.py not found - skipping NuGet restore");
+		return Vector<String>();
+	}
+
+	// Find a Python interpreter.
+	String python = "python";
+	{
+		String output;
+		int exit_code = -1;
+		Error err = OS::get_singleton()->execute(python, List<String>(), &output, &exit_code);
+		if (err != OK) {
+			python = "python3";
+			err = OS::get_singleton()->execute(python, List<String>(), &output, &exit_code);
+			if (err != OK) {
+				MonoLogger::log_warning("Python interpreter not found - skipping NuGet restore");
+				return Vector<String>();
+			}
+		}
+	}
+
+	// Invoke: python nuget_restore.py --project-dir <dir> --print-references
+	List<String> args;
+	args.push_back(script_path);
+	args.push_back("--project-dir");
+	args.push_back(p_project_dir);
+	args.push_back("--print-references");
+
+	String output;
+	int exit_code = -1;
+	Error err = OS::get_singleton()->execute(python, args, &output, &exit_code, true);
+	if (err != OK || exit_code != 0) {
+		MonoLogger::log_warning(vformat("NuGet restore failed (exit %d). Compiling without NuGet references.", exit_code));
+		if (!output.is_empty()) {
+			MonoLogger::log_warning(output);
+		}
+		return Vector<String>();
+	}
+
+	// Parse stdout: one reference path per line.
+	Vector<String> references;
+	Vector<String> lines = output.split("\n", false);
+	for (const String &line : lines) {
+		String trimmed = line.strip_edges();
+		if (trimmed.is_empty()) continue;
+		// Skip [NuGet] log lines (they go to stderr, but be defensive).
+		if (trimmed.begins_with("[NuGet")) continue;
+		if (FileAccess::exists(trimmed)) {
+			references.push_back(trimmed);
+		}
+	}
+
+	MonoLogger::log(vformat("NuGet restore: %d reference(s) resolved", references.size()));
+	return references;
+}
+
 static String find_csharp_compiler() {
 	// 1. Try mcs from Mono installation
 	Vector<String> candidates;
@@ -263,7 +343,8 @@ static String find_csharp_compiler() {
 }
 
 static bool compile_with_mcs(const String &p_compiler, const String &p_project_dir,
-		const String &p_output_dll, const String &p_godotsharp_ref) {
+		const String &p_output_dll, const String &p_godotsharp_ref,
+		const Vector<String> &p_nuget_references = Vector<String>()) {
 	// Collect all .cs files in the project directory
 	Vector<String> cs_files;
 	Ref<DirAccess> dir = DirAccess::open(p_project_dir);
@@ -324,6 +405,11 @@ static bool compile_with_mcs(const String &p_compiler, const String &p_project_d
 	if (!mono_lib.is_empty()) {
 		String bcl_dir = mono_lib.path_join("lib").path_join("mono").path_join("4.5");
 		args.push_back("-lib:" + bcl_dir);
+	}
+
+	// Add NuGet references (-r:<path> for each restored package DLL).
+	for (const String &ref : p_nuget_references) {
+		args.push_back("-r:" + ref);
 	}
 
 	for (const String &cs : cs_files) {
@@ -430,6 +516,14 @@ bool csharp_editor_compile_project() {
 	String compiler = find_csharp_compiler();
 	bool success = false;
 
+	// Run NuGet restore if packages.config exists. The returned references
+	// are passed to the mcs/csc compiler. dotnet build handles restore
+	// itself via the .csproj, so we skip it for the dotnet path.
+	Vector<String> nuget_refs;
+	if (compiler != "dotnet") {
+		nuget_refs = nuget_restore(project_dir);
+	}
+
 	if (compiler == "dotnet") {
 		success = compile_with_dotnet(project_dir, csharp_editor_get_csproj_path());
 		if (success) {
@@ -442,10 +536,10 @@ bool csharp_editor_compile_project() {
 		}
 	} else if (compiler == "csc") {
 		// Use csc directly
-		success = compile_with_mcs(compiler, project_dir, output_dll, godotsharp_ref);
+		success = compile_with_mcs(compiler, project_dir, output_dll, godotsharp_ref, nuget_refs);
 	} else {
 		// mcs (Mono compiler)
-		success = compile_with_mcs(compiler, project_dir, output_dll, godotsharp_ref);
+		success = compile_with_mcs(compiler, project_dir, output_dll, godotsharp_ref, nuget_refs);
 	}
 
 	return success;
@@ -495,14 +589,13 @@ void csharp_editor_on_script_saved(const String &p_path) {
 		if (gdmono) {
 			MonoLogger::log("Loading newly compiled assembly...");
 
-			// Clear old user assemblies so find_class only searches the new one
-			gdmono->clear_user_assemblies();
-
-			// Find and load the latest compiled DLL
+			// Find the latest compiled DLL
 			String latest_dll = find_latest_project_dll(csharp_editor_get_assemblies_output_dir(), get_project_name());
 			if (!latest_dll.is_empty() && FileAccess::exists(latest_dll)) {
-				gdmono->load_assembly(latest_dll, true);
-				MonoLogger::log(vformat("Loaded user assembly: %s", latest_dll));
+				// Use reload_assembly which does full AppDomain reload on desktop
+				// (unloads old assembly, frees memory) and pseudo-reload on WASM.
+				gdmono->reload_assembly(latest_dll);
+				MonoLogger::log(vformat("Hot reload completed for: %s", latest_dll));
 
 				// Reload all CSharpScripts so they pick up the new class
 				if (CSharpLanguage::get_singleton()) {
@@ -628,6 +721,9 @@ private:
 				MonoLogger::log_warning("Export: C# project compilation failed");
 			}
 		}
+
+		// Deploy NuGet dependency DLLs alongside the user assembly.
+		_deploy_nuget_assemblies();
 	}
 
 	void _deploy_user_assemblies_web() {
@@ -641,6 +737,86 @@ private:
 			PackedByteArray data = FileAccess::get_file_as_bytes(latest_dll);
 			add_file(target_path, data, false);
 			MonoLogger::log(vformat("Export (web): deployed user assembly to %s", target_path));
+		}
+
+		// Deploy NuGet dependency DLLs alongside the user assembly so the
+		// Mono runtime can resolve them at load time.
+		_deploy_nuget_assemblies();
+	}
+
+	// Deploy NuGet package DLLs to .mono/assemblies/ in the export.
+	// Reads packages.config and scans packages/<id>.<version>/lib/<tfm>/
+	// for managed assemblies. Skipped silently if packages.config is absent.
+	void _deploy_nuget_assemblies() {
+		String project_dir = get_project_dir();
+		String packages_config = project_dir.path_join("packages.config");
+		if (!FileAccess::exists(packages_config)) {
+			return;
+		}
+
+		String packages_dir = project_dir.path_join("packages");
+		if (!DirAccess::exists(packages_dir)) {
+			MonoLogger::log_warning("Export: packages.config exists but packages/ dir not found. Run restore first.");
+			return;
+		}
+
+		// Scan packages/<id>.<version>/ directories.
+		Ref<DirAccess> dir = DirAccess::open(packages_dir);
+		if (dir.is_null()) {
+			return;
+		}
+
+		int deployed = 0;
+		dir->list_dir_begin();
+		String pkg_dir_name = dir->get_next();
+		while (!pkg_dir_name.is_empty()) {
+			if (dir->current_is_dir() && pkg_dir_name != "." && pkg_dir_name != "..") {
+				// Find lib/<tfm>/ subdirectory with .dll files.
+				String lib_dir = packages_dir.path_join(pkg_dir_name).path_join("lib");
+				if (DirAccess::exists(lib_dir)) {
+					Ref<DirAccess> lib_d = DirAccess::open(lib_dir);
+					if (lib_d.is_valid()) {
+						lib_d->list_dir_begin();
+						String tfm = lib_d->get_next();
+						// Pick the first tfm that contains .dll files (preferring
+						// net48/net45/net40 in that order is done by the restore
+						// script; here we just iterate).
+						while (!tfm.is_empty()) {
+							if (lib_d->current_is_dir()) {
+								String tfm_dir = lib_dir.path_join(tfm);
+								Ref<DirAccess> tfm_d = DirAccess::open(tfm_dir);
+								if (tfm_d.is_valid()) {
+									tfm_d->list_dir_begin();
+									String fname = tfm_d->get_next();
+									bool found_dll = false;
+									while (!fname.is_empty()) {
+										if (!tfm_d->current_is_dir() && fname.ends_with(".dll") && !fname.ends_with(".ni.dll")) {
+											String src = tfm_dir.path_join(fname);
+											String target = ".mono/assemblies/" + fname;
+											PackedByteArray data = FileAccess::get_file_as_bytes(src);
+											add_file(target, data, false);
+											deployed++;
+											found_dll = true;
+										}
+										fname = tfm_d->get_next();
+									}
+									tfm_d->list_dir_end();
+									if (found_dll) {
+										break; // Use the first tfm with DLLs.
+									}
+								}
+							}
+							tfm = lib_d->get_next();
+						}
+					}
+				}
+			}
+			pkg_dir_name = dir->get_next();
+		}
+		dir->list_dir_end();
+
+		if (deployed > 0) {
+			MonoLogger::log(vformat("Export: deployed %d NuGet assembly DLL(s)", deployed));
 		}
 	}
 

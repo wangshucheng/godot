@@ -367,9 +367,14 @@ def configure(env: "SConsEnvironment"):
     # the first icall dispatched through a mismatched signature crashes
     # the runtime. The flag makes Emscripten emit trampoline wrappers so
     # that arbitrary function pointer casts behave like the C ABI on native
-    # targets. Required for module_mono_new_enabled on the web platform.
-    if env.get("module_mono_new_enabled", True):
-        env.Append(LINKFLAGS=["-sEMULATE_FUNCTION_POINTER_CASTS=1"])
+    # targets.
+    # NOTE: Disabled because (1) it doesn't fix mscorlib internal icall
+    # signature mismatches (do_icall uses its own table), and (2) wasm-opt
+    # --fpcast-emu requires --max-func-params which we can't pass via the
+    # sandboxed Emscripten installation. All icalls use consistent int64_t
+    # signatures so fpcast-emu is not needed.
+    # if env.get("module_mono_new_enabled", True):
+    #     env.Append(LINKFLAGS=["-sEMULATE_FUNCTION_POINTER_CASTS=1"])
 
     # Do not call main immediately when the support code is ready.
     env.Append(LINKFLAGS=["-sINVOKE_RUN=0"])

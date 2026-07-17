@@ -26,8 +26,17 @@ class GDMono {
 	Vector<UserAssembly> user_assemblies;
 
 	List<void (*)()> pending_sync_callbacks;
+	List<uint32_t> pending_delegate_handles; // GC handles of pinned Action delegates
 	uint32_t sync_context_gchandle = 0;
 	HashMap<ObjectID, uint32_t> object_gchandles;
+
+	// Hot-reload support: track loaded user assembly paths for re-compilation
+	List<String> loaded_assembly_paths;
+	bool domain_reload_supported = false;
+
+	// Note: Mono SDB debugger state is managed by the CSharpDebugger namespace
+	// (see mono_runtime/csharp_debugger.h). The agent must be configured before
+	// mono_jit_init_version() and cannot be hot-toggled at runtime.
 
 public:
 	static GDMono *get_singleton();
@@ -44,6 +53,7 @@ public:
 	void remove_cached_managed_object(ObjectID p_native_id);
 
 	void post_sync_callback(void (*p_callback)());
+	void post_sync_delegate(MonoObject *p_delegate);
 	void process_sync_callbacks();
 	void install_synchronization_context();
 
@@ -54,6 +64,16 @@ public:
 
 	bool load_assembly(const String &p_path, bool p_is_proj_assembly = false);
 	void clear_user_assemblies();
+
+	// Hot reload: unload scripts domain and recreate (desktop only).
+	// On WASM (DISABLE_APPDOMAINS), falls back to clear_user_assemblies + reload.
+	bool reload_domain();
+	// Reload a single assembly (unload old, load new). Returns true if domain reload was used.
+	bool reload_assembly(const String &p_path);
+
+	// Debugger state queries — delegate to CSharpDebugger namespace.
+	// Use --mono-debugger=PORT at engine startup to enable the SDB agent.
+	bool is_debugger_active() const; // true if SDB agent was requested via cmdline
 	MonoClass *get_class(const String &p_namespace, const String &p_class_name);
 	MonoClass *find_class(const String &p_class_name);
 	MonoMethod *get_method(MonoClass *p_class, const String &p_name, int p_param_count = 0);

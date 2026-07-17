@@ -225,6 +225,11 @@ namespace Godot
             this.row1 = row1;
             this.row2 = row2;
         }
+
+        public static readonly Basis Identity = new Basis(
+            new Vector3(1, 0, 0),
+            new Vector3(0, 1, 0),
+            new Vector3(0, 0, 1));
     }
 
     [StructLayout(LayoutKind.Sequential)]

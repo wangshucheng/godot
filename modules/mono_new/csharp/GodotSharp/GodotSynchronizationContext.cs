@@ -26,14 +26,28 @@ namespace Godot
 
         public static void Install()
         {
+            // Note: SynchronizationContext.SetSynchronizationContext triggers mscorlib
+            // internal icalls that cause WASM function signature mismatch in interpreter mode.
+            // Async/await is not supported in WASM anyway. The sync context is installed
+            // only on desktop platforms via the C++ side (gd_mono.cpp skips this in WEB_ENABLED).
+#if !WEB_ENABLED
             SynchronizationContext.SetSynchronizationContext(Instance);
+#endif
         }
     }
 
     internal static class GDMonoAccess
     {
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.InternalCall)]
-        public extern static void PostSyncCallback(Action callback);
+        internal extern static void godot_icall_PostSyncCallback(Action callback);
+
+        public static void PostSyncCallback(Action callback)
+        {
+            if (callback != null)
+            {
+                godot_icall_PostSyncCallback(callback);
+            }
+        }
     }
 
     [AttributeUsage(AttributeTargets.Method)]

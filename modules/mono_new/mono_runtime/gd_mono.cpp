@@ -1,4 +1,4 @@
-﻿#include "gd_mono.h"
+#include "gd_mono.h"
 // mono_image_open_from_data, mono_assembly_load_from, MonoImageOpenStatus
 // are already declared in Mono headers (mono/metadata/image.h, assembly.h).
 
@@ -14,15 +14,21 @@
 #include "core/os/os.h"
 #include "core/os/main_loop.h"
 #include "utils/mono_logger.h"
+#include "csharp_debugger.h"
 #include "../mono_gd/interop/gd_mono_interop_variant.h"
 #include "../mono_gd/interop/gd_mono_callable.h"
+#include "../mono_gd/interop/signal_awaiter_utils.h"
 #include "../glue/mono_glue.h"
 #include <mono/mono-publib.h>
 #include <cstring>
+#include <cstdlib>
 
 #define MONO_AOT_MODE_INTERP 5
 #define MONO_EE_MODE_INTERP 1000
 #define MONO_TABLE_TYPEDEF 2
+
+// Mono debug format enum (from mono/metadata/mono-debug.h)
+#define MONO_DEBUG_FORMAT_MONO 1
 
 extern "C" {
 void mono_jit_set_aot_mode(int mode);
@@ -44,6 +50,10 @@ const void *mono_image_get_table_info(MonoImage *image, int table_id);
 int mono_table_info_get_rows(const void *table);
 MonoClass *mono_class_get(MonoImage *image, uint32_t type_token);
 MonoAssembly *mono_assembly_load_from(MonoImage *image, const char *fname, MonoImageOpenStatus *status);
+// Debug APIs
+void mono_debug_init(int format);
+void mono_debug_cleanup(void);
+mono_bool mono_debug_enabled(void);
 }
 
 #ifdef WEB_ENABLED
@@ -108,17 +118,71 @@ void GDMono::post_sync_callback(void (*p_callback)()) {
 	}
 }
 
+void GDMono::post_sync_delegate(MonoObject *p_delegate) {
+	if (!p_delegate) return;
+	// Pin the delegate with a GC handle so it survives until processed.
+	uint32_t handle = mono_gchandle_new(p_delegate, true);
+	pending_delegate_handles.push_back(handle);
+}
+
 void GDMono::process_sync_callbacks() {
+	// Process C function-pointer callbacks
 	while (!pending_sync_callbacks.is_empty()) {
 		void (*cb)() = pending_sync_callbacks.front()->get();
 		pending_sync_callbacks.pop_front();
 		if (cb) cb();
 	}
+	// Process C# delegate callbacks (async/await continuations)
+	while (!pending_delegate_handles.is_empty()) {
+		uint32_t handle = pending_delegate_handles.front()->get();
+		pending_delegate_handles.pop_front();
+		if (handle != 0) {
+			MonoObject *delegate_obj = mono_gchandle_get_target(handle);
+			if (delegate_obj) {
+				// Invoke the Action delegate: Find Invoke method on delegate type
+				MonoClass *delegate_class = mono_object_get_class(delegate_obj);
+				if (delegate_class) {
+					MonoMethod *invoke_method = mono_class_get_method_from_name(delegate_class, "Invoke", 0);
+					if (invoke_method) {
+						MonoObject *exc = nullptr;
+						mono_runtime_invoke(invoke_method, delegate_obj, nullptr, &exc);
+						if (exc) {
+							MonoLogger::log_warning("Exception in async continuation");
+						}
+					}
+				}
+			}
+			mono_gchandle_free(handle);
+		}
+	}
 }
 
 void GDMono::install_synchronization_context() {
 	if (!scripts_domain) return;
+	if (!godotsharp_image) {
+		MonoLogger::log_warning("Cannot install sync context: GodotSharp image not loaded");
+		return;
+	}
 	MonoLogger::log("Installing Godot synchronization context...");
+
+	// Find GodotSynchronizationContext.Install() and invoke it
+	MonoClass *sync_ctx_class = mono_class_from_name(godotsharp_image, "Godot", "GodotSynchronizationContext");
+	if (!sync_ctx_class) {
+		MonoLogger::log_warning("GodotSynchronizationContext class not found in GodotSharp");
+		return;
+	}
+	MonoMethod *install_method = mono_class_get_method_from_name(sync_ctx_class, "Install", 0);
+	if (!install_method) {
+		MonoLogger::log_warning("GodotSynchronizationContext.Install method not found");
+		return;
+	}
+	MonoObject *exc = nullptr;
+	mono_runtime_invoke(install_method, nullptr, nullptr, &exc);
+	if (exc) {
+		MonoLogger::log_error("Exception while installing GodotSynchronizationContext");
+	} else {
+		MonoLogger::log("GodotSynchronizationContext installed successfully");
+	}
 }
 
 void GDMono::on_frame_tick() {
@@ -130,6 +194,18 @@ bool GDMono::initialize() {
 		return true;
 
 	MonoLogger::log("Initializing Mono runtime (static linkage mode)...");
+
+	// Configure the SDB agent BEFORE mono_jit_init_version(). The agent reads
+	// the MONO_DEBUG env var at JIT init time and starts listening on the
+	// requested port. No-op if --mono-debugger was not passed.
+	CSharpDebugger::configure_before_jit_init();
+
+	// Initialize Mono debug support (enables source location / stack frame info)
+	// Skip in WASM (interpreter mode doesn't support full debug, and it's stubbed)
+#ifndef WEB_ENABLED
+	mono_debug_init(MONO_DEBUG_FORMAT_MONO);
+	MonoLogger::log("Mono debug symbols initialized");
+#endif
 
 #ifdef WEB_ENABLED
 	// In WebAssembly, get_executable_path() returns the module name (e.g. "godot.js"),
@@ -214,8 +290,13 @@ bool GDMono::initialize() {
 
 	root_domain = mono_jit_init_version("GodotEngine", runtime_version);
 
-
 	MonoLogger::log(vformat("mono_jit_init_version returned, root_domain=%s", root_domain ? "non-null" : "null"));
+
+	// Install the unhandled exception hook now that the JIT is initialized.
+	// The hook captures C# exceptions for display in the Godot debugger panel.
+	if (root_domain) {
+		CSharpDebugger::install_exception_hook();
+	}
 
 #ifdef WEB_ENABLED
 	const char *corlib_version_err = mono_check_corlib_version();
@@ -258,6 +339,14 @@ bool GDMono::initialize() {
 
 	GDMonoInterop::variant_register_icalls();
 	GDMonoCallable::register_icalls();
+	GDSignalAwaiter::register_icalls();
+
+	// Register ClassDB-generated Node/Node2D/Node3D/Resource/Timer icalls (see glue/glue_cpp/).
+	GDMonoInterop::register_node_icalls();
+	GDMonoInterop::register_node2d_icalls();
+	GDMonoInterop::register_node3d_icalls();
+	GDMonoInterop::register_resource_icalls();
+	GDMonoInterop::register_timer_icalls();
 
 	// mono_glue_init() removed - was overriding real icalls with stubs
 
@@ -443,7 +532,11 @@ bool GDMono::initialize() {
 	initialized = true;
 
 	if (root_domain && scripts_domain) {
+#ifndef WEB_ENABLED
 		install_synchronization_context();
+#else
+		MonoLogger::log("Skipping GodotSynchronizationContext.Install() in WASM (triggers mscorlib internal icall signature mismatch)");
+#endif
 		MonoLogger::log("Mono runtime initialized successfully");
 		MonoLogger::log(vformat("Runtime build info: %s", mono_get_runtime_build_info()));
 	} else {
@@ -536,12 +629,137 @@ bool GDMono::load_assembly(const String &p_path, bool p_is_proj_assembly) {
 	ua.image = image;
 	ua.name = p_path.get_file().get_basename();
 	user_assemblies.push_back(ua);
+	loaded_assembly_paths.push_back(p_path);
 
 	return true;
 }
 
+bool GDMono::reload_domain() {
+	if (!initialized) {
+		MonoLogger::log_warning("Cannot reload domain: Mono not initialized");
+		return false;
+	}
+
+#ifndef DISABLE_APPDOMAINS
+	MonoLogger::log("Reloading scripts AppDomain (full hot reload)...");
+
+	// 1. Free all managed object GC handles
+	for (KeyValue<ObjectID, uint32_t> &E : object_gchandles) {
+		if (E.value != 0) {
+			mono_gchandle_free(E.value);
+		}
+	}
+	object_gchandles.clear();
+
+	// 2. Free sync context handle
+	if (sync_context_gchandle != 0) {
+		mono_gchandle_free(sync_context_gchandle);
+		sync_context_gchandle = 0;
+	}
+
+	// 3. Clear user assemblies
+	user_assemblies.clear();
+
+	// 4. Save loaded assembly paths for reloading
+	List<String> saved_paths(loaded_assembly_paths);
+	loaded_assembly_paths.clear();
+
+	// 5. Unload scripts domain
+	if (scripts_domain && scripts_domain != root_domain) {
+		mono_domain_set(root_domain, true);
+		mono_domain_unload(scripts_domain);
+		scripts_domain = nullptr;
+	}
+
+	// 6. Create new scripts domain
+	scripts_domain = mono_domain_create_appdomain(const_cast<char *>("GodotScripts"), nullptr);
+	if (!scripts_domain) {
+		MonoLogger::log_error("Failed to create new scripts domain during reload");
+		scripts_domain = root_domain;
+		return false;
+	}
+	mono_domain_set(scripts_domain, true);
+
+	// 7. Reload GodotSharp assembly
+	godotsharp_assembly = nullptr;
+	godotsharp_image = nullptr;
+	if (godotsharp_assembly == nullptr) {
+		// Try to re-open GodotSharp from known paths
+		Vector<String> search_paths;
+		search_paths.push_back(OS::get_singleton()->get_executable_path().get_base_dir().path_join("GodotSharp.dll"));
+		search_paths.push_back(assemblies_path.path_join("GodotSharp.dll"));
+		for (const String &path : search_paths) {
+			if (FileAccess::exists(path)) {
+				MonoAssembly *gs_assembly = mono_domain_assembly_open(scripts_domain, path.utf8().get_data());
+				if (gs_assembly) {
+					godotsharp_assembly = gs_assembly;
+					godotsharp_image = mono_assembly_get_image(gs_assembly);
+					if (godotsharp_image) {
+						MonoLogger::log("GodotSharp reloaded successfully");
+						break;
+					}
+				}
+			}
+		}
+	}
+
+	// 8. Reload user assemblies
+	for (const String &path : saved_paths) {
+		load_assembly(path, true);
+	}
+
+	// 9. Reinstall sync context
+	install_synchronization_context();
+
+	MonoLogger::log("Scripts AppDomain reloaded successfully");
+	return true;
+#else
+	// WASM (DISABLE_APPDOMAINS): cannot unload AppDomain, use pseudo-reload
+	MonoLogger::log("Pseudo hot reload (WASM mode): clearing assemblies and reloading...");
+	clear_user_assemblies();
+	loaded_assembly_paths.clear();
+	// Re-scan and load user assemblies
+	List<String> saved_paths;
+	for (const UserAssembly &ua : user_assemblies) {
+		saved_paths.push_back(ua.name);
+	}
+	// The caller (csharp_editor_on_script_saved) will call load_assembly
+	return false; // indicates domain reload not used
+#endif
+}
+
+bool GDMono::reload_assembly(const String &p_path) {
+	// Try full domain reload first (desktop)
+	if (reload_domain()) {
+		// Domain reload reloaded all assemblies; if the specific path wasn't in the list, load it
+		bool found = false;
+		for (const String &path : loaded_assembly_paths) {
+			if (path == p_path) { found = true; break; }
+		}
+		if (!found) {
+			return load_assembly(p_path, true);
+		}
+		return true;
+	}
+	// WASM fallback: just clear and load
+	clear_user_assemblies();
+	return load_assembly(p_path, true);
+}
+
 void GDMono::clear_user_assemblies() {
 	user_assemblies.clear();
+}
+
+// start_debugger()/stop_debugger() removed: SDB agent must be configured
+// before mono_jit_init_version(), so hot-toggling at runtime does not work.
+// Use the --mono-debugger=PORT command-line argument instead, or call
+// CSharpDebugger::configure_before_jit_init() / install_exception_hook()
+// directly (see csharp_debugger.h).
+
+bool GDMono::is_debugger_active() const {
+	// Delegate to CSharpDebugger. Returns true if the SDB agent was requested
+	// via --mono-debugger (regardless of whether an IDE is currently attached).
+	return CSharpDebugger::is_requested();
 }
 
 MonoClass *GDMono::get_class(const String &p_namespace, const String &p_class_name) {

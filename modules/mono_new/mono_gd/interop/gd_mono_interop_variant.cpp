@@ -1,5 +1,6 @@
 #include "gd_mono_interop_variant.h"
 
+#include "gd_mono_callable.h"
 #include "../../mono_runtime/gd_mono.h"
 #include "../../utils/mono_logger.h"
 
@@ -27,8 +28,16 @@
 #include "scene/gui/control.h"
 
 #include <mono/mono-publib.h>
+#include <cstdint>
 #include <cstring>
 #include <cstdio>
+
+// Forward-declare Mono API functions from <mono/metadata/object.h> that are
+// not exposed in our minimal Mono header set. These are linked statically
+// from libmonosgen-2.0.a.
+extern "C" {
+MonoObject *mono_field_get_value_object(MonoDomain *domain, MonoClassField *field, MonoObject *obj);
+}
 
 namespace {
 // Helper: convert MonoString to Godot String, freeing the native UTF-8 buffer.
@@ -596,6 +605,79 @@ Variant mono_object_to_variant(MonoObject *p_obj, VariantTypeManaged p_hint_type
 			MonoPlane *mp = (MonoPlane *)mono_object_unbox(p_obj);
 			return Plane(mp->x, mp->y, mp->z, mp->d);
 		}
+		// StringName / NodePath: extract the inner string value.
+		// These C# types are reference-type wrappers around a single private string field.
+		if (strcmp(class_name, "StringName") == 0 || strcmp(class_name, "NodePath") == 0) {
+			MonoClassField *val_field = mono_class_get_field_from_name(cls, "value");
+			if (!val_field) val_field = mono_class_get_field_from_name(cls, "path");
+			if (val_field) {
+				MonoString *mstr = (MonoString *)mono_field_get_value_object(mono_domain_get(), val_field, p_obj);
+				if (mstr) {
+					char *utf8 = mono_string_to_utf8(mstr);
+					if (utf8) {
+						String s = String::utf8(utf8);
+						mono_free(utf8);
+						if (strcmp(class_name, "StringName") == 0) {
+							return Variant(StringName(s));
+						} else {
+							return Variant(NodePath(s));
+						}
+					}
+				}
+			}
+			return Variant(StringName());
+		}
+		// Callable: if nativeCallable != 0, return the underlying Godot Callable pointer.
+		if (strcmp(class_name, "Callable") == 0) {
+			MonoClassField *nc_field = mono_class_get_field_from_name(cls, "nativeCallable");
+			if (nc_field) {
+				int64_t nc = 0;
+				mono_field_get_value(p_obj, nc_field, &nc);
+				if (nc != 0) {
+					Callable *callable = (Callable *)(intptr_t)nc;
+					return Variant(*callable);
+				}
+			}
+			// Fall back to TargetDelegate if nativeCallable is null.
+			MonoClassField *td_field = mono_class_get_field_from_name(cls, "TargetDelegate");
+			if (td_field) {
+				MonoObject *delegate_obj = mono_field_get_value_object(mono_domain_get(), td_field, p_obj);
+				if (delegate_obj) {
+					Callable callable = GDMonoCallable::create_callable_from_mono_delegate(delegate_obj);
+					if (callable.is_valid()) return Variant(callable);
+				}
+			}
+			return Variant(Callable());
+		}
+		// Signal: build a Signal Variant from Owner + Name.
+		if (strcmp(class_name, "Signal") == 0) {
+			MonoClassField *owner_field = mono_class_get_field_from_name(cls, "Owner");
+			MonoClassField *name_field = mono_class_get_field_from_name(cls, "Name");
+			if (owner_field && name_field) {
+				MonoObject *owner_obj = mono_field_get_value_object(mono_domain_get(), owner_field, p_obj);
+				MonoObject *name_obj = mono_field_get_value_object(mono_domain_get(), name_field, p_obj);
+				Object *owner = owner_obj ? (Object *)get_native_object(owner_obj) : nullptr;
+				StringName signal_name;
+				if (name_obj) {
+					MonoClass *name_cls = mono_object_get_class(name_obj);
+					MonoClassField *val_field = mono_class_get_field_from_name(name_cls, "value");
+					if (val_field) {
+						MonoString *mstr = (MonoString *)mono_field_get_value_object(mono_domain_get(), val_field, name_obj);
+						if (mstr) {
+							char *utf8 = mono_string_to_utf8(mstr);
+							if (utf8) {
+								signal_name = StringName(String::utf8(utf8));
+								mono_free(utf8);
+							}
+						}
+					}
+				}
+				if (owner && !signal_name.is_empty()) {
+					return Variant(Signal(owner, signal_name));
+				}
+			}
+			return Variant(Signal());
+		}
 		ensure_native_instance_field();
 		if (strcmp(class_name, "GodotObject") == 0 || (godot_object_class && mono_class_is_subclass_of(cls, godot_object_class, false))) {
 			Object *native = (Object *)get_native_object(p_obj);
@@ -652,9 +734,9 @@ static MonoObject *icall_GD_Load(MonoString *p_path) {
 	return get_managed_wrapper(gdmono->get_scripts_domain(), res.ptr());
 }
 
-static mono_bool icall_Object_EmitSignal(void *p_native_ptr, MonoString *p_signal, MonoArray *p_args) {
+static mono_bool icall_Object_EmitSignal(int64_t p_native_ptr, MonoString *p_signal, MonoArray *p_args) {
 	if (!p_native_ptr || !p_signal) return false;
-	Object *obj = (Object *)p_native_ptr;
+	Object *obj = (Object *)(intptr_t)p_native_ptr;
 	String signal_str = mono_string_to_godot_string(p_signal);
 	StringName signal_name(signal_str);
 	GDMono *gdmono = GDMono::get_singleton();
@@ -674,16 +756,16 @@ static mono_bool icall_Object_EmitSignal(void *p_native_ptr, MonoString *p_signa
 	return err == OK;
 }
 
-static int64_t icall_InputEventKey_GetKeycode(void *p_native) {
+static int64_t icall_InputEventKey_GetKeycode(int64_t p_native) {
 	if (!p_native) return 0;
-	InputEventKey *key_event = Object::cast_to<InputEventKey>((Object *)p_native);
+	InputEventKey *key_event = Object::cast_to<InputEventKey>((Object *)(intptr_t)p_native);
 	if (!key_event) return 0;
 	return (int64_t)key_event->get_keycode();
 }
 
-static mono_bool icall_InputEventKey_IsPressed(void *p_native) {
+static mono_bool icall_InputEventKey_IsPressed(int64_t p_native) {
 	if (!p_native) return false;
-	InputEventKey *key_event = Object::cast_to<InputEventKey>((Object *)p_native);
+	InputEventKey *key_event = Object::cast_to<InputEventKey>((Object *)(intptr_t)p_native);
 	if (!key_event) return false;
 	return key_event->is_pressed();
 }
@@ -703,62 +785,62 @@ static mono_bool icall_Input_IsActionPressed(MonoString *p_action) {
 
 // ===== UI and Node Manipulation Internal Calls =====
 
-static void *icall_CreateObject(MonoString *p_class_name) {
-	if (!p_class_name) return nullptr;
+static int64_t icall_CreateObject(MonoString *p_class_name) {
+	if (!p_class_name) return 0;
 	char *utf8 = mono_string_to_utf8(p_class_name);
-	if (!utf8) return nullptr;
+	if (!utf8) return 0;
 	String class_name = String::utf8(utf8);
 	mono_free(utf8);
 	Object *obj = ClassDB::instantiate(class_name);
 	if (!obj) {
 		MonoLogger::log_error("Failed to create object of type: " + class_name);
-		return nullptr;
+		return 0;
 	}
-	return obj;
+	return (int64_t)(intptr_t)obj;
 }
 
-static void icall_Node_AddChild(void *p_parent, void *p_child) {
+static void icall_Node_AddChild(int64_t p_parent, int64_t p_child) {
 	if (!p_parent || !p_child) return;
-	Node *parent = (Node *)p_parent;
-	Node *child = (Node *)p_child;
+	Node *parent = (Node *)(intptr_t)p_parent;
+	Node *child = (Node *)(intptr_t)p_child;
 	parent->add_child(child);
 }
 
-static void icall_Object_SetString(void *p_obj, MonoString *p_prop, MonoString *p_value) {
+static void icall_Object_SetString(int64_t p_obj, MonoString *p_prop, MonoString *p_value) {
 	if (!p_obj || !p_prop) return;
-	Object *obj = (Object *)p_obj;
+	Object *obj = (Object *)(intptr_t)p_obj;
 	String prop = mono_string_to_godot_string(p_prop);
 	String value = p_value ? mono_string_to_godot_string(p_value) : String();
 	obj->set(prop, Variant(value));
 }
 
-static void icall_Object_SetInt(void *p_obj, MonoString *p_prop, int64_t p_value) {
+static void icall_Object_SetInt(int64_t p_obj, MonoString *p_prop, int64_t p_value) {
 	if (!p_obj || !p_prop) return;
-	Object *obj = (Object *)p_obj;
+	Object *obj = (Object *)(intptr_t)p_obj;
 	String prop = mono_string_to_godot_string(p_prop);
 	obj->set(prop, Variant(p_value));
 }
 
 // WASM workaround: accept int32 bit pattern instead of float.
-static void icall_Object_SetFloat(void *p_obj, MonoString *p_prop, int32_t p_value_bits) {
+static void icall_Object_SetFloat(int64_t p_obj, MonoString *p_prop, int32_t p_value_bits) {
 	if (!p_obj || !p_prop) return;
 	float p_value;
 	memcpy(&p_value, &p_value_bits, sizeof(float));
-	Object *obj = (Object *)p_obj;
+	Object *obj = (Object *)(intptr_t)p_obj;
 	String prop = mono_string_to_godot_string(p_prop);
 	obj->set(prop, Variant(p_value));
 }
 
-static void icall_Object_SetBool(void *p_obj, MonoString *p_prop, mono_bool p_value) {
+static void icall_Object_SetBool(int64_t p_obj, MonoString *p_prop, mono_bool p_value) {
 	if (!p_obj || !p_prop) return;
-	Object *obj = (Object *)p_obj;
+	Object *obj = (Object *)(intptr_t)p_obj;
 	String prop = mono_string_to_godot_string(p_prop);
 	obj->set(prop, Variant((bool)(p_value != 0)));
 }
 
-static void icall_Object_SetVector2(void *p_obj, MonoString *p_prop, int32_t x_bits, int32_t y_bits) {
+static void icall_Object_SetVector2(int64_t p_obj, MonoString *p_prop, int32_t x_bits, int32_t y_bits) {
 	if (!p_obj || !p_prop) return;
-	Object *obj = (Object *)p_obj;
+	Object *obj = (Object *)(intptr_t)p_obj;
 	String prop = mono_string_to_godot_string(p_prop);
 	float x, y;
 	memcpy(&x, &x_bits, sizeof(float));
@@ -766,9 +848,9 @@ static void icall_Object_SetVector2(void *p_obj, MonoString *p_prop, int32_t x_b
 	obj->set(prop, Variant(Vector2(x, y)));
 }
 
-static void icall_Object_SetColor(void *p_obj, MonoString *p_prop, int32_t r_bits, int32_t g_bits, int32_t b_bits, int32_t a_bits) {
+static void icall_Object_SetColor(int64_t p_obj, MonoString *p_prop, int32_t r_bits, int32_t g_bits, int32_t b_bits, int32_t a_bits) {
 	if (!p_obj || !p_prop) return;
-	Object *obj = (Object *)p_obj;
+	Object *obj = (Object *)(intptr_t)p_obj;
 	String prop = mono_string_to_godot_string(p_prop);
 	float r, g, b, a;
 	memcpy(&r, &r_bits, sizeof(float));
@@ -778,59 +860,59 @@ static void icall_Object_SetColor(void *p_obj, MonoString *p_prop, int32_t r_bit
 	obj->set(prop, Variant(Color(r, g, b, a)));
 }
 
-static void icall_Object_SetObject(void *p_obj, MonoString *p_prop, void *p_value) {
+static void icall_Object_SetObject(int64_t p_obj, MonoString *p_prop, int64_t p_value) {
 	if (!p_obj || !p_prop) return;
-	Object *obj = (Object *)p_obj;
+	Object *obj = (Object *)(intptr_t)p_obj;
 	String prop = mono_string_to_godot_string(p_prop);
-	Object *value = (Object *)p_value;
+	Object *value = (Object *)(intptr_t)p_value;
 	obj->set(prop, Variant(value));
 }
 
-static void icall_Object_CallString(void *p_obj, MonoString *p_method, MonoString *p_arg) {
+static void icall_Object_CallString(int64_t p_obj, MonoString *p_method, MonoString *p_arg) {
 	if (!p_obj || !p_method) return;
-	Object *obj = (Object *)p_obj;
+	Object *obj = (Object *)(intptr_t)p_obj;
 	String method = mono_string_to_godot_string(p_method);
 	String arg = p_arg ? mono_string_to_godot_string(p_arg) : String();
 	obj->call(method, Variant(arg));
 }
 
-static void icall_Object_CallInt(void *p_obj, MonoString *p_method, int64_t p_arg) {
+static void icall_Object_CallInt(int64_t p_obj, MonoString *p_method, int64_t p_arg) {
 	if (!p_obj || !p_method) return;
-	Object *obj = (Object *)p_obj;
+	Object *obj = (Object *)(intptr_t)p_obj;
 	String method = mono_string_to_godot_string(p_method);
 	obj->call(method, Variant(p_arg));
 }
 
-static void icall_Object_CallStringInt(void *p_obj, MonoString *p_method, MonoString *p_arg1, int64_t p_arg2) {
+static void icall_Object_CallStringInt(int64_t p_obj, MonoString *p_method, MonoString *p_arg1, int64_t p_arg2) {
 	if (!p_obj || !p_method) return;
-	Object *obj = (Object *)p_obj;
+	Object *obj = (Object *)(intptr_t)p_obj;
 	String method = mono_string_to_godot_string(p_method);
 	String arg1 = p_arg1 ? mono_string_to_godot_string(p_arg1) : String();
 	obj->call(method, Variant(arg1), Variant(p_arg2));
 }
 
-static void icall_Object_CallStringColor(void *p_obj, MonoString *p_method, MonoString *p_arg1, float r, float g, float b, float a) {
+static void icall_Object_CallStringColor(int64_t p_obj, MonoString *p_method, MonoString *p_arg1, float r, float g, float b, float a) {
 	if (!p_obj || !p_method) return;
-	Object *obj = (Object *)p_obj;
+	Object *obj = (Object *)(intptr_t)p_obj;
 	String method = mono_string_to_godot_string(p_method);
 	String arg1 = p_arg1 ? mono_string_to_godot_string(p_arg1) : String();
 	obj->call(method, Variant(arg1), Variant(Color(r, g, b, a)));
 }
 
-static void icall_Object_CallStringObject(void *p_obj, MonoString *p_method, MonoString *p_arg1, void *p_arg2) {
+static void icall_Object_CallStringObject(int64_t p_obj, MonoString *p_method, MonoString *p_arg1, int64_t p_arg2) {
 	if (!p_obj || !p_method) return;
-	Object *obj = (Object *)p_obj;
+	Object *obj = (Object *)(intptr_t)p_obj;
 	String method = mono_string_to_godot_string(p_method);
 	String arg1 = p_arg1 ? mono_string_to_godot_string(p_arg1) : String();
-	Object *arg2 = (Object *)p_arg2;
+	Object *arg2 = (Object *)(intptr_t)p_arg2;
 	obj->call(method, Variant(arg1), Variant(arg2));
 }
 
 // Call a method deferred (at end of current frame via MessageQueue).
 // This avoids "Parent node is busy" errors when switching scenes during _Ready().
-static void icall_Object_CallDeferred(void *p_obj, MonoString *p_method, MonoString *p_arg) {
+static void icall_Object_CallDeferred(int64_t p_obj, MonoString *p_method, MonoString *p_arg) {
     if (!p_obj || !p_method) return;
-    Object *obj = (Object *)p_obj;
+    Object *obj = (Object *)(intptr_t)p_obj;
     String method = mono_string_to_godot_string(p_method);
     if (p_arg) {
         String arg = mono_string_to_godot_string(p_arg);
@@ -841,17 +923,17 @@ static void icall_Object_CallDeferred(void *p_obj, MonoString *p_method, MonoStr
 }
 
 // Call a method deferred with no arguments.
-static void icall_Object_CallDeferredNoArgs(void *p_obj, MonoString *p_method) {
+static void icall_Object_CallDeferredNoArgs(int64_t p_obj, MonoString *p_method) {
     if (!p_obj || !p_method) return;
-    Object *obj = (Object *)p_obj;
+    Object *obj = (Object *)(intptr_t)p_obj;
     String method = mono_string_to_godot_string(p_method);
     obj->call_deferred(method);
 }
 
 // Queue free for Node (deferred). Non-Node objects are not freed here.
-static void icall_Object_QueueFree(void *p_obj) {
+static void icall_Object_QueueFree(int64_t p_obj) {
     if (!p_obj) return;
-    Object *obj = (Object *)p_obj;
+    Object *obj = (Object *)(intptr_t)p_obj;
     Node *node = Object::cast_to<Node>(obj);
     if (node) {
         node->queue_free();
@@ -860,54 +942,54 @@ static void icall_Object_QueueFree(void *p_obj) {
 }
 
 // Get the native class name of an object.
-static MonoString *icall_Object_GetClass(void *p_obj) {
+static MonoString *icall_Object_GetClass(int64_t p_obj) {
     if (!p_obj) return nullptr;
-    Object *obj = (Object *)p_obj;
+    Object *obj = (Object *)(intptr_t)p_obj;
     String class_name = obj->get_class();
     MonoDomain *domain = GDMono::get_singleton() ? GDMono::get_singleton()->get_scripts_domain() : mono_domain_get();
     return mono_string_new(domain, class_name.utf8().get_data());
 }
 
 // Check if object is a specific class.
-static mono_bool icall_Object_IsClass(void *p_obj, MonoString *p_class_name) {
+static mono_bool icall_Object_IsClass(int64_t p_obj, MonoString *p_class_name) {
     if (!p_obj || !p_class_name) return false;
-    Object *obj = (Object *)p_obj;
+    Object *obj = (Object *)(intptr_t)p_obj;
     String class_name = mono_string_to_godot_string(p_class_name);
     return obj->is_class(class_name);
 }
 
 // Get parent node (for Node).
-static void *icall_Node_GetParent(void *p_node) {
-    if (!p_node) return nullptr;
-    Node *node = (Node *)p_node;
-    return node->get_parent();
+static int64_t icall_Node_GetParent(int64_t p_node) {
+    if (!p_node) return 0;
+    Node *node = (Node *)(intptr_t)p_node;
+    return (int64_t)(intptr_t)node->get_parent();
 }
 
-static void icall_Object_CallNoArgs(void *p_obj, MonoString *p_method) {
+static void icall_Object_CallNoArgs(int64_t p_obj, MonoString *p_method) {
 	if (!p_obj || !p_method) return;
-	Object *obj = (Object *)p_obj;
+	Object *obj = (Object *)(intptr_t)p_obj;
 	String method = mono_string_to_godot_string(p_method);
 	obj->call(method);
 }
 
-static void *icall_Object_CallNoArgsObject(void *p_obj, MonoString *p_method) {
-	if (!p_obj || !p_method) return nullptr;
-	Object *obj = (Object *)p_obj;
+static int64_t icall_Object_CallNoArgsObject(int64_t p_obj, MonoString *p_method) {
+	if (!p_obj || !p_method) return 0;
+	Object *obj = (Object *)(intptr_t)p_obj;
 	String method = mono_string_to_godot_string(p_method);
 	Variant ret = obj->call(method);
 	Object *result = ret;
-	return result;
+	return (int64_t)(intptr_t)result;
 }
 
 // WASM workaround: return int64 bit pattern instead of double.
-static int64_t icall_Object_GetFloat(void *p_obj, MonoString *p_prop) {
+static int64_t icall_Object_GetFloat(int64_t p_obj, MonoString *p_prop) {
 	if (!p_obj || !p_prop) {
 		double zero = 0.0;
 		int64_t bits;
 		memcpy(&bits, &zero, sizeof(double));
 		return bits;
 	}
-	Object *obj = (Object *)p_obj;
+	Object *obj = (Object *)(intptr_t)p_obj;
 	String prop = mono_string_to_godot_string(p_prop);
 	Variant v = obj->get(prop);
 	double val = (double)v;
@@ -916,9 +998,9 @@ static int64_t icall_Object_GetFloat(void *p_obj, MonoString *p_prop) {
 	return bits;
 }
 
-static MonoString *icall_Object_GetString(void *p_obj, MonoString *p_prop) {
+static MonoString *icall_Object_GetString(int64_t p_obj, MonoString *p_prop) {
 	if (!p_obj || !p_prop) return nullptr;
-	Object *obj = (Object *)p_obj;
+	Object *obj = (Object *)(intptr_t)p_obj;
 	String prop = mono_string_to_godot_string(p_prop);
 	Variant v = obj->get(prop);
 	String s = v;
@@ -940,17 +1022,17 @@ static MonoString *icall_Time_GetTimeStringFromSystem() {
 
 // ===== WebSocket and Networking Internal Calls =====
 
-static int64_t icall_Object_CallNoArgsInt(void *p_obj, MonoString *p_method) {
+static int64_t icall_Object_CallNoArgsInt(int64_t p_obj, MonoString *p_method) {
 	if (!p_obj || !p_method) return 0;
-	Object *obj = (Object *)p_obj;
+	Object *obj = (Object *)(intptr_t)p_obj;
 	String method = mono_string_to_godot_string(p_method);
 	Variant ret = obj->call(method);
 	return (int64_t)ret;
 }
 
-static int64_t icall_Object_CallStringReturnsInt(void *p_obj, MonoString *p_method, MonoString *p_arg) {
+static int64_t icall_Object_CallStringReturnsInt(int64_t p_obj, MonoString *p_method, MonoString *p_arg) {
 	if (!p_obj || !p_method) return 0;
-	Object *obj = (Object *)p_obj;
+	Object *obj = (Object *)(intptr_t)p_obj;
 	String method = mono_string_to_godot_string(p_method);
 	String arg = p_arg ? mono_string_to_godot_string(p_arg) : String();
 	Variant ret = obj->call(method, Variant(arg));
@@ -959,9 +1041,9 @@ static int64_t icall_Object_CallStringReturnsInt(void *p_obj, MonoString *p_meth
 
 // Get the packet data from a PacketPeer (like WebSocketPeer) as a byte array.
 // Returns a MonoArray* of bytes, or null if no packet available.
-static MonoArray *icall_PacketPeer_GetPacket(void *p_obj) {
+static MonoArray *icall_PacketPeer_GetPacket(int64_t p_obj) {
 	if (!p_obj) return nullptr;
-	Object *obj = (Object *)p_obj;
+	Object *obj = (Object *)(intptr_t)p_obj;
 	Variant ret = obj->call("get_packet");
 	PackedByteArray pba = ret;
 	int size = pba.size();
@@ -974,9 +1056,9 @@ static MonoArray *icall_PacketPeer_GetPacket(void *p_obj) {
 	return arr;
 }
 
-static int64_t icall_Object_CallNoArgsBool(void *p_obj, MonoString *p_method) {
+static int64_t icall_Object_CallNoArgsBool(int64_t p_obj, MonoString *p_method) {
 	if (!p_obj || !p_method) return 0;
-	Object *obj = (Object *)p_obj;
+	Object *obj = (Object *)(intptr_t)p_obj;
 	String method = mono_string_to_godot_string(p_method);
 	Variant ret = obj->call(method);
 	return (bool)ret ? 1 : 0;
@@ -1009,23 +1091,23 @@ static MonoString *icall_OS_GetName() {
 	return mono_string_new(mono_domain_get(), name.utf8().get_data());
 }
 
-static void *icall_Callable_CreateFromTarget(void *p_target, MonoString *p_method) {
-	if (!p_target || !p_method) return nullptr;
-	Object *target = (Object *)p_target;
+static int64_t icall_Callable_CreateFromTarget(int64_t p_target, MonoString *p_method) {
+	if (!p_target || !p_method) return 0;
+	Object *target = (Object *)(intptr_t)p_target;
 	char *utf8 = mono_string_to_utf8(p_method);
-	if (!utf8) return nullptr;
+	if (!utf8) return 0;
 	StringName method(String::utf8(utf8));
 	mono_free(utf8);
 	Callable *callable = memnew(Callable(target, method));
-	return callable;
+	return (int64_t)(intptr_t)callable;
 }
 
-static void icall_Object_Free(void *p_ptr) {
+static void icall_Object_Free(int64_t p_ptr) {
 	// Godot objects are reference-counted; just unreference.
 	// RefCounted objects will be freed when refcount reaches 0.
 	// Non-RefCounted objects (Nodes) are owned by the scene tree.
 	if (!p_ptr) return;
-	Object *obj = (Object *)p_ptr;
+	Object *obj = (Object *)(intptr_t)p_ptr;
 	RefCounted *r = Object::cast_to<RefCounted>(obj);
 	if (r) {
 		r->unreference();
@@ -1035,9 +1117,9 @@ static void icall_Object_Free(void *p_ptr) {
 // Delete a native object. Used by derived C# class constructors to replace
 // a wrong-type native object created by a base class constructor.
 // For RefCounted: unreference. For Nodes: only delete if no parent (not in scene tree).
-static void icall_Object_Delete(void *p_ptr) {
+static void icall_Object_Delete(int64_t p_ptr) {
 	if (!p_ptr) return;
-	Object *obj = (Object *)p_ptr;
+	Object *obj = (Object *)(intptr_t)p_ptr;
 	RefCounted *r = Object::cast_to<RefCounted>(obj);
 	if (r) {
 		r->unreference();
@@ -1126,87 +1208,87 @@ static MonoString *icall_FileAccess_GetUserDataDir() {
 }
 
 // --- Node icalls ---
-static int icall_Node_GetChildCount(void *p_node) {
-	Node *n = (Node *)p_node;
+static int icall_Node_GetChildCount(int64_t p_node) {
+	Node *n = (Node *)(intptr_t)p_node;
 	return n->get_child_count();
 }
 
-static void *icall_Node_GetChild(void *p_node, int p_index) {
-	Node *n = (Node *)p_node;
-	return n->get_child(p_index);
+static int64_t icall_Node_GetChild(int64_t p_node, int p_index) {
+	Node *n = (Node *)(intptr_t)p_node;
+	return (int64_t)(intptr_t)n->get_child(p_index);
 }
 
-static MonoString *icall_Node_GetName(void *p_node) {
-	Node *n = (Node *)p_node;
+static MonoString *icall_Node_GetName(int64_t p_node) {
+	Node *n = (Node *)(intptr_t)p_node;
 	return mono_string_new(mono_domain_get(), String(n->get_name()).utf8().ptr());
 }
 
-static void icall_Node_SetName(void *p_node, MonoString *p_name) {
-	Node *n = (Node *)p_node;
+static void icall_Node_SetName(int64_t p_node, MonoString *p_name) {
+	Node *n = (Node *)(intptr_t)p_node;
 	char *name = mono_string_to_utf8(p_name);
 	n->set_name(String::utf8(name));
 	mono_free(name);
 }
 
-static void icall_Node_RemoveChild(void *p_node, void *p_child) {
-	Node *n = (Node *)p_node;
-	Node *c = (Node *)p_child;
+static void icall_Node_RemoveChild(int64_t p_node, int64_t p_child) {
+	Node *n = (Node *)(intptr_t)p_node;
+	Node *c = (Node *)(intptr_t)p_child;
 	n->remove_child(c);
 }
 
-static MonoString *icall_Node_GetPath(void *p_node) {
-	Node *n = (Node *)p_node;
+static MonoString *icall_Node_GetPath(int64_t p_node) {
+	Node *n = (Node *)(intptr_t)p_node;
 	return mono_string_new(mono_domain_get(), String(n->get_path()).utf8().ptr());
 }
 
-static void icall_Node_QueueFree(void *p_node) {
-	Node *n = (Node *)p_node;
+static void icall_Node_QueueFree(int64_t p_node) {
+	Node *n = (Node *)(intptr_t)p_node;
 	n->queue_free();
 }
 
-static void *icall_Node_GetNode(void *p_node, MonoString *p_path) {
-	Node *n = (Node *)p_node;
+static int64_t icall_Node_GetNode(int64_t p_node, MonoString *p_path) {
+	Node *n = (Node *)(intptr_t)p_node;
 	char *path = mono_string_to_utf8(p_path);
 	Node *child = n->get_node(NodePath(String::utf8(path)));
 	mono_free(path);
-	return child;
+	return (int64_t)(intptr_t)child;
 }
 
-static MonoString *icall_Node_GetClassName(void *p_node) {
-	Node *n = (Node *)p_node;
+static MonoString *icall_Node_GetClassName(int64_t p_node) {
+	Node *n = (Node *)(intptr_t)p_node;
 	return mono_string_new(mono_domain_get(), n->get_class().utf8().ptr());
 }
 
 // --- SceneTree icalls ---
-static int icall_SceneTree_ChangeSceneToFile(void *p_tree, MonoString *p_path) {
-	SceneTree *tree = (SceneTree *)p_tree;
+static int icall_SceneTree_ChangeSceneToFile(int64_t p_tree, MonoString *p_path) {
+	SceneTree *tree = (SceneTree *)(intptr_t)p_tree;
 	char *path = mono_string_to_utf8(p_path);
 	Error err = tree->change_scene_to_file(String::utf8(path));
 	mono_free(path);
 	return (int)err;
 }
 
-static void *icall_SceneTree_GetCurrentScene(void *p_tree) {
-	SceneTree *tree = (SceneTree *)p_tree;
-	return tree->get_current_scene();
+static int64_t icall_SceneTree_GetCurrentScene(int64_t p_tree) {
+	SceneTree *tree = (SceneTree *)(intptr_t)p_tree;
+	return (int64_t)(intptr_t)tree->get_current_scene();
 }
 
 // --- ResourceLoader icall ---
-static void *icall_ResourceLoader_Load(MonoString *p_path) {
+static int64_t icall_ResourceLoader_Load(MonoString *p_path) {
 	char *path = mono_string_to_utf8(p_path);
 	String s = String::utf8(path);
 	mono_free(path);
 	Ref<Resource> res = ResourceLoader::load(s);
-	if (res.is_null()) return nullptr;
+	if (res.is_null()) return 0;
 	res->reference();
-	return res.ptr();
+	return (int64_t)(intptr_t)res.ptr();
 }
 
 // --- PackedScene icall ---
-static void *icall_PackedScene_Instantiate(void *p_scene) {
-	PackedScene *scene = (PackedScene *)p_scene;
-	if (!scene) return nullptr;
-	return scene->instantiate();
+static int64_t icall_PackedScene_Instantiate(int64_t p_scene) {
+	PackedScene *scene = (PackedScene *)(intptr_t)p_scene;
+	if (!scene) return 0;
+	return (int64_t)(intptr_t)scene->instantiate();
 }
 
 
@@ -1245,6 +1327,15 @@ static MonoString *icall_GD_FloatToString(int32_t p_val_bits) {
     int64_t bits;
     memcpy(&bits, &dval, sizeof(double));
     return icall_GD_DoubleToString(bits);
+}
+
+// Async/await: C# calls this to post a continuation delegate (Action)
+// to be invoked on the next Godot frame tick.
+static void icall_PostSyncCallback(MonoObject *p_delegate) {
+	GDMono *gdmono = GDMono::get_singleton();
+	if (gdmono) {
+		gdmono->post_sync_delegate(p_delegate);
+	}
 }
 
 void variant_register_icalls() {
@@ -1299,7 +1390,7 @@ void variant_register_icalls() {
 	mono_add_internal_call("Godot.Callable::godot_icall_Callable_CreateFromTarget", (const void *)icall_Callable_CreateFromTarget);
 	mono_add_internal_call("Godot.GodotObject::godot_icall_Object_Free", (const void *)icall_Object_Free);
 	mono_add_internal_call("Godot.GodotObject::godot_icall_Object_Delete", (const void *)icall_Object_Delete);
-	
+
 	mono_add_internal_call("Godot.FileAccess::godot_icall_FileAccess_FileExists", (const void *)icall_FileAccess_FileExists);
 	mono_add_internal_call("Godot.FileAccess::godot_icall_FileAccess_GetFileAsString", (const void *)icall_FileAccess_GetFileAsString);
 	mono_add_internal_call("Godot.FileAccess::godot_icall_FileAccess_GetFileAsBytes", (const void *)icall_FileAccess_GetFileAsBytes);
@@ -1327,6 +1418,8 @@ void variant_register_icalls() {
 	mono_add_internal_call("Godot.GD::godot_icall_GD_Int64ToString", (const void *)icall_GD_Int64ToString);
 	mono_add_internal_call("Godot.GD::godot_icall_GD_FloatToString", (const void *)icall_GD_FloatToString);
 
+	// Async/await support: PostSyncCallback icall for GodotSynchronizationContext
+	mono_add_internal_call("Godot.GDMonoAccess::godot_icall_PostSyncCallback", (const void *)icall_PostSyncCallback);
 
 	MonoLogger::log("Mono interop icalls registered");
 }

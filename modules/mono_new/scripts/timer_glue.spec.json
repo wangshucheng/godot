@@ -1,0 +1,105 @@
+{
+  "class": "Timer",
+  "inherits": "Node",
+  "cpp_header": "scene/main/timer.h",
+  "namespace": "Godot",
+  "methods": [
+    {
+      "name": "set_wait_time",
+      "csharp_name": "SetWaitTime",
+      "return_type": "void",
+      "params": [
+        {"type": "double", "name": "p_time"}
+      ]
+    },
+    {
+      "name": "get_wait_time",
+      "csharp_name": "GetWaitTime",
+      "return_type": "double",
+      "params": []
+    },
+    {
+      "name": "set_one_shot",
+      "csharp_name": "SetOneShot",
+      "return_type": "void",
+      "params": [
+        {"type": "bool", "name": "p_one_shot"}
+      ]
+    },
+    {
+      "name": "is_one_shot",
+      "csharp_name": "IsOneShot",
+      "return_type": "bool",
+      "params": []
+    },
+    {
+      "name": "set_autostart",
+      "csharp_name": "SetAutostart",
+      "return_type": "void",
+      "params": [
+        {"type": "bool", "name": "p_start"}
+      ]
+    },
+    {
+      "name": "has_autostart",
+      "csharp_name": "HasAutostart",
+      "return_type": "bool",
+      "params": []
+    },
+    {
+      "name": "start",
+      "csharp_name": "Start",
+      "return_type": "void",
+      "params": [
+        {"type": "double", "name": "p_time"}
+      ],
+      "cpp_method": "start"
+    },
+    {
+      "name": "stop",
+      "csharp_name": "Stop",
+      "return_type": "void",
+      "params": []
+    },
+    {
+      "name": "set_paused",
+      "csharp_name": "SetPaused",
+      "return_type": "void",
+      "params": [
+        {"type": "bool", "name": "p_paused"}
+      ]
+    },
+    {
+      "name": "is_paused",
+      "csharp_name": "IsPaused",
+      "return_type": "bool",
+      "params": []
+    },
+    {
+      "name": "set_ignore_time_scale",
+      "csharp_name": "SetIgnoreTimeScale",
+      "return_type": "void",
+      "params": [
+        {"type": "bool", "name": "p_ignore"}
+      ]
+    },
+    {
+      "name": "is_ignoring_time_scale",
+      "csharp_name": "IsIgnoringTimeScale",
+      "return_type": "bool",
+      "params": []
+    },
+    {
+      "name": "is_stopped",
+      "csharp_name": "IsStopped",
+      "return_type": "bool",
+      "params": []
+    },
+    {
+      "name": "get_time_left",
+      "csharp_name": "GetTimeLeft",
+      "return_type": "double",
+      "params": []
+    }
+  ]
+}

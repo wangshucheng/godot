@@ -1,67 +1,15 @@
 #include "mono_glue.h"
-#include "../utils/mono_logger.h"
-#include "core/os/os.h"
-#include "core/math/math_funcs.h"
-#include <mono/mono-publib.h>
-#include <cstring>
 
-extern "C" {
-char *mono_string_to_utf8(MonoString *s);
-void mono_free(void *ptr);
-void mono_add_internal_call(const char *name, const void *method);
-}
-
-static void godot_icall_GD_Print(MonoString *msg) {
-	if (msg) {
-		char *utf8 = mono_string_to_utf8(msg);
-		if (utf8) {
-			MonoLogger::log(String("C#: ") + String::utf8(utf8));
-			mono_free(utf8);
-		}
-	}
-}
-
-static void godot_icall_GD_PrintErr(MonoString *msg) {
-	if (msg) {
-		char *utf8 = mono_string_to_utf8(msg);
-		if (utf8) {
-			MonoLogger::log_error(String("C# Error: ") + String::utf8(utf8));
-			mono_free(utf8);
-		}
-	}
-}
-
-static int64_t godot_icall_GD_Randi() {
-	return (int64_t)Math::rand();
-}
-
-static double godot_icall_GD_Randf() {
-	return Math::randd();
-}
-
-static mono_bool godot_icall_Input_IsKeyPressed(int64_t key) {
-	return false;
-}
-
-static mono_bool godot_icall_Input_IsActionPressed(MonoString *action) {
-	return false;
-}
-
-static void godot_icall_Object_EmitSignal(MonoObject *nativePtr, MonoString *signal, MonoArray *args) {
-}
-
-void mono_glue_register_icalls() {
-	mono_add_internal_call("Godot.GD::godot_icall_GD_Print", (const void *)godot_icall_GD_Print);
-	mono_add_internal_call("Godot.GD::godot_icall_GD_PrintErr", (const void *)godot_icall_GD_PrintErr);
-	mono_add_internal_call("Godot.GD::godot_icall_GD_Randi", (const void *)godot_icall_GD_Randi);
-	mono_add_internal_call("Godot.GD::godot_icall_GD_Randf", (const void *)godot_icall_GD_Randf);
-	mono_add_internal_call("Godot.Input::godot_icall_Input_IsKeyPressed", (const void *)godot_icall_Input_IsKeyPressed);
-	mono_add_internal_call("Godot.Input::godot_icall_Input_IsActionPressed", (const void *)godot_icall_Input_IsActionPressed);
-	mono_add_internal_call("Godot.GodotObject::godot_icall_Object_EmitSignal", (const void *)godot_icall_Object_EmitSignal);
-
-	MonoLogger::log("Registered C# internal calls");
-}
-
-void mono_glue_init() {
-    mono_glue_register_icalls();
-}
+// This file previously contained stub icall implementations that shadowed the
+// real icalls registered in gd_mono_interop_variant.cpp and gd_mono_callable.cpp.
+// The stubs and mono_glue_init()/mono_glue_register_icalls() have been removed
+// to prevent accidental override of production icalls.
+//
+// Real icall registration happens in:
+//   - GDMonoInterop::variant_register_icalls() (gd_mono_interop_variant.cpp)
+//   - GDMonoCallable::register_icalls() (gd_mono_callable.cpp)
+//   - GDSignalAwaiter::register_icalls() (signal_awaiter_utils.cpp)
+//   - GDMonoInterop::register_node_icalls() / register_node2d_icalls() (glue_cpp/)
+//
+// This file is intentionally empty; the SCsub glob (glue/*.cpp) still compiles it
+// but there are no symbols defined here.

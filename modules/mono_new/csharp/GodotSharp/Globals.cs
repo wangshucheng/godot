@@ -14,16 +14,20 @@ namespace Godot
     }
 
     // WASM-safe union: reinterpret int32 bit pattern as float.
+    // LongValue (8 bytes) overlaps IntValue (4 bytes) at offset 0 on little-endian
+    // targets, allowing int64 icall returns (sign-extended int32 bit-patterns)
+    // to be reinterpreted as float via { LongValue = ... }.FloatValue.
     [StructLayout(LayoutKind.Explicit)]
     internal struct FloatIntUnion
     {
         [FieldOffset(0)] public int IntValue;
         [FieldOffset(0)] public float FloatValue;
+        [FieldOffset(0)] public long LongValue;
     }
 
     public class Callable
     {
-        internal int nativeCallable;
+        internal long nativeCallable;
         internal Delegate TargetDelegate;
 
         public Callable()
@@ -44,15 +48,15 @@ namespace Godot
 }
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        internal extern static int godot_icall_Callable_CreateFromTarget(int target, string method);
+        internal extern static long godot_icall_Callable_CreateFromTarget(long target, string method);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal extern static Callable godot_icall_Callable_CreateFromDelegate(Delegate @delegate);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        internal extern static void godot_icall_Callable_Call(int nativeCallable, object[] args, out object ret);
+        internal extern static void godot_icall_Callable_Call(long nativeCallable, object[] args, out object ret);
         [MethodImpl(MethodImplOptions.InternalCall)]
-        internal extern static void godot_icall_Callable_Free(int nativeCallable);
+        internal extern static void godot_icall_Callable_Free(long nativeCallable);
 
         public void Call(params object[] args)
         {
@@ -87,7 +91,9 @@ namespace Godot
 
     public class Signal
     {
-        internal int nativeSignal = 0;
+        // nativeSignal holds an int64 pointer to a native Callable (signal connection).
+        // Must be `long` (8 bytes) to match C++ pointer width on 64-bit platforms.
+        internal long nativeSignal = 0;
         public GodotObject Owner { get; }
         public StringName Name { get; }
 
@@ -96,6 +102,66 @@ namespace Godot
             Owner = owner;
             Name = name;
         }
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal extern static bool godot_icall_Signal_Connect(long ownerPtr, string signal, long callablePtr, bool oneshot);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal extern static bool godot_icall_Signal_Disconnect(long ownerPtr, string signal, long callablePtr);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal extern static bool godot_icall_Signal_IsConnected(long ownerPtr, string signal, long callablePtr);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal extern static void godot_icall_Signal_Emit(long ownerPtr, string signal, object[] args);
+
+        public bool Connect(Callable callable, uint flags = 0)
+        {
+            if (Owner == null || Name == null || callable == null) return false;
+            bool oneshot = (flags & (uint)GodotObject.ConnectFlags.OneShot) != 0;
+            long callablePtr = callable.nativeCallable;
+            if (callablePtr == 0 && callable.TargetDelegate != null)
+            {
+                // Fallback: wrap delegate-based Callable into native Callable.
+                callablePtr = godot_icall_Callable_CreateFromDelegatePtr(callable.TargetDelegate);
+            }
+            if (callablePtr == 0) return false;
+            return godot_icall_Signal_Connect(Owner.nativeInstance, Name.ToString(), callablePtr, oneshot);
+        }
+
+        public void Disconnect(Callable callable)
+        {
+            if (Owner == null || Name == null || callable == null) return;
+            long callablePtr = callable.nativeCallable;
+            if (callablePtr == 0 && callable.TargetDelegate != null)
+            {
+                callablePtr = godot_icall_Callable_CreateFromDelegatePtr(callable.TargetDelegate);
+            }
+            if (callablePtr == 0) return;
+            godot_icall_Signal_Disconnect(Owner.nativeInstance, Name.ToString(), callablePtr);
+        }
+
+        public bool IsConnected(Callable callable)
+        {
+            if (Owner == null || Name == null || callable == null) return false;
+            long callablePtr = callable.nativeCallable;
+            if (callablePtr == 0 && callable.TargetDelegate != null)
+            {
+                callablePtr = godot_icall_Callable_CreateFromDelegatePtr(callable.TargetDelegate);
+            }
+            if (callablePtr == 0) return false;
+            return godot_icall_Signal_IsConnected(Owner.nativeInstance, Name.ToString(), callablePtr);
+        }
+
+        public void Emit(params object[] args)
+        {
+            if (Owner == null || Name == null) return;
+            godot_icall_Signal_Emit(Owner.nativeInstance, Name.ToString(), args ?? new object[0]);
+        }
+
+        // Helper icall: wrap a Delegate into a native Callable and return its pointer.
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal extern static long godot_icall_Callable_CreateFromDelegatePtr(Delegate @delegate);
     }
 
     public static partial class GD

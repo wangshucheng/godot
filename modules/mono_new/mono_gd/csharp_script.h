@@ -6,6 +6,7 @@
 #include "core/io/resource_saver.h"
 #include "core/string/ustring.h"
 #include "core/templates/self_list.h"
+#include "core/templates/hash_set.h"
 
 #include <mono/mono-publib.h>
 
@@ -32,6 +33,10 @@ class CSharpScript : public Script {
 
 	String source;
 	bool source_changed_cache = false;
+
+	// Signal names parsed from [Signal] attribute declarations in the C# source.
+	// Populated by _parse_signal_declarations() during source load.
+	HashSet<StringName> script_signals;
 
 	SelfList<CSharpScript> script_list;
 
@@ -76,6 +81,9 @@ public:
 
 	CSharpScript();
 	~CSharpScript();
+
+private:
+	void _parse_signal_declarations();
 };
 
 class CSharpInstance : public ScriptInstance {

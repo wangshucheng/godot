@@ -57,6 +57,24 @@ namespace Godot
             ShrinkEnd = 8,
         }
 
+        // MouseFilter values (matches Godot 4.x Control.MouseFilter enum).
+        public enum MouseFilterEnum
+        {
+            Stop = 0,
+            Pass = 1,
+            Ignore = 2,
+        }
+
+        // LayoutDirection values (matches Godot 4.x Control.LayoutDirection enum).
+        public enum LayoutDirectionEnum
+        {
+            Inherited = 0,
+            ApplicationLocale = 1,
+            Ltr = 2,
+            Rtl = 3,
+            SystemLocale = 4,
+        }
+
         public Control()
         {
             if (nativeInstance == 0)
@@ -89,6 +107,101 @@ namespace Godot
         public int SizeFlagsHorizontal
         {
             set { godot_icall_Object_SetInt(nativeInstance, "size_flags_horizontal", value); }
+        }
+
+        // --- Anchor properties (float 0..1, normalized to parent rect) ---
+        public float AnchorLeft
+        {
+            set { godot_icall_Object_SetFloat(nativeInstance, "anchor_left", new FloatIntUnion { FloatValue = value }.IntValue); }
+        }
+        public float AnchorTop
+        {
+            set { godot_icall_Object_SetFloat(nativeInstance, "anchor_top", new FloatIntUnion { FloatValue = value }.IntValue); }
+        }
+        public float AnchorRight
+        {
+            set { godot_icall_Object_SetFloat(nativeInstance, "anchor_right", new FloatIntUnion { FloatValue = value }.IntValue); }
+        }
+        public float AnchorBottom
+        {
+            set { godot_icall_Object_SetFloat(nativeInstance, "anchor_bottom", new FloatIntUnion { FloatValue = value }.IntValue); }
+        }
+
+        // --- Offset properties (pixels relative to anchor position) ---
+        public float OffsetLeft
+        {
+            set { godot_icall_Object_SetFloat(nativeInstance, "offset_left", new FloatIntUnion { FloatValue = value }.IntValue); }
+        }
+        public float OffsetTop
+        {
+            set { godot_icall_Object_SetFloat(nativeInstance, "offset_top", new FloatIntUnion { FloatValue = value }.IntValue); }
+        }
+        public float OffsetRight
+        {
+            set { godot_icall_Object_SetFloat(nativeInstance, "offset_right", new FloatIntUnion { FloatValue = value }.IntValue); }
+        }
+        public float OffsetBottom
+        {
+            set { godot_icall_Object_SetFloat(nativeInstance, "offset_bottom", new FloatIntUnion { FloatValue = value }.IntValue); }
+        }
+
+        // GrowDirection values (matches Godot 4.x Control.GrowDirection enum).
+        public enum GrowDirectionEnum
+        {
+            Begin = 0,
+            End = 1,
+            Both = 2,
+        }
+
+        public int GrowHorizontal
+        {
+            set { godot_icall_Object_SetInt(nativeInstance, "grow_horizontal", value); }
+        }
+        public int GrowVertical
+        {
+            set { godot_icall_Object_SetInt(nativeInstance, "grow_vertical", value); }
+        }
+
+        // Tint color applied to the control and its children.
+        public Color Modulate
+        {
+            set
+            {
+                godot_icall_Object_SetColor(nativeInstance, "modulate",
+                    new FloatIntUnion { FloatValue = value.r }.IntValue,
+                    new FloatIntUnion { FloatValue = value.g }.IntValue,
+                    new FloatIntUnion { FloatValue = value.b }.IntValue,
+                    new FloatIntUnion { FloatValue = value.a }.IntValue);
+            }
+        }
+
+        // Self-modulate tints only this control (not children).
+        public Color SelfModulate
+        {
+            set
+            {
+                godot_icall_Object_SetColor(nativeInstance, "self_modulate",
+                    new FloatIntUnion { FloatValue = value.r }.IntValue,
+                    new FloatIntUnion { FloatValue = value.g }.IntValue,
+                    new FloatIntUnion { FloatValue = value.b }.IntValue,
+                    new FloatIntUnion { FloatValue = value.a }.IntValue);
+            }
+        }
+
+        public bool Visible
+        {
+            set { godot_icall_Object_SetBool(nativeInstance, "visible", value); }
+            get { return godot_icall_Object_CallNoArgsBool(nativeInstance, "is_visible"); }
+        }
+
+        public MouseFilterEnum MouseFilter
+        {
+            set { godot_icall_Object_SetInt(nativeInstance, "mouse_filter", (int)value); }
+        }
+
+        public LayoutDirectionEnum LayoutDirection
+        {
+            set { godot_icall_Object_SetInt(nativeInstance, "layout_direction", (int)value); }
         }
 
         public void AddThemeFontSizeOverride(string name, int size)
@@ -130,6 +243,24 @@ namespace Godot
 
     public class Label : Control
     {
+        // AutowrapMode values (matches Godot 4.x Label.AutowrapMode enum).
+        public enum AutowrapModeEnum
+        {
+            Off = 0,
+            Arbitrary = 1,
+            Word = 2,
+            WordSmart = 3,
+        }
+
+        // OverrunBehavior values (matches Godot 4.x Label.OverrunBehavior enum).
+        public enum OverrunBehaviorEnum
+        {
+            TrimNone = 0,
+            TrimChar = 1,
+            TrimWord = 2,
+            Ellipsis = 3,
+        }
+
         public Label()
         {
         if (nativeInstance == 0)
@@ -158,6 +289,56 @@ namespace Godot
 		{
 			set { godot_icall_Object_SetInt(nativeInstance, "vertical_alignment", value); }
 		}
+
+        // Automatic line wrapping policy.
+        public AutowrapModeEnum AutowrapMode
+        {
+            set { godot_icall_Object_SetInt(nativeInstance, "autowrap_mode", (int)value); }
+        }
+
+        // Truncates the text if it exceeds the control's bounding rect.
+        public bool ClipText
+        {
+            set { godot_icall_Object_SetBool(nativeInstance, "clip_text", value); }
+            get { return godot_icall_Object_CallNoArgsBool(nativeInstance, "is_clipping_text"); }
+        }
+
+        // Behavior when text overruns the bounding rect (trimming/ellipsis).
+        public OverrunBehaviorEnum TextOverrunBehavior
+        {
+            set { godot_icall_Object_SetInt(nativeInstance, "text_overrun_behavior", (int)value); }
+        }
+
+        // Number of lines to skip before rendering the visible text.
+        public int LinesSkipped
+        {
+            set { godot_icall_Object_SetInt(nativeInstance, "lines_skipped", value); }
+        }
+
+        // Maximum number of lines to render. -1 disables the limit.
+        public int MaxLinesVisible
+        {
+            set { godot_icall_Object_SetInt(nativeInstance, "max_lines_visible", value); }
+        }
+
+        // Restricts the number of characters rendered. -1 disables the limit.
+        public int VisibleCharacters
+        {
+            set { godot_icall_Object_SetInt(nativeInstance, "visible_characters", value); }
+        }
+
+        // Fraction of characters to render, in range [0.0, 1.0].
+        public float VisibleRatio
+        {
+            set { godot_icall_Object_SetFloat(nativeInstance, "visible_ratio", new FloatIntUnion { FloatValue = value }.IntValue); }
+        }
+
+        // Convert all text to upper-case for display.
+        public bool UpperCase
+        {
+            set { godot_icall_Object_SetBool(nativeInstance, "uppercase", value); }
+            get { return godot_icall_Object_CallNoArgsBool(nativeInstance, "is_uppercase"); }
+        }
     }
 
     public class VBoxContainer : Control
@@ -214,7 +395,7 @@ namespace Godot
 
         public VScrollBar GetVScrollBar()
         {
-            int ptr = godot_icall_Object_CallNoArgsObject(nativeInstance, "get_v_scroll_bar");
+            long ptr = godot_icall_Object_CallNoArgsObject(nativeInstance, "get_v_scroll_bar");
             VScrollBar bar = new VScrollBar();
             bar.nativeInstance = ptr;
             return bar;

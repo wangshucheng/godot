@@ -2,6 +2,7 @@
 
 #include "gd_mono_class.h"
 #include "interop/gd_mono_interop_variant.h"
+#include "../mono_runtime/csharp_debugger.h"
 #include "../mono_runtime/gd_mono.h"
 #include "../utils/mono_logger.h"
 #include "core/io/file_access.h"
@@ -264,10 +265,72 @@ ScriptLanguage *CSharpScript::get_language() const {
 }
 
 bool CSharpScript::has_script_signal(const StringName &p_signal) const {
-	return false;
+	return script_signals.has(p_signal);
 }
 
 void CSharpScript::get_script_signal_list(List<MethodInfo> *r_signals) const {
+	for (const StringName &sig : script_signals) {
+		MethodInfo mi;
+		mi.name = sig;
+		r_signals->push_back(mi);
+	}
+}
+
+// Parse C# source for [Signal] attribute declarations.
+// Recognizes the Godot C# pattern:
+//   [Signal]
+//   public delegate void MySignalEventHandler(int value);
+// The signal name is derived by stripping an optional "EventHandler" suffix
+// and converting PascalCase to snake_case (e.g. MySignalEventHandler → my_signal).
+void CSharpScript::_parse_signal_declarations() {
+	script_signals.clear();
+	if (source.is_empty()) return;
+
+	// Simple line-by-line scanner: find [Signal] attributes and extract the
+	// delegate name from the following line.
+	Vector<String> lines = source.split("\n");
+	for (int i = 0; i < lines.size(); i++) {
+		String line = lines[i].strip_edges();
+		if (line == "[Signal]" || line.begins_with("[Signal]")) {
+			// Search forward (up to 3 lines) for the delegate declaration.
+			for (int j = i + 1; j < MIN(i + 4, lines.size()); j++) {
+				String dl = lines[j].strip_edges();
+				int delegate_idx = dl.find("delegate");
+				if (delegate_idx < 0) continue;
+				// Extract the name token after "delegate void " or "delegate bool " etc.
+				// Pattern: [modifiers] delegate ReturnType Name(
+				int paren = dl.find("(", delegate_idx);
+				if (paren < 0) continue;
+				String header = dl.substr(delegate_idx, paren - delegate_idx);
+				// Split by whitespace and take the last token (the delegate name).
+				Vector<String> tokens = header.split(" ", false);
+				if (tokens.size() >= 2) {
+					String delegate_name = tokens[tokens.size() - 1];
+					// Strip "EventHandler" suffix if present.
+					if (delegate_name.ends_with("EventHandler")) {
+						delegate_name = delegate_name.substr(0, delegate_name.length() - 12);
+					}
+					// Convert PascalCase to snake_case.
+					String snake;
+					for (int k = 0; k < delegate_name.length(); k++) {
+						char32_t c = delegate_name[k];
+						if (k > 0 && c >= 'A' && c <= 'Z') {
+							snake += '_';
+						}
+						if (c >= 'A' && c <= 'Z') {
+							snake += String::chr(c + 32);
+						} else {
+							snake += String::chr(c);
+						}
+					}
+					if (!snake.is_empty()) {
+						script_signals.insert(StringName(snake));
+					}
+				}
+				break;
+			}
+		}
+	}
 }
 
 bool CSharpScript::get_property_default_value(const StringName &p_property, Variant &r_value) const {
@@ -306,6 +369,10 @@ Error CSharpScript::load_source_code(const String &p_path) {
 
 	script_path = p_path;
 	source_changed_cache = false;
+
+	// Parse [Signal] declarations from source so has_script_signal works
+	// even before the assembly is loaded (editor / inspector support).
+	_parse_signal_declarations();
 
 	return reload();
 }
@@ -589,7 +656,7 @@ bool CSharpInstance::initialize(Object *p_owner) {
 	if (base_class) {
 		MonoClassField *native_field = mono_class_get_field_from_name(base_class, "nativeInstance");
 		if (native_field) {
-			void *value = p_owner;
+			int64_t value = (int64_t)(intptr_t)p_owner;
 			mono_field_set_value(mono_object, native_field, &value);
 		}
 	}
@@ -848,35 +915,56 @@ void CSharpLanguage::add_global_constant(const StringName &p_variable, const Var
 }
 
 String CSharpLanguage::debug_get_error() const {
+	// Return the last unhandled C# exception message (captured by the
+	// CSharpDebugger::on_unhandled_exception hook). When an IDE is attached
+	// via SDB, breakpoints/stepping are handled directly by VS Code; this
+	// hook only surfaces runtime exceptions to the Godot debugger panel.
+	const CSharpDebugger::ExceptionInfo &ex = CSharpDebugger::get_last_exception();
+	if (ex.valid) {
+		return ex.message;
+	}
 	return "";
 }
 
 int CSharpLanguage::debug_get_stack_level_count() const {
-	return 0;
+	const CSharpDebugger::ExceptionInfo &ex = CSharpDebugger::get_last_exception();
+	return ex.valid ? ex.frames.size() : 0;
 }
 
 int CSharpLanguage::debug_get_stack_level_line(int p_level) const {
-	return -1;
+	const CSharpDebugger::ExceptionInfo &ex = CSharpDebugger::get_last_exception();
+	if (!ex.valid || p_level < 0 || p_level >= ex.frames.size()) return -1;
+	return ex.frames[p_level].line;
 }
 
 String CSharpLanguage::debug_get_stack_level_function(int p_level) const {
-	return "";
+	const CSharpDebugger::ExceptionInfo &ex = CSharpDebugger::get_last_exception();
+	if (!ex.valid || p_level < 0 || p_level >= ex.frames.size()) return "";
+	return ex.frames[p_level].function;
 }
 
 String CSharpLanguage::debug_get_stack_level_source(int p_level) const {
-	return "";
+	const CSharpDebugger::ExceptionInfo &ex = CSharpDebugger::get_last_exception();
+	if (!ex.valid || p_level < 0 || p_level >= ex.frames.size()) return "";
+	return ex.frames[p_level].source;
 }
 
 void CSharpLanguage::debug_get_stack_level_locals(int p_level, List<String> *p_locals, List<Variant> *p_values, int p_max_subitems, int p_max_depth) {
+	// Local variable values are only available through the SDB protocol
+	// (queried by the attached IDE, e.g. VS Code). Godot cannot read them
+	// without implementing its own SDB client, which is out of scope.
 }
 
 void CSharpLanguage::debug_get_stack_level_members(int p_level, List<String> *p_members, List<Variant> *p_values, int p_max_subitems, int p_max_depth) {
+	// See comment in debug_get_stack_level_locals().
 }
 
 void CSharpLanguage::debug_get_globals(List<String> *p_globals, List<Variant> *p_values, int p_max_subitems, int p_max_depth) {
 }
 
 String CSharpLanguage::debug_parse_stack_level_expression(int p_level, const String &p_expression, int p_max_subitems, int p_max_depth) {
+	// Expression evaluation requires an active SDB session context, which
+	// Godot does not host. Return empty so the editor falls back gracefully.
 	return "";
 }
 

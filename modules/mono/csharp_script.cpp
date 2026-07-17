@@ -1281,7 +1281,16 @@ void CSharpLanguage::frame() {
 }
 
 void CSharpLanguage::reload_all_scripts() {
-	scripts_assembly = nullptr;
+	// L7: close the old assembly before clearing the pointer so Mono releases
+	// its path-keyed image cache. Without this, mono_domain_assembly_open()
+	// below returns the cached old image (containing old IL) even after the
+	// .dll on disk has been recompiled — hot reload silently loads stale code.
+	if (scripts_assembly) {
+		printf("[Mono] Closing old scripts assembly for hot reload...\n");
+		fflush(stdout);
+		mono_assembly_close(scripts_assembly);
+		scripts_assembly = nullptr;
+	}
 	load_scripts_assembly();
 }
 

@@ -58,6 +58,10 @@ static MonoClass *mono_class_basis = nullptr;
 static MonoClass *mono_class_transform2d = nullptr;
 static MonoClass *mono_class_transform3d = nullptr;
 
+// M10: Godot.Collections.Array / Dictionary class caches
+static MonoClass *mono_class_godot_array = nullptr;
+static MonoClass *mono_class_godot_dictionary = nullptr;
+
 void cache_mono_corlib_classes() {
 	MonoImage *corlib = mono_get_corlib();
 	mono_class_boolean = mono_class_from_name(corlib, "System", "Boolean");
@@ -89,6 +93,11 @@ void cache_godot_math_classes(MonoImage *p_godot_image) {
 	mono_class_basis = mono_class_from_name(p_godot_image, "Godot", "Basis");
 	mono_class_transform2d = mono_class_from_name(p_godot_image, "Godot", "Transform2D");
 	mono_class_transform3d = mono_class_from_name(p_godot_image, "Godot", "Transform3D");
+	// M10: Godot.Collections.Array/Dictionary (the C# wrappers own a
+	// heap-allocated Array*/Dictionary* via NativePtr). These are looked up
+	// by namespace "Godot.Collections" + class name.
+	mono_class_godot_array = mono_class_from_name(p_godot_image, "Godot.Collections", "Array");
+	mono_class_godot_dictionary = mono_class_from_name(p_godot_image, "Godot.Collections", "Dictionary");
 	printf("[Mono] Cached Godot math classes (extended).\n");
 	fflush(stdout);
 }
@@ -109,6 +118,10 @@ MonoClass *get_vector2i_class() { return mono_class_vector2i; }
 MonoClass *get_vector3i_class() { return mono_class_vector3i; }
 MonoClass *get_vector4i_class() { return mono_class_vector4i; }
 MonoClass *get_rect2i_class() { return mono_class_rect2i; }
+
+// M10: Godot.Collections.Array/Dictionary class accessors
+MonoClass *get_godot_array_class() { return mono_class_godot_array; }
+MonoClass *get_godot_dictionary_class() { return mono_class_godot_dictionary; }
 
 static MonoClassField *find_nativeptr_field(MonoClass *p_klass) {
 	for (MonoClass *k = p_klass; k; k = mono_class_get_parent(k)) {
@@ -240,14 +253,17 @@ MonoObject *variant_to_mono_object(MonoDomain *p_domain, const Variant &p_varian
 			return mono_bridge::managed_get_or_create(obj, target_class);
 		}
 		case Variant::ARRAY: {
+			// M10: wrap the Array in a Godot.Collections.Array C# wrapper that
+			// owns a heap-allocated copy of the source Array. The previous
+			// behavior stringified the Array, which broke any engine API
+			// returning Array (InvalidCastException on the C# cast).
 			Array arr = p_variant;
-			String str = Variant(arr).operator String();
-			return reinterpret_cast<MonoObject *>(variant_to_mono_string(p_domain, str));
+			return variant_to_mono_array(p_domain, arr);
 		}
 		case Variant::DICTIONARY: {
+			// M10: same as ARRAY above — wrap in Godot.Collections.Dictionary.
 			Dictionary dict = p_variant;
-			String str = Variant(dict).operator String();
-			return reinterpret_cast<MonoObject *>(variant_to_mono_string(p_domain, str));
+			return variant_to_mono_dictionary(p_domain, dict);
 		}
 		default: {
 			String str = p_variant.operator String();
@@ -299,6 +315,35 @@ Variant mono_object_to_variant(MonoObject *p_obj) {
 
 	Object *godot_obj = extract_godot_object(p_obj);
 	if (godot_obj) return Variant(godot_obj);
+
+	// M10: Godot.Collections.Array/Dictionary wrappers. They are NOT Godot.Object
+	// subclasses (extract_godot_object returned nullptr), so we identify them
+	// by class cache and read their NativePtr (which points to a
+	// heap-allocated Array*/Dictionary* owned by the wrapper).
+	if (mono_class_godot_array && klass == mono_class_godot_array) {
+		MonoClassField *field = find_nativeptr_field(klass);
+		if (field) {
+			intptr_t ptr_val = 0;
+			mono_field_get_value(p_obj, field, &ptr_val);
+			if (ptr_val != 0) {
+				Array *arr = reinterpret_cast<Array *>(ptr_val);
+				return Variant(*arr);
+			}
+		}
+		return Variant(Array());
+	}
+	if (mono_class_godot_dictionary && klass == mono_class_godot_dictionary) {
+		MonoClassField *field = find_nativeptr_field(klass);
+		if (field) {
+			intptr_t ptr_val = 0;
+			mono_field_get_value(p_obj, field, &ptr_val);
+			if (ptr_val != 0) {
+				Dictionary *dict = reinterpret_cast<Dictionary *>(ptr_val);
+				return Variant(*dict);
+			}
+		}
+		return Variant(Dictionary());
+	}
 
 	if (mono_class_vector2 && klass == mono_class_vector2) {
 		real_t x = 0, y = 0;
@@ -916,6 +961,50 @@ bool mono_object_to_aabb(MonoObject *p_obj, real_t *r_px, real_t *r_py, real_t *
 	if (r_sy) *r_sy = size_buf[1];
 	if (r_sz) *r_sz = size_buf[2];
 	return true;
+}
+
+// ============================================================
+// M10: Godot.Collections.Array / Dictionary conversions
+//
+// The C# wrappers (Godot.Collections.Array / Dictionary) own a
+// heap-allocated Array*/Dictionary* (memnew/memdelete) stored in their
+// NativePtr field. variant_to_mono_* creates a fresh heap allocation and
+// copies the source into it (value semantics — mutations on the C# side do
+// not leak back to the original Variant). mono_object_to_variant reads the
+// NativePtr and copies the pointed-to container into the returned Variant
+// (again value semantics).
+// ============================================================
+
+MonoObject *variant_to_mono_array(MonoDomain *p_domain, const Array &p_array) {
+	if (!mono_class_godot_array) return nullptr;
+	MonoObject *obj = mono_object_new(p_domain, mono_class_godot_array);
+	if (!obj) return nullptr;
+	// Allocate a heap Array and copy-construct from the source. Array is
+	// internally refcounted, so this shares the underlying VVector — cheap.
+	Array *heap_arr = memnew(Array(p_array));
+	MonoClassField *field = find_nativeptr_field(mono_class_godot_array);
+	if (!field) {
+		memdelete(heap_arr);
+		return nullptr;
+	}
+	intptr_t ptr_val = reinterpret_cast<intptr_t>(heap_arr);
+	mono_field_set_value(obj, field, &ptr_val);
+	return obj;
+}
+
+MonoObject *variant_to_mono_dictionary(MonoDomain *p_domain, const Dictionary &p_dictionary) {
+	if (!mono_class_godot_dictionary) return nullptr;
+	MonoObject *obj = mono_object_new(p_domain, mono_class_godot_dictionary);
+	if (!obj) return nullptr;
+	Dictionary *heap_dict = memnew(Dictionary(p_dictionary));
+	MonoClassField *field = find_nativeptr_field(mono_class_godot_dictionary);
+	if (!field) {
+		memdelete(heap_dict);
+		return nullptr;
+	}
+	intptr_t ptr_val = reinterpret_cast<intptr_t>(heap_dict);
+	mono_field_set_value(obj, field, &ptr_val);
+	return obj;
 }
 
 }

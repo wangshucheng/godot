@@ -495,17 +495,76 @@ bool BindingsGenerator::generate(const String &p_output_path) {
 	output += "    public struct Signal { public Godot.Object Source; public string Name; }\n\n";
 
 	// Collection namespaces
+	// M10: real wrappers backed by heap-allocated Godot Array*/Dictionary*
+	// (memnew/memdelete via icalls). The previous stubs inherited Godot.Object
+	// and routed through Object.Call("size") etc. — that never worked because
+	// Godot Array/Dictionary are value types, not Godot Objects. The wrappers
+	// own the native pointer; Dispose() and the finalizer free it.
 	output += "    namespace Collections {\n";
-	output += "        public class Array : Godot.Object {\n";
-	output += "            public Array() : base() {}\n";
-	output += "            internal Array(System.IntPtr ptr) : base(ptr) {}\n";
-	output += "            public int Count => (int)Call(\"size\");\n";
-	output += "            public Godot.Object this[int index] => (Godot.Object)Call(\"get\", index);\n";
+	output += "        public class Array : IDisposable {\n";
+	output += "            internal IntPtr NativePtr;\n";
+	output += "            private bool _disposed;\n";
+	output += "            public Array() {\n";
+	output += "                NativePtr = Bridge.godot_icall_Array_Ctor();\n";
+	output += "            }\n";
+	output += "            internal Array(IntPtr ptr) {\n";
+	output += "                NativePtr = ptr;\n";
+	output += "            }\n";
+	output += "            public int Count => Bridge.godot_icall_Array_Size(NativePtr);\n";
+	output += "            public object this[int index] {\n";
+	output += "                get => Bridge.godot_icall_Array_Get(NativePtr, index);\n";
+	output += "                set => Bridge.godot_icall_Array_Set(NativePtr, index, value);\n";
+	output += "            }\n";
+	output += "            public void Add(object value) => Bridge.godot_icall_Array_PushBack(NativePtr, value);\n";
+	output += "            public void Clear() => Bridge.godot_icall_Array_Clear(NativePtr);\n";
+	output += "            public void Dispose() {\n";
+	output += "                Dispose(true);\n";
+	output += "                GC.SuppressFinalize(this);\n";
+	output += "            }\n";
+	output += "            protected virtual void Dispose(bool disposing) {\n";
+	output += "                if (_disposed) return;\n";
+	output += "                if (NativePtr != IntPtr.Zero) {\n";
+	output += "                    Bridge.godot_icall_Array_Dispose(NativePtr);\n";
+	output += "                    NativePtr = IntPtr.Zero;\n";
+	output += "                }\n";
+	output += "                _disposed = true;\n";
+	output += "            }\n";
+	output += "            ~Array() {\n";
+	output += "                Dispose(false);\n";
+	output += "            }\n";
 	output += "        }\n";
-	output += "        public class Dictionary : Godot.Object {\n";
-	output += "            public Dictionary() : base() {}\n";
-	output += "            internal Dictionary(System.IntPtr ptr) : base(ptr) {}\n";
-	output += "            public int Count => (int)Call(\"size\");\n";
+	output += "        public class Dictionary : IDisposable {\n";
+	output += "            internal IntPtr NativePtr;\n";
+	output += "            private bool _disposed;\n";
+	output += "            public Dictionary() {\n";
+	output += "                NativePtr = Bridge.godot_icall_Dict_Ctor();\n";
+	output += "            }\n";
+	output += "            internal Dictionary(IntPtr ptr) {\n";
+	output += "                NativePtr = ptr;\n";
+	output += "            }\n";
+	output += "            public int Count => Bridge.godot_icall_Dict_Size(NativePtr);\n";
+	output += "            public object this[object key] {\n";
+	output += "                get => Bridge.godot_icall_Dict_Get(NativePtr, key);\n";
+	output += "                set => Bridge.godot_icall_Dict_Set(NativePtr, key, value);\n";
+	output += "            }\n";
+	output += "            public bool Has(object key) => Bridge.godot_icall_Dict_Has(NativePtr, key);\n";
+	output += "            public bool Remove(object key) => Bridge.godot_icall_Dict_Remove(NativePtr, key);\n";
+	output += "            public void Clear() => Bridge.godot_icall_Dict_Clear(NativePtr);\n";
+	output += "            public void Dispose() {\n";
+	output += "                Dispose(true);\n";
+	output += "                GC.SuppressFinalize(this);\n";
+	output += "            }\n";
+	output += "            protected virtual void Dispose(bool disposing) {\n";
+	output += "                if (_disposed) return;\n";
+	output += "                if (NativePtr != IntPtr.Zero) {\n";
+	output += "                    Bridge.godot_icall_Dict_Dispose(NativePtr);\n";
+	output += "                    NativePtr = IntPtr.Zero;\n";
+	output += "                }\n";
+	output += "                _disposed = true;\n";
+	output += "            }\n";
+	output += "            ~Dictionary() {\n";
+	output += "                Dispose(false);\n";
+	output += "            }\n";
 	output += "        }\n";
 	output += "    }\n\n";
 

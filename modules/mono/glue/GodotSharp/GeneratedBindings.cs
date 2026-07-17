@@ -16,16 +16,92 @@ namespace Godot {
     public struct Signal { public Godot.Object Source; public string Name; }
 
     namespace Collections {
-        public class Array : Godot.Object {
-            public Array() : base() {}
-            internal Array(System.IntPtr ptr) : base(ptr) {}
-            public int Count => (int)Call("size");
-            public Godot.Object this[int index] => (Godot.Object)Call("get", index);
+        // M10: real wrappers backed by a heap-allocated Godot Array*/Dictionary*
+        // (memnew/memdelete via icalls). The previous stubs inherited
+        // Godot.Object and routed through Object.Call("size") etc. — that
+        // never worked because Godot Array/Dictionary are value types, not
+        // Godot Objects, so any call to a returned Array's Count would crash
+        // or return garbage. The wrappers own the native pointer; Dispose()
+        // and the finalizer free it.
+        public class Array : IDisposable {
+            internal IntPtr NativePtr;
+            private bool _disposed;
+
+            public Array() {
+                NativePtr = Bridge.godot_icall_Array_Ctor();
+            }
+            internal Array(IntPtr ptr) {
+                NativePtr = ptr;
+            }
+
+            public int Count => Bridge.godot_icall_Array_Size(NativePtr);
+
+            public object this[int index] {
+                get => Bridge.godot_icall_Array_Get(NativePtr, index);
+                set => Bridge.godot_icall_Array_Set(NativePtr, index, value);
+            }
+
+            public void Add(object value) => Bridge.godot_icall_Array_PushBack(NativePtr, value);
+            public void Clear() => Bridge.godot_icall_Array_Clear(NativePtr);
+
+            public void Dispose() {
+                Dispose(true);
+                GC.SuppressFinalize(this);
+            }
+
+            protected virtual void Dispose(bool disposing) {
+                if (_disposed) return;
+                if (NativePtr != IntPtr.Zero) {
+                    Bridge.godot_icall_Array_Dispose(NativePtr);
+                    NativePtr = IntPtr.Zero;
+                }
+                _disposed = true;
+            }
+
+            ~Array() {
+                Dispose(false);
+            }
         }
-        public class Dictionary : Godot.Object {
-            public Dictionary() : base() {}
-            internal Dictionary(System.IntPtr ptr) : base(ptr) {}
-            public int Count => (int)Call("size");
+
+        public class Dictionary : IDisposable {
+            internal IntPtr NativePtr;
+            private bool _disposed;
+
+            public Dictionary() {
+                NativePtr = Bridge.godot_icall_Dict_Ctor();
+            }
+            internal Dictionary(IntPtr ptr) {
+                NativePtr = ptr;
+            }
+
+            public int Count => Bridge.godot_icall_Dict_Size(NativePtr);
+
+            public object this[object key] {
+                get => Bridge.godot_icall_Dict_Get(NativePtr, key);
+                set => Bridge.godot_icall_Dict_Set(NativePtr, key, value);
+            }
+
+            public bool Has(object key) => Bridge.godot_icall_Dict_Has(NativePtr, key);
+            public bool Remove(object key) => Bridge.godot_icall_Dict_Remove(NativePtr, key);
+            public void Clear() => Bridge.godot_icall_Dict_Clear(NativePtr);
+
+            public void Dispose() {
+                Dispose(true);
+                GC.SuppressFinalize(this);
+            }
+
+            protected virtual void Dispose(bool disposing) {
+                if (_disposed) return;
+                if (NativePtr != IntPtr.Zero) {
+                    Bridge.godot_icall_Dict_Dispose(NativePtr);
+                    NativePtr = IntPtr.Zero;
+                }
+                _disposed = true;
+            }
+
+            ~Dictionary() {
+                Dispose(false);
+            }
         }
     }
 

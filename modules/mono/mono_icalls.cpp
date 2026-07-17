@@ -2049,6 +2049,113 @@ static MonoString *godot_icall_Object_GetClassName(MonoObject *obj) {
 	return mono_string_new(mono_domain_get(), mono_class_get_name(cls));
 }
 
+// ============================================================
+// M10: Godot.Collections.Array / Dictionary icalls
+//
+// The C# wrappers own a heap-allocated Array*/Dictionary* (memnew/memdelete)
+// stored in their NativePtr field. These icalls are the bridge between the
+// C# wrapper methods (Count, indexer, Add, Has, ...) and the underlying
+// Godot container.
+// ============================================================
+
+static intptr_t godot_icall_Array_Ctor() {
+	Array *arr = memnew(Array);
+	return reinterpret_cast<intptr_t>(arr);
+}
+
+static int32_t godot_icall_Array_Size(intptr_t ptr) {
+	if (!ptr) return 0;
+	Array *arr = reinterpret_cast<Array *>(ptr);
+	return arr->size();
+}
+
+static MonoObject *godot_icall_Array_Get(intptr_t ptr, int32_t p_index) {
+	if (!ptr) return nullptr;
+	Array *arr = reinterpret_cast<Array *>(ptr);
+	if (p_index < 0 || p_index >= arr->size()) return nullptr;
+	const Variant &v = arr->operator[](p_index);
+	return mono_variant::variant_to_mono_object(mono_domain_get(), v);
+}
+
+static void godot_icall_Array_Set(intptr_t ptr, int32_t p_index, MonoObject *p_value) {
+	if (!ptr) return;
+	Array *arr = reinterpret_cast<Array *>(ptr);
+	if (p_index < 0 || p_index >= arr->size()) return;
+	arr->operator[](p_index) = mono_variant::mono_object_to_variant(p_value);
+}
+
+static void godot_icall_Array_PushBack(intptr_t ptr, MonoObject *p_value) {
+	if (!ptr) return;
+	Array *arr = reinterpret_cast<Array *>(ptr);
+	arr->push_back(mono_variant::mono_object_to_variant(p_value));
+}
+
+static void godot_icall_Array_Clear(intptr_t ptr) {
+	if (!ptr) return;
+	Array *arr = reinterpret_cast<Array *>(ptr);
+	arr->clear();
+}
+
+static void godot_icall_Array_Dispose(intptr_t ptr) {
+	if (!ptr) return;
+	Array *arr = reinterpret_cast<Array *>(ptr);
+	memdelete(arr);
+}
+
+static intptr_t godot_icall_Dict_Ctor() {
+	Dictionary *dict = memnew(Dictionary);
+	return reinterpret_cast<intptr_t>(dict);
+}
+
+static int32_t godot_icall_Dict_Size(intptr_t ptr) {
+	if (!ptr) return 0;
+	Dictionary *dict = reinterpret_cast<Dictionary *>(ptr);
+	return dict->size();
+}
+
+static MonoObject *godot_icall_Dict_Get(intptr_t ptr, MonoObject *p_key) {
+	if (!ptr) return nullptr;
+	Dictionary *dict = reinterpret_cast<Dictionary *>(ptr);
+	Variant key = mono_variant::mono_object_to_variant(p_key);
+	// Use get_valid which returns an empty Variant (not a default-constructed
+	// one) when the key is missing; the C# side can distinguish via Has().
+	return mono_variant::variant_to_mono_object(mono_domain_get(), dict->get_valid(key));
+}
+
+static void godot_icall_Dict_Set(intptr_t ptr, MonoObject *p_key, MonoObject *p_value) {
+	if (!ptr) return;
+	Dictionary *dict = reinterpret_cast<Dictionary *>(ptr);
+	Variant key = mono_variant::mono_object_to_variant(p_key);
+	Variant value = mono_variant::mono_object_to_variant(p_value);
+	dict->operator[](key) = value;
+}
+
+static MonoBoolean godot_icall_Dict_Has(intptr_t ptr, MonoObject *p_key) {
+	if (!ptr) return false;
+	Dictionary *dict = reinterpret_cast<Dictionary *>(ptr);
+	Variant key = mono_variant::mono_object_to_variant(p_key);
+	return dict->has(key) ? 1 : 0;
+}
+
+static MonoBoolean godot_icall_Dict_Remove(intptr_t ptr, MonoObject *p_key) {
+	if (!ptr) return false;
+	Dictionary *dict = reinterpret_cast<Dictionary *>(ptr);
+	Variant key = mono_variant::mono_object_to_variant(p_key);
+	return dict->erase(key) ? 1 : 0;
+}
+
+static void godot_icall_Dict_Clear(intptr_t ptr) {
+	if (!ptr) return;
+	Dictionary *dict = reinterpret_cast<Dictionary *>(ptr);
+	dict->clear();
+}
+
+static void godot_icall_Dict_Dispose(intptr_t ptr) {
+	if (!ptr) return;
+	Dictionary *dict = reinterpret_cast<Dictionary *>(ptr);
+	memdelete(dict);
+}
+
 void godot_register_icalls() {
 	// All internalcalls are declared in Godot.Bridge (matching our compiled GodotSharp.dll)
 	mono_add_internal_call("Godot.Bridge::godot_icall_GD_Print", (const void *)godot_icall_GD_Print);
@@ -2192,6 +2299,23 @@ void godot_register_icalls() {
 	mono_add_internal_call("Godot.Bridge::godot_icall_ClassDB_GetSignalList", (const void *)godot_icall_ClassDB_GetSignalList);
 	mono_add_internal_call("Godot.Bridge::godot_icall_ClassDB_HasSignal", (const void *)godot_icall_ClassDB_HasSignal);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Object_GetClassName", (const void *)godot_icall_Object_GetClassName);
+
+	// M10: Godot.Collections.Array / Dictionary icalls
+	mono_add_internal_call("Godot.Bridge::godot_icall_Array_Ctor", (const void *)godot_icall_Array_Ctor);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Array_Size", (const void *)godot_icall_Array_Size);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Array_Get", (const void *)godot_icall_Array_Get);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Array_Set", (const void *)godot_icall_Array_Set);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Array_PushBack", (const void *)godot_icall_Array_PushBack);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Array_Clear", (const void *)godot_icall_Array_Clear);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Array_Dispose", (const void *)godot_icall_Array_Dispose);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Dict_Ctor", (const void *)godot_icall_Dict_Ctor);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Dict_Size", (const void *)godot_icall_Dict_Size);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Dict_Get", (const void *)godot_icall_Dict_Get);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Dict_Set", (const void *)godot_icall_Dict_Set);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Dict_Has", (const void *)godot_icall_Dict_Has);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Dict_Remove", (const void *)godot_icall_Dict_Remove);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Dict_Clear", (const void *)godot_icall_Dict_Clear);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Dict_Dispose", (const void *)godot_icall_Dict_Dispose);
 
 	printf("[Mono] Registered all internal calls (Godot.Bridge::*).\n");
 	fflush(stdout);

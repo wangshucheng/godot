@@ -2,6 +2,8 @@
 
 #include "core/variant/variant.h"
 #include "core/object/object.h"
+#include "core/variant/array.h"
+#include "core/variant/dictionary.h"
 #include <mono/metadata/object.h>
 #include <mono/metadata/class.h>
 
@@ -74,5 +76,16 @@ MonoClass *get_vector2i_class();
 MonoClass *get_vector3i_class();
 MonoClass *get_vector4i_class();
 MonoClass *get_rect2i_class();
+
+// M10: Godot.Collections.Array / Dictionary class caches (set by cache_godot_math_classes)
+MonoClass *get_godot_array_class();
+MonoClass *get_godot_dictionary_class();
+
+// M10: Variant <-> Godot.Collections.Array/Dictionary conversions. The C#
+// wrapper owns a heap-allocated Array*/Dictionary* (memnew/memdelete); these
+// helpers either copy the source into a fresh heap allocation (variant_to_*)
+// or dereference the wrapped pointer (mono_object_to_variant).
+MonoObject *variant_to_mono_array(MonoDomain *p_domain, const Array &p_array);
+MonoObject *variant_to_mono_dictionary(MonoDomain *p_domain, const Dictionary &p_dictionary);
 
 }

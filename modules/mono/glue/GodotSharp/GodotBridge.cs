@@ -383,5 +383,52 @@ namespace Godot {
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern string godot_icall_Object_GetClassName(object obj);
+
+        // M10: Godot.Collections.Array icalls
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern IntPtr godot_icall_Array_Ctor();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Array_Size(IntPtr ptr);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern object godot_icall_Array_Get(IntPtr ptr, int index);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Array_Set(IntPtr ptr, int index, object value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Array_PushBack(IntPtr ptr, object value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Array_Clear(IntPtr ptr);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Array_Dispose(IntPtr ptr);
+
+        // M10: Godot.Collections.Dictionary icalls
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern IntPtr godot_icall_Dict_Ctor();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Dict_Size(IntPtr ptr);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern object godot_icall_Dict_Get(IntPtr ptr, object key);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Dict_Set(IntPtr ptr, object key, object value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern bool godot_icall_Dict_Has(IntPtr ptr, object key);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern bool godot_icall_Dict_Remove(IntPtr ptr, object key);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Dict_Clear(IntPtr ptr);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Dict_Dispose(IntPtr ptr);
     }
 }

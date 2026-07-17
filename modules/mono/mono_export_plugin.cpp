@@ -6,11 +6,47 @@
 #include "core/io/file_access.h"
 #include "core/config/project_settings.h"
 
+// M12: sanitize assembly name the same way csharp_script.cpp's
+// sanitize_project_name does — keep the two in sync to avoid export-time
+// surprises (e.g. user sets application/config/name with spaces/#/.).
+// Allowed: [A-Za-z0-9_]; space/-/#/./(/) → '_'; drop other chars; prefix
+// leading digit with '_'; fall back to "GodotProject" if empty/unsanitizable.
+static String sanitize_assembly_name(const String &p_name) {
+	String name = p_name;
+	if (name.is_empty()) {
+		return "GodotProject";
+	}
+	String result;
+	for (int i = 0; i < name.length(); i++) {
+		char32_t c = name[i];
+		if (c < 128) {
+			if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
+				result += c;
+			} else if (c == ' ' || c == '-' || c == '#' || c == '.' || c == '(' || c == ')') {
+				result += '_';
+			}
+		}
+	}
+	if (result.is_empty()) {
+		return "GodotProject";
+	}
+	if (result[0] >= '0' && result[0] <= '9') {
+		result = "_" + result;
+	}
+	return result;
+}
+
 void MonoExportPlugin::_export_begin(const HashSet<String> &p_features, bool p_debug, const String &p_path, int p_flags) {
-	// Get the project name (assembly name)
-	String project_name = "CSharpTest";
+	// M12: get the assembly name from project settings and sanitize it.
+	// Previously this was hardcoded to "CSharpTest", which broke any project
+	// whose dotnet/project/assembly_name differed from the test project.
+	String raw_name;
 	if (ProjectSettings::get_singleton()) {
-		project_name = ProjectSettings::get_singleton()->get_setting("dotnet/project/assembly_name", "CSharpTest");
+		raw_name = ProjectSettings::get_singleton()->get_setting("dotnet/project/assembly_name", String());
+	}
+	String project_name = sanitize_assembly_name(raw_name);
+	if (project_name != raw_name) {
+		print_line("[Mono Export] Assembly name sanitized: '" + raw_name + "' → '" + project_name + "'");
 	}
 
 	// Get the project resource path

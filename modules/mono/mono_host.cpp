@@ -368,10 +368,15 @@ Error MonoHost::initialize() {
 	mono_variant::cache_mono_corlib_classes();
 
 	if (!register_internal_calls()) {
+		// M2 fix: cleanup partial init state so the process can re-attempt or
+		// exit cleanly without leaking the root domain. Previously shutdown()
+		// early-returned because is_initialized was still false.
+		cleanup_partial_init();
 		return FAILED;
 	}
 
 	if (!load_corlib()) {
+		cleanup_partial_init();
 		return FAILED;
 	}
 
@@ -692,6 +697,37 @@ void MonoHost::pump_sync_context() {
 		printf("[Mono] Exception in SyncContext.PumpInstance(): %s\n", exc_name ? exc_name : "(unknown)");
 		fflush(stdout);
 	}
+}
+
+void MonoHost::cleanup_partial_init() {
+	// M2: clean up state created during a partially-successful initialize()
+	// when a later step (register_internal_calls / load_corlib) fails. The
+	// regular shutdown() cannot be used because is_initialized is still false
+	// (it is only set at the end of initialize()), so shutdown() would
+	// early-return and leak the root domain + bridge state.
+	printf("[Mono] Cleaning up partially-initialized runtime...\n");
+	fflush(stdout);
+
+	mono_bridge::shutdown();
+	mono_gc_bridge::shutdown();
+	mono_aot_shutdown();
+
+	sync_context_pump_method = nullptr;
+	if (sync_context_gchandle != 0) {
+		mono_gchandle_free(sync_context_gchandle);
+		sync_context_gchandle = 0;
+	}
+	sync_context_instance = nullptr;
+	sync_context_lazy_attempted = false;
+
+	if (domain) {
+		mono_jit_cleanup(domain);
+		domain = nullptr;
+	}
+
+	is_initialized = false;
+	printf("[Mono] Partial-init cleanup complete.\n");
+	fflush(stdout);
 }
 
 void MonoHost::shutdown() {

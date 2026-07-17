@@ -77,16 +77,25 @@ def _run_aot_workflow(env, env_mono, mono_sources_list):
     os.makedirs(aot_cache, exist_ok=True)
 
     # 4. Incremental build check
+    # M5 fix: build asm_name -> dll_path map (BCL + user), pass to check_cache_stale.
+    # Previously passed a flat dll_paths list (BCL excluded) and update_cache_hash
+    # inferred DLL path from obj_path (always failed) → cache never hit.
     cache_hash_file = os.path.join(aot_cache, ".cache_hashes.json")
-    dll_paths = [godotsharp_dll]
+    dll_path_map = {}
+    for bcl_dll in ["mscorlib.dll", "System.dll", "System.Core.dll"]:
+        bcl_p = os.path.join(bcl_dir, bcl_dll)
+        if os.path.exists(bcl_p):
+            dll_path_map[bcl_dll.replace(".dll", "")] = bcl_p
+    if os.path.exists(godotsharp_dll):
+        dll_path_map["GodotSharp"] = godotsharp_dll
     if os.path.exists(projectscripts_dll):
-        dll_paths.append(projectscripts_dll)
+        dll_path_map["ProjectScripts"] = projectscripts_dll
 
     need_rebuild = True
     try:
         sys.path.insert(0, os.path.join(project_root, "tools"))
         from aot_compile import check_cache_stale
-        need_rebuild = check_cache_stale(cache_hash_file, dll_paths)
+        need_rebuild = check_cache_stale(cache_hash_file, dll_path_map)
     except Exception as e:
         print("[Mono] AOT: Cache check failed (%s), forcing rebuild" % str(e))
 

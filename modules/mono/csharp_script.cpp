@@ -1267,6 +1267,11 @@ void CSharpLanguage::frame() {
 		MonoHost::get_singleton()->pump_sync_context();
 	}
 
+	// H8: drain the deferred free queue on the main thread. C# finalizers
+	// run on the GC thread and may have enqueued engine objects for release;
+	// this is the safe point to actually free them.
+	mono_gc_bridge::flush_deferred_free();
+
 #ifdef TOOLS_ENABLED
 	if (build_pending && Engine::get_singleton() && Engine::get_singleton()->is_editor_hint()) {
 		build_pending = false;

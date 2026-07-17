@@ -1,6 +1,7 @@
 #include "mono_gc_bridge.h"
 #include "core/object/ref_counted.h"
 #include "core/error/error_macros.h"
+#include "scene/main/node.h" // H8: Node::queue_free in flush_deferred_free
 #include <cstdio>
 #include <cstdint>
 #include <mutex>
@@ -311,6 +312,91 @@ bool is_native_alive(Object *p_native) {
 
 void object_predelete_notification(Object *p_obj) {
 	notify_native_destroyed(p_obj);
+}
+
+// ============================================================
+// H8: Deferred free queue for finalizer-thread safety.
+//
+// Problem: C# finalizers (~GodotObject) run on the Mono GC thread,
+// not the main thread. They call godot_icall_Object_Free which
+// invokes engine APIs (queue_free / memdelete / unreference) that
+// are not safe to call off the main thread. Temporary wrappers
+// (e.g. GetNode<T>() creates a new wrapper each call) get finalized
+// while the underlying native node is still in use → UAF.
+//
+// Fix: when godot_icall_Object_Free is called from a non-main thread
+// (i.e. the GC finalizer thread), it enqueues the object pointer
+// instead of freeing immediately. The main thread drains the queue
+// via flush_deferred_free() which is called from MonoHost::tick()
+// or csharp_script notification on the main thread.
+// ============================================================
+
+struct DeferredFree {
+	Object *obj;
+	bool is_refcounted_binding; // true if obj was a RefCounted binding (release_refcounted_binding)
+};
+
+static std::mutex deferred_free_mutex;
+static Vector<DeferredFree> deferred_free_queue;
+
+void enqueue_deferred_free(Object *p_obj, bool p_is_rc_binding) {
+	if (!p_obj) return;
+	std::lock_guard<std::mutex> lock(deferred_free_mutex);
+	deferred_free_queue.push_back({ p_obj, p_is_rc_binding });
+}
+
+int flush_deferred_free() {
+	// Must be called on the main thread. Drains the deferred free queue
+	// and releases each object using the same logic as godot_icall_Object_Free.
+	// Returns the number of objects freed.
+	Vector<DeferredFree> local_queue;
+	{
+		std::lock_guard<std::mutex> lock(deferred_free_mutex);
+		if (deferred_free_queue.is_empty()) return 0;
+		local_queue = deferred_free_queue;
+		deferred_free_queue.clear();
+	}
+
+	int freed = 0;
+	for (const DeferredFree &df : local_queue) {
+		Object *obj = df.obj;
+		if (!obj) continue;
+
+		// Re-check aliveness: the object may have already been freed by
+		// another path (queue_free processed, native deletion, etc.).
+		if (!is_native_alive(obj)) {
+			continue;
+		}
+
+		if (df.is_refcounted_binding) {
+			RefCounted *rc = Object::cast_to<RefCounted>(obj);
+			if (rc) {
+				release_refcounted_binding(rc);
+				freed++;
+				continue;
+			}
+		}
+
+		if (obj->is_class("Node")) {
+			Node *node = Object::cast_to<Node>(obj);
+			if (node && node->is_inside_tree()) {
+				node->queue_free();
+				freed++;
+				continue;
+			}
+		}
+		RefCounted *rc = Object::cast_to<RefCounted>(obj);
+		if (rc) {
+			notify_native_destroyed(obj);
+			rc->unreference();
+			freed++;
+			continue;
+		}
+		notify_native_destroyed(obj);
+		memdelete(obj);
+		freed++;
+	}
+	return freed;
 }
 
 }

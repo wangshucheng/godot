@@ -29,4 +29,10 @@ Object *get_native(MonoObject *p_managed);
 bool is_native_alive(Object *p_native);
 void object_predelete_notification(Object *p_obj);
 
+// H8: deferred free queue for finalizer-thread safety.
+// enqueue_deferred_free is safe to call from the GC finalizer thread;
+// flush_deferred_free must be called on the main thread.
+void enqueue_deferred_free(Object *p_obj, bool p_is_rc_binding);
+int flush_deferred_free();
+
 }

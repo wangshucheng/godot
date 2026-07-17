@@ -5,6 +5,7 @@
 #include "mono_gc_bridge.h"
 #include "mono_callable.h"
 #include "core/os/os.h"
+#include "core/os/thread.h"
 #include "core/object/class_db.h"
 #include "core/object/object.h"
 #include "core/object/ref_counted.h"
@@ -65,6 +66,24 @@ static bool godot_icall_Object_IsInstanceValid(intptr_t native_ptr) {
 static void godot_icall_Object_Free(intptr_t native_ptr) {
 	if (native_ptr == 0) return;
 	Object *obj = (Object *)native_ptr;
+
+	// H8: finalizer-thread safety. C# finalizers (~GodotObject) run on the
+	// Mono GC thread. Engine APIs (queue_free / memdelete / unreference on
+	// non-atomic RefCounted paths) are not safe off the main thread, and
+	// temporary wrappers (GetNode<T>() creates a new wrapper each call) can
+	// be finalized while the underlying node is still in use → UAF.
+	// When called off the main thread, enqueue for deferred free instead.
+	if (!Thread::is_main_thread()) {
+		bool is_rc = mono_gc_bridge::is_refcounted_binding(obj);
+		mono_gc_bridge::enqueue_deferred_free(obj, is_rc);
+		return;
+	}
+
+	// Main-thread path: also verify the native object is still alive — a
+	// finalizer may have been delayed past native deletion.
+	if (!mono_gc_bridge::is_native_alive(obj)) {
+		return;
+	}
 
 	// RefCounted: use release_refcounted_binding (unreference + possible memdelete)
 	if (mono_gc_bridge::is_refcounted_binding(obj)) {

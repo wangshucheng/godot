@@ -195,14 +195,25 @@ namespace Godot {
             if (disposed) return;
 
             if (disposing) {
+                // Explicit Dispose() → Free() → release native object on the
+                // caller's thread (must be the main thread).
                 Free();
             } else {
-                // Finalizer: only release native resources, do not touch managed objects
-                if (NativePtr != IntPtr.Zero) {
-                    Bridge.godot_icall_Object_Free(NativePtr);
-                    NativePtr = IntPtr.Zero;
-                    _bridgeGCHandle = 0;
-                }
+                // H8: Finalizer (~GodotObject) runs on the Mono GC thread.
+                // It must NOT call godot_icall_Object_Free or any other icall
+                // — engine objects are not safe to touch off the main thread,
+                // and a temporary wrapper (e.g. GetNode<T>() returns a new
+                // wrapper each call) being finalized must not release the
+                // underlying native node it only borrows. Match the
+                // GodotRefCounted.cs rule: "finalizer path must not call icall".
+                //
+                // We only clear the managed-side fields so the managed object
+                // is inert. The native object's lifetime is owned elsewhere
+                // (RefCounted refcount, or the scene tree for Nodes, or an
+                // explicit Dispose() that the user forgot — the last case
+                // leaks, which is safer than a cross-thread UAF).
+                NativePtr = IntPtr.Zero;
+                _bridgeGCHandle = 0;
                 disposed = true;
             }
         }

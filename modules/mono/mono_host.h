@@ -17,6 +17,7 @@ public:
 
 	Error initialize();
 	void shutdown();
+	void cleanup_partial_init(); // M2: cleanup on partial init failure
 
 	bool load_assembly_and_run(const String &p_assembly_path);
 	MonoAssembly *load_assembly(const String &p_path);

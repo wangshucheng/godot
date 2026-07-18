@@ -396,3 +396,20 @@ $RECYCLE.BIN/
 *.msp
 *.lnk
 *.generated.props
+
+#############################
+### Mono static libraries ###
+#############################
+# Mono 静态库（.a / .lib）是 WASM/Windows 构建的输入，必须入库以保证
+# 构建可复现。这些库由 setup_mono_windows.ps1（Windows）或 WSL2 交叉
+# 编译流程（WASM）生成；TOTAL_STACK 等根源修复会通过 ar r 替换 .a 中
+# 的 .o，需要跟踪变更历史。
+# 顺序很重要：先 re-include 目录（绕过 x64/ 目录忽略规则），再
+# re-include .a/.lib 文件（绕过 *.a/*.lib 文件忽略规则）。
+!mono/libs/
+!mono/libs/**
+!mono/libs/windows/
+!mono/libs/windows/x64/
+!mono/libs/windows/x64/**
+!mono/libs/**/*.a
+!mono/libs/**/*.lib

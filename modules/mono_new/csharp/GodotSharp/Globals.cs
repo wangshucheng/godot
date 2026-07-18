@@ -14,15 +14,16 @@ namespace Godot
     }
 
     // WASM-safe union: reinterpret int32 bit pattern as float.
-    // LongValue (8 bytes) overlaps IntValue (4 bytes) at offset 0 on little-endian
-    // targets, allowing int64 icall returns (sign-extended int32 bit-patterns)
-    // to be reinterpreted as float via { LongValue = ... }.FloatValue.
+    // IMPORTANT: This struct is 4 bytes ONLY. Do NOT add an 8-byte LongValue
+    // field here - it would cause 8-byte writes past the struct boundary and
+    // corrupt WASM linear memory, leading to "function signature mismatch".
+    // For float-returning icalls that give back a sign-extended int64 bit pattern,
+    // cast to int FIRST: new FloatIntUnion { IntValue = (int)icall() }.FloatValue
     [StructLayout(LayoutKind.Explicit)]
     internal struct FloatIntUnion
     {
         [FieldOffset(0)] public int IntValue;
         [FieldOffset(0)] public float FloatValue;
-        [FieldOffset(0)] public long LongValue;
     }
 
     public class Callable
@@ -45,7 +46,7 @@ namespace Godot
             {
                 nativeCallable = godot_icall_Callable_CreateFromTarget(target.nativeInstance, method);
             }
-}
+        }
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal extern static long godot_icall_Callable_CreateFromTarget(long target, string method);
@@ -181,7 +182,7 @@ namespace Godot
         internal extern static long godot_icall_GD_Randf();
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        internal extern static T godot_icall_GD_Load<T>(string path) where T : GodotObject;
+        internal extern static GodotObject godot_icall_GD_Load(string path);
 
         // String overload - avoids string.Join which is unstable in WASM interpreter mode.
         public static void Print(string msg)
@@ -241,7 +242,8 @@ namespace Godot
 
         public static T Load<T>(string path) where T : GodotObject
         {
-            return godot_icall_GD_Load<T>(path);
+            GodotObject obj = godot_icall_GD_Load(path);
+            return obj as T;
         }
 
         public static void PushWarning(string message)

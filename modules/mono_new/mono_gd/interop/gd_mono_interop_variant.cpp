@@ -786,16 +786,26 @@ static mono_bool icall_Input_IsActionPressed(MonoString *p_action) {
 // ===== UI and Node Manipulation Internal Calls =====
 
 static int64_t icall_CreateObject(MonoString *p_class_name) {
-	if (!p_class_name) return 0;
+	if (!p_class_name) {
+		printf("[DIAG] icall_CreateObject: NULL class_name!\n");
+		fflush(stdout);
+		return 0;
+	}
 	char *utf8 = mono_string_to_utf8(p_class_name);
 	if (!utf8) return 0;
 	String class_name = String::utf8(utf8);
 	mono_free(utf8);
+	printf("[DIAG] icall_CreateObject: CALLED with class_name='%s'\n", class_name.utf8().get_data());
+	fflush(stdout);
 	Object *obj = ClassDB::instantiate(class_name);
 	if (!obj) {
+		printf("[DIAG] icall_CreateObject: FAILED to instantiate '%s'\n", class_name.utf8().get_data());
+		fflush(stdout);
 		MonoLogger::log_error("Failed to create object of type: " + class_name);
 		return 0;
 	}
+	printf("[DIAG] icall_CreateObject: SUCCESS obj=%p\n", (void*)obj);
+	fflush(stdout);
 	return (int64_t)(intptr_t)obj;
 }
 
@@ -891,11 +901,16 @@ static void icall_Object_CallStringInt(int64_t p_obj, MonoString *p_method, Mono
 	obj->call(method, Variant(arg1), Variant(p_arg2));
 }
 
-static void icall_Object_CallStringColor(int64_t p_obj, MonoString *p_method, MonoString *p_arg1, float r, float g, float b, float a) {
+static void icall_Object_CallStringColor(int64_t p_obj, MonoString *p_method, MonoString *p_arg1, int32_t r_bits, int32_t g_bits, int32_t b_bits, int32_t a_bits) {
 	if (!p_obj || !p_method) return;
 	Object *obj = (Object *)(intptr_t)p_obj;
 	String method = mono_string_to_godot_string(p_method);
 	String arg1 = p_arg1 ? mono_string_to_godot_string(p_arg1) : String();
+	float r, g, b, a;
+	memcpy(&r, &r_bits, sizeof(float));
+	memcpy(&g, &g_bits, sizeof(float));
+	memcpy(&b, &b_bits, sizeof(float));
+	memcpy(&a, &a_bits, sizeof(float));
 	obj->call(method, Variant(arg1), Variant(Color(r, g, b, a)));
 }
 
@@ -1007,8 +1022,8 @@ static MonoString *icall_Object_GetString(int64_t p_obj, MonoString *p_prop) {
 	return mono_string_new(mono_domain_get(), s.utf8().get_data());
 }
 
-static int64_t icall_Engine_GetFramesPerSecond() {
-	return (int64_t)Engine::get_singleton()->get_frames_per_second();
+static int icall_Engine_GetFramesPerSecond() {
+	return Engine::get_singleton()->get_frames_per_second();
 }
 
 static int64_t icall_OS_GetStaticMemoryUsage() {
@@ -1056,12 +1071,12 @@ static MonoArray *icall_PacketPeer_GetPacket(int64_t p_obj) {
 	return arr;
 }
 
-static int64_t icall_Object_CallNoArgsBool(int64_t p_obj, MonoString *p_method) {
-	if (!p_obj || !p_method) return 0;
+static mono_bool icall_Object_CallNoArgsBool(int64_t p_obj, MonoString *p_method) {
+	if (!p_obj || !p_method) return false;
 	Object *obj = (Object *)(intptr_t)p_obj;
 	String method = mono_string_to_godot_string(p_method);
 	Variant ret = obj->call(method);
-	return (bool)ret ? 1 : 0;
+	return (bool)ret;
 }
 
 static mono_bool icall_Input_IsActionJustPressed(MonoString *p_action) {

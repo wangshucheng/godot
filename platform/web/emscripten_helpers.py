@@ -52,6 +52,16 @@ def create_template_zip(env, js, wasm, side):
         in_files.append(side)  # Side wasm (contains the actual Godot code).
         out_files.append(zip_dir.File(binary_name + ".side.wasm"))
 
+    # Emscripten generates a .data preload package when --preload-file is used
+    # (e.g., Mono BCL DLLs for C# builds). Add it to the template zip so the
+    # exporter copies it to the output directory. The filename must match
+    # REMOTE_PACKAGE_BASE in the generated .js file.
+    data_file_name = "godot" + env["PROGSUFFIX"] + ".data"
+    data_file_path = env.Dir(output_prefix).abspath + "/" + data_file_name
+    if os.path.exists(data_file_path):
+        in_files.append(data_file_path)
+        out_files.append(zip_dir.File(data_file_name))
+
     service_worker = "#misc/dist/html/service-worker.js"
     if env.editor_build:
         # HTML

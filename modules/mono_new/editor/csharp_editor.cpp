@@ -855,7 +855,10 @@ private:
 	void _deploy_mono_web(const String &p_exe_dir) {
 		String godotsharp_dll = p_exe_dir.path_join("GodotSharp.dll");
 		if (FileAccess::exists(godotsharp_dll)) {
-			add_file("GodotSharp.dll", FileAccess::get_file_as_bytes(godotsharp_dll), false);
+			// 部署到 .mono/assemblies/GodotSharp.dll 以匹配 gd_mono.cpp 中的搜索路径
+			// (res://.mono/assemblies/GodotSharp.dll)
+			// 之前部署到 PCK 根目录会导致运行时找不到文件 (errno=44)
+			add_file(".mono/assemblies/GodotSharp.dll", FileAccess::get_file_as_bytes(godotsharp_dll), false);
 		}
 	}
 };

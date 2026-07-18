@@ -1,0 +1,163 @@
+[gd_scene load_steps=8 format=3 uid="uid://b2048game1234"]
+
+[ext_resource type="Script" path="res://Main.cs" id="1_main"]
+
+[sub_resource type="InputEventKey" id="InputEventKey_left"]
+physical_keycode = 4194319
+
+[sub_resource type="InputEventKey" id="InputEventKey_right"]
+physical_keycode = 4194321
+
+[sub_resource type="InputEventKey" id="InputEventKey_up"]
+physical_keycode = 4194320
+
+[sub_resource type="InputEventKey" id="InputEventKey_down"]
+physical_keycode = 4194322
+
+[sub_resource type="LabelSettings" id="LabelSettings_title"]
+font_size = 32
+font_color = Color(0.47, 0.43, 0.39, 1)
+
+[sub_resource type="LabelSettings" id="LabelSettings_score"]
+font_size = 24
+font_color = Color(1, 1, 1, 1)
+
+[node name="Main" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_main")
+
+[node name="VBoxContainer" type="VBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 12.0
+offset_top = 12.0
+offset_right = -12.0
+offset_bottom = -12.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 8
+
+[node name="TitleLabel" type="Label" parent="VBoxContainer"]
+layout_mode = 2
+text = "2048"
+horizontal_alignment = 1
+label_settings = SubResource("LabelSettings_title")
+
+[node name="ScorePanel" type="HBoxContainer" parent="VBoxContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+alignment = 1
+
+[node name="ScoreBox" type="Panel" parent="VBoxContainer/ScorePanel"]
+custom_minimum_size = Vector2(160, 50)
+layout_mode = 2
+
+[node name="Label" type="Label" parent="VBoxContainer/ScorePanel/ScoreBox"]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = 4.0
+offset_bottom = -22.0
+grow_horizontal = 2
+grow_vertical = 2
+text = "SCORE"
+horizontal_alignment = 1
+label_settings = SubResource("LabelSettings_score")
+
+[node name="Score" type="Label" parent="VBoxContainer/ScorePanel/ScoreBox"]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = 22.0
+offset_bottom = -4.0
+grow_horizontal = 2
+grow_vertical = 2
+text = "0"
+horizontal_alignment = 1
+label_settings = SubResource("LabelSettings_title")
+
+[node name="BestBox" type="Panel" parent="VBoxContainer/ScorePanel"]
+custom_minimum_size = Vector2(160, 50)
+layout_mode = 2
+
+[node name="Label" type="Label" parent="VBoxContainer/ScorePanel/BestBox"]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = 4.0
+offset_bottom = -22.0
+grow_horizontal = 2
+grow_vertical = 2
+text = "BEST"
+horizontal_alignment = 1
+label_settings = SubResource("LabelSettings_score")
+
+[node name="Best" type="Label" parent="VBoxContainer/ScorePanel/BestBox"]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = 22.0
+offset_bottom = -4.0
+grow_horizontal = 2
+grow_vertical = 2
+text = "0"
+horizontal_alignment = 1
+label_settings = SubResource("LabelSettings_title")
+
+[node name="Board" type="Control" parent="VBoxContainer"]
+custom_minimum_size = Vector2(368, 368)
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
+
+[node name="TipLabel" type="Label" parent="VBoxContainer"]
+layout_mode = 2
+text = "方向键 / 滑动屏幕移动方块"
+horizontal_alignment = 1
+
+[node name="GameOverPanel" type="Panel" parent="."]
+visible = false
+self_modulate = Color(1, 1, 1, 0.9)
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="VBox" type="VBoxContainer" parent="GameOverPanel"]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -100.0
+offset_top = -60.0
+offset_right = 100.0
+offset_bottom = 60.0
+grow_horizontal = 2
+grow_vertical = 2
+alignment = 1
+
+[node name="GameOverLabel" type="Label" parent="GameOverPanel/VBox"]
+layout_mode = 2
+text = "Game Over"
+horizontal_alignment = 1
+label_settings = SubResource("LabelSettings_title")
+
+[node name="RestartLabel" type="Label" parent="GameOverPanel/VBox"]
+layout_mode = 2
+text = "按 Enter 重新开始"
+horizontal_alignment = 1

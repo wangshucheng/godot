@@ -7,18 +7,18 @@ namespace Godot
     {
         public CanvasLayer()
         {
-        if (nativeInstance == 0)
-        {
-            nativeInstance = godot_icall_CreateObject("CanvasLayer");
-            ownsNative = true;
+            if (nativeInstance == 0)
+            {
+                nativeInstance = godot_icall_CreateObject("CanvasLayer");
+                ownsNative = true;
+            }
+            else if (!godot_icall_Object_IsClass(nativeInstance, "CanvasLayer"))
+            {
+                godot_icall_Object_Delete(nativeInstance);
+                nativeInstance = godot_icall_CreateObject("CanvasLayer");
+                ownsNative = true;
+            }
         }
-        else if (!godot_icall_Object_IsClass(nativeInstance, "CanvasLayer"))
-        {
-            godot_icall_Object_Delete(nativeInstance);
-            nativeInstance = godot_icall_CreateObject("CanvasLayer");
-            ownsNative = true;
-        }
-    }
 
         public int Layer
         {
@@ -57,7 +57,6 @@ namespace Godot
             ShrinkEnd = 8,
         }
 
-        // MouseFilter values (matches Godot 4.x Control.MouseFilter enum).
         public enum MouseFilterEnum
         {
             Stop = 0,
@@ -65,7 +64,6 @@ namespace Godot
             Ignore = 2,
         }
 
-        // LayoutDirection values (matches Godot 4.x Control.LayoutDirection enum).
         public enum LayoutDirectionEnum
         {
             Inherited = 0,
@@ -109,7 +107,6 @@ namespace Godot
             set { godot_icall_Object_SetInt(nativeInstance, "size_flags_horizontal", value); }
         }
 
-        // --- Anchor properties (float 0..1, normalized to parent rect) ---
         public float AnchorLeft
         {
             set { godot_icall_Object_SetFloat(nativeInstance, "anchor_left", new FloatIntUnion { FloatValue = value }.IntValue); }
@@ -127,7 +124,6 @@ namespace Godot
             set { godot_icall_Object_SetFloat(nativeInstance, "anchor_bottom", new FloatIntUnion { FloatValue = value }.IntValue); }
         }
 
-        // --- Offset properties (pixels relative to anchor position) ---
         public float OffsetLeft
         {
             set { godot_icall_Object_SetFloat(nativeInstance, "offset_left", new FloatIntUnion { FloatValue = value }.IntValue); }
@@ -145,7 +141,6 @@ namespace Godot
             set { godot_icall_Object_SetFloat(nativeInstance, "offset_bottom", new FloatIntUnion { FloatValue = value }.IntValue); }
         }
 
-        // GrowDirection values (matches Godot 4.x Control.GrowDirection enum).
         public enum GrowDirectionEnum
         {
             Begin = 0,
@@ -162,7 +157,6 @@ namespace Godot
             set { godot_icall_Object_SetInt(nativeInstance, "grow_vertical", value); }
         }
 
-        // Tint color applied to the control and its children.
         public Color Modulate
         {
             set
@@ -175,7 +169,6 @@ namespace Godot
             }
         }
 
-        // Self-modulate tints only this control (not children).
         public Color SelfModulate
         {
             set
@@ -211,7 +204,11 @@ namespace Godot
 
         public void AddThemeColorOverride(string name, Color color)
         {
-            godot_icall_Object_CallStringColor(nativeInstance, "add_theme_color_override", name, color.r, color.g, color.b, color.a);
+            int rb = new FloatIntUnion { FloatValue = color.r }.IntValue;
+            int gb = new FloatIntUnion { FloatValue = color.g }.IntValue;
+            int bb = new FloatIntUnion { FloatValue = color.b }.IntValue;
+            int ab = new FloatIntUnion { FloatValue = color.a }.IntValue;
+            godot_icall_Object_CallStringColor(nativeInstance, "add_theme_color_override", name, rb, gb, bb, ab);
         }
 
         public void AddThemeStyleboxOverride(string name, StyleBoxFlat stylebox)
@@ -229,21 +226,20 @@ namespace Godot
     {
         public Panel()
         {
-        if (nativeInstance == 0)
-        {
-            nativeInstance = godot_icall_CreateObject("Panel");
+            if (nativeInstance == 0)
+            {
+                nativeInstance = godot_icall_CreateObject("Panel");
+            }
+            else if (!godot_icall_Object_IsClass(nativeInstance, "Panel"))
+            {
+                godot_icall_Object_Delete(nativeInstance);
+                nativeInstance = godot_icall_CreateObject("Panel");
+            }
         }
-        else if (!godot_icall_Object_IsClass(nativeInstance, "Panel"))
-        {
-            godot_icall_Object_Delete(nativeInstance);
-            nativeInstance = godot_icall_CreateObject("Panel");
-        }
-    }
     }
 
     public class Label : Control
     {
-        // AutowrapMode values (matches Godot 4.x Label.AutowrapMode enum).
         public enum AutowrapModeEnum
         {
             Off = 0,
@@ -252,7 +248,6 @@ namespace Godot
             WordSmart = 3,
         }
 
-        // OverrunBehavior values (matches Godot 4.x Label.OverrunBehavior enum).
         public enum OverrunBehaviorEnum
         {
             TrimNone = 0,
@@ -263,16 +258,16 @@ namespace Godot
 
         public Label()
         {
-        if (nativeInstance == 0)
-        {
-            nativeInstance = godot_icall_CreateObject("Label");
+            if (nativeInstance == 0)
+            {
+                nativeInstance = godot_icall_CreateObject("Label");
+            }
+            else if (!godot_icall_Object_IsClass(nativeInstance, "Label"))
+            {
+                godot_icall_Object_Delete(nativeInstance);
+                nativeInstance = godot_icall_CreateObject("Label");
+            }
         }
-        else if (!godot_icall_Object_IsClass(nativeInstance, "Label"))
-        {
-            godot_icall_Object_Delete(nativeInstance);
-            nativeInstance = godot_icall_CreateObject("Label");
-        }
-    }
 
         public string Text
         {
@@ -285,55 +280,47 @@ namespace Godot
             set { godot_icall_Object_SetInt(nativeInstance, "horizontal_alignment", value); }
         }
 
-		public int VerticalAlignment
-		{
-			set { godot_icall_Object_SetInt(nativeInstance, "vertical_alignment", value); }
-		}
+        public int VerticalAlignment
+        {
+            set { godot_icall_Object_SetInt(nativeInstance, "vertical_alignment", value); }
+        }
 
-        // Automatic line wrapping policy.
         public AutowrapModeEnum AutowrapMode
         {
             set { godot_icall_Object_SetInt(nativeInstance, "autowrap_mode", (int)value); }
         }
 
-        // Truncates the text if it exceeds the control's bounding rect.
         public bool ClipText
         {
             set { godot_icall_Object_SetBool(nativeInstance, "clip_text", value); }
             get { return godot_icall_Object_CallNoArgsBool(nativeInstance, "is_clipping_text"); }
         }
 
-        // Behavior when text overruns the bounding rect (trimming/ellipsis).
         public OverrunBehaviorEnum TextOverrunBehavior
         {
             set { godot_icall_Object_SetInt(nativeInstance, "text_overrun_behavior", (int)value); }
         }
 
-        // Number of lines to skip before rendering the visible text.
         public int LinesSkipped
         {
             set { godot_icall_Object_SetInt(nativeInstance, "lines_skipped", value); }
         }
 
-        // Maximum number of lines to render. -1 disables the limit.
         public int MaxLinesVisible
         {
             set { godot_icall_Object_SetInt(nativeInstance, "max_lines_visible", value); }
         }
 
-        // Restricts the number of characters rendered. -1 disables the limit.
         public int VisibleCharacters
         {
             set { godot_icall_Object_SetInt(nativeInstance, "visible_characters", value); }
         }
 
-        // Fraction of characters to render, in range [0.0, 1.0].
         public float VisibleRatio
         {
             set { godot_icall_Object_SetFloat(nativeInstance, "visible_ratio", new FloatIntUnion { FloatValue = value }.IntValue); }
         }
 
-        // Convert all text to upper-case for display.
         public bool UpperCase
         {
             set { godot_icall_Object_SetBool(nativeInstance, "uppercase", value); }
@@ -345,48 +332,48 @@ namespace Godot
     {
         public VBoxContainer()
         {
-        if (nativeInstance == 0)
-        {
-            nativeInstance = godot_icall_CreateObject("VBoxContainer");
+            if (nativeInstance == 0)
+            {
+                nativeInstance = godot_icall_CreateObject("VBoxContainer");
+            }
+            else if (!godot_icall_Object_IsClass(nativeInstance, "VBoxContainer"))
+            {
+                godot_icall_Object_Delete(nativeInstance);
+                nativeInstance = godot_icall_CreateObject("VBoxContainer");
+            }
         }
-        else if (!godot_icall_Object_IsClass(nativeInstance, "VBoxContainer"))
-        {
-            godot_icall_Object_Delete(nativeInstance);
-            nativeInstance = godot_icall_CreateObject("VBoxContainer");
-        }
-    }
     }
 
-	public class HBoxContainer : Control
-	{
-		public HBoxContainer()
-		{
-			if (nativeInstance == 0)
-			{
-				nativeInstance = godot_icall_CreateObject("HBoxContainer");
-			}
-			else if (!godot_icall_Object_IsClass(nativeInstance, "HBoxContainer"))
-			{
-				godot_icall_Object_Delete(nativeInstance);
-				nativeInstance = godot_icall_CreateObject("HBoxContainer");
-			}
-		}
-	}
+    public class HBoxContainer : Control
+    {
+        public HBoxContainer()
+        {
+            if (nativeInstance == 0)
+            {
+                nativeInstance = godot_icall_CreateObject("HBoxContainer");
+            }
+            else if (!godot_icall_Object_IsClass(nativeInstance, "HBoxContainer"))
+            {
+                godot_icall_Object_Delete(nativeInstance);
+                nativeInstance = godot_icall_CreateObject("HBoxContainer");
+            }
+        }
+    }
 
     public class ScrollContainer : Control
     {
         public ScrollContainer()
         {
-        if (nativeInstance == 0)
-        {
-            nativeInstance = godot_icall_CreateObject("ScrollContainer");
+            if (nativeInstance == 0)
+            {
+                nativeInstance = godot_icall_CreateObject("ScrollContainer");
+            }
+            else if (!godot_icall_Object_IsClass(nativeInstance, "ScrollContainer"))
+            {
+                godot_icall_Object_Delete(nativeInstance);
+                nativeInstance = godot_icall_CreateObject("ScrollContainer");
+            }
         }
-        else if (!godot_icall_Object_IsClass(nativeInstance, "ScrollContainer"))
-        {
-            godot_icall_Object_Delete(nativeInstance);
-            nativeInstance = godot_icall_CreateObject("ScrollContainer");
-        }
-    }
 
         public int ScrollVertical
         {
@@ -416,32 +403,32 @@ namespace Godot
     {
         public HSeparator()
         {
-        if (nativeInstance == 0)
-        {
-            nativeInstance = godot_icall_CreateObject("HSeparator");
+            if (nativeInstance == 0)
+            {
+                nativeInstance = godot_icall_CreateObject("HSeparator");
+            }
+            else if (!godot_icall_Object_IsClass(nativeInstance, "HSeparator"))
+            {
+                godot_icall_Object_Delete(nativeInstance);
+                nativeInstance = godot_icall_CreateObject("HSeparator");
+            }
         }
-        else if (!godot_icall_Object_IsClass(nativeInstance, "HSeparator"))
-        {
-            godot_icall_Object_Delete(nativeInstance);
-            nativeInstance = godot_icall_CreateObject("HSeparator");
-        }
-    }
     }
 
     public class StyleBoxFlat : GodotObject
     {
         public StyleBoxFlat()
         {
-        if (nativeInstance == 0)
-        {
-            nativeInstance = godot_icall_CreateObject("StyleBoxFlat");
+            if (nativeInstance == 0)
+            {
+                nativeInstance = godot_icall_CreateObject("StyleBoxFlat");
+            }
+            else if (!godot_icall_Object_IsClass(nativeInstance, "StyleBoxFlat"))
+            {
+                godot_icall_Object_Delete(nativeInstance);
+                nativeInstance = godot_icall_CreateObject("StyleBoxFlat");
+            }
         }
-        else if (!godot_icall_Object_IsClass(nativeInstance, "StyleBoxFlat"))
-        {
-            godot_icall_Object_Delete(nativeInstance);
-            nativeInstance = godot_icall_CreateObject("StyleBoxFlat");
-        }
-    }
 
         public Color BgColor
         {

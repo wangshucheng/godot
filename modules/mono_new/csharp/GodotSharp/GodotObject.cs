@@ -63,7 +63,7 @@ namespace Godot
         }
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        internal extern static void godot_icall_Object_EmitSignal(long nativePtr, string signal, object[] args);
+        internal extern static bool godot_icall_Object_EmitSignal(long nativePtr, string signal, object[] args);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal extern static bool godot_icall_Object_ConnectSignal(long nativePtr, string signal, Delegate callable, bool oneshot);
@@ -87,7 +87,7 @@ namespace Godot
 		internal extern static void godot_icall_Object_SetString(long obj, string prop, string value);
 
 		[MethodImpl(MethodImplOptions.InternalCall)]
-		internal extern static void godot_icall_Object_SetInt(long obj, string prop, int value);
+		internal extern static void godot_icall_Object_SetInt(long obj, string prop, long value);
 
 		[MethodImpl(MethodImplOptions.InternalCall)]
 		internal extern static void godot_icall_Object_SetFloat(long obj, string prop, int valueBits);
@@ -108,13 +108,13 @@ namespace Godot
 		internal extern static void godot_icall_Object_CallString(long obj, string method, string arg);
 
 		[MethodImpl(MethodImplOptions.InternalCall)]
-		internal extern static void godot_icall_Object_CallInt(long obj, string method, int arg);
+		internal extern static void godot_icall_Object_CallInt(long obj, string method, long arg);
 
 		[MethodImpl(MethodImplOptions.InternalCall)]
 		internal extern static void godot_icall_Object_CallStringInt(long obj, string method, string arg1, long arg2);
 
 		[MethodImpl(MethodImplOptions.InternalCall)]
-		internal extern static void godot_icall_Object_CallStringColor(long obj, string method, string arg1, float r, float g, float b, float a);
+		internal extern static void godot_icall_Object_CallStringColor(long obj, string method, string arg1, int r_bits, int g_bits, int b_bits, int a_bits);
 
 		[MethodImpl(MethodImplOptions.InternalCall)]
 		internal extern static void godot_icall_Object_CallStringObject(long obj, string method, string arg1, long arg2);
@@ -455,9 +455,9 @@ namespace Godot
             {
                 if (nativeInstance == 0) return Vector3.Zero;
                 return new Vector3(
-                    new FloatIntUnion { LongValue = godot_icall_Node3D_GetPositionX(nativeInstance) }.FloatValue,
-                    new FloatIntUnion { LongValue = godot_icall_Node3D_GetPositionY(nativeInstance) }.FloatValue,
-                    new FloatIntUnion { LongValue = godot_icall_Node3D_GetPositionZ(nativeInstance) }.FloatValue);
+                    new FloatIntUnion { IntValue = (int)godot_icall_Node3D_GetPositionX(nativeInstance) }.FloatValue,
+                    new FloatIntUnion { IntValue = (int)godot_icall_Node3D_GetPositionY(nativeInstance) }.FloatValue,
+                    new FloatIntUnion { IntValue = (int)godot_icall_Node3D_GetPositionZ(nativeInstance) }.FloatValue);
             }
             set
             {
@@ -475,9 +475,9 @@ namespace Godot
             {
                 if (nativeInstance == 0) return Vector3.Zero;
                 return new Vector3(
-                    new FloatIntUnion { LongValue = godot_icall_Node3D_GetRotationX(nativeInstance) }.FloatValue,
-                    new FloatIntUnion { LongValue = godot_icall_Node3D_GetRotationY(nativeInstance) }.FloatValue,
-                    new FloatIntUnion { LongValue = godot_icall_Node3D_GetRotationZ(nativeInstance) }.FloatValue);
+                    new FloatIntUnion { IntValue = (int)godot_icall_Node3D_GetRotationX(nativeInstance) }.FloatValue,
+                    new FloatIntUnion { IntValue = (int)godot_icall_Node3D_GetRotationY(nativeInstance) }.FloatValue,
+                    new FloatIntUnion { IntValue = (int)godot_icall_Node3D_GetRotationZ(nativeInstance) }.FloatValue);
             }
             set
             {
@@ -495,9 +495,9 @@ namespace Godot
             {
                 if (nativeInstance == 0) return Vector3.One;
                 return new Vector3(
-                    new FloatIntUnion { LongValue = godot_icall_Node3D_GetScaleX(nativeInstance) }.FloatValue,
-                    new FloatIntUnion { LongValue = godot_icall_Node3D_GetScaleY(nativeInstance) }.FloatValue,
-                    new FloatIntUnion { LongValue = godot_icall_Node3D_GetScaleZ(nativeInstance) }.FloatValue);
+                    new FloatIntUnion { IntValue = (int)godot_icall_Node3D_GetScaleX(nativeInstance) }.FloatValue,
+                    new FloatIntUnion { IntValue = (int)godot_icall_Node3D_GetScaleY(nativeInstance) }.FloatValue,
+                    new FloatIntUnion { IntValue = (int)godot_icall_Node3D_GetScaleZ(nativeInstance) }.FloatValue);
             }
             set
             {
@@ -515,9 +515,9 @@ namespace Godot
             {
                 if (nativeInstance == 0) return Vector3.Zero;
                 return new Vector3(
-                    new FloatIntUnion { LongValue = godot_icall_Node3D_GetGlobalPositionX(nativeInstance) }.FloatValue,
-                    new FloatIntUnion { LongValue = godot_icall_Node3D_GetGlobalPositionY(nativeInstance) }.FloatValue,
-                    new FloatIntUnion { LongValue = godot_icall_Node3D_GetGlobalPositionZ(nativeInstance) }.FloatValue);
+                    new FloatIntUnion { IntValue = (int)godot_icall_Node3D_GetGlobalPositionX(nativeInstance) }.FloatValue,
+                    new FloatIntUnion { IntValue = (int)godot_icall_Node3D_GetGlobalPositionY(nativeInstance) }.FloatValue,
+                    new FloatIntUnion { IntValue = (int)godot_icall_Node3D_GetGlobalPositionZ(nativeInstance) }.FloatValue);
             }
             set
             {
@@ -535,9 +535,9 @@ namespace Godot
             {
                 if (nativeInstance == 0) return Vector3.Zero;
                 return new Vector3(
-                    new FloatIntUnion { LongValue = godot_icall_Node3D_GetGlobalRotationX(nativeInstance) }.FloatValue,
-                    new FloatIntUnion { LongValue = godot_icall_Node3D_GetGlobalRotationY(nativeInstance) }.FloatValue,
-                    new FloatIntUnion { LongValue = godot_icall_Node3D_GetGlobalRotationZ(nativeInstance) }.FloatValue);
+                    new FloatIntUnion { IntValue = (int)godot_icall_Node3D_GetGlobalRotationX(nativeInstance) }.FloatValue,
+                    new FloatIntUnion { IntValue = (int)godot_icall_Node3D_GetGlobalRotationY(nativeInstance) }.FloatValue,
+                    new FloatIntUnion { IntValue = (int)godot_icall_Node3D_GetGlobalRotationZ(nativeInstance) }.FloatValue);
             }
             set
             {
@@ -572,21 +572,21 @@ namespace Godot
                 if (nativeInstance == 0) return new Transform3D(Basis.Identity, Vector3.Zero);
                 Basis basis = new Basis(
                     new Vector3(
-                        new FloatIntUnion { LongValue = godot_icall_Node3D_GetTransformB0X(nativeInstance) }.FloatValue,
-                        new FloatIntUnion { LongValue = godot_icall_Node3D_GetTransformB0Y(nativeInstance) }.FloatValue,
-                        new FloatIntUnion { LongValue = godot_icall_Node3D_GetTransformB0Z(nativeInstance) }.FloatValue),
+                        new FloatIntUnion { IntValue = (int)godot_icall_Node3D_GetTransformB0X(nativeInstance) }.FloatValue,
+                        new FloatIntUnion { IntValue = (int)godot_icall_Node3D_GetTransformB0Y(nativeInstance) }.FloatValue,
+                        new FloatIntUnion { IntValue = (int)godot_icall_Node3D_GetTransformB0Z(nativeInstance) }.FloatValue),
                     new Vector3(
-                        new FloatIntUnion { LongValue = godot_icall_Node3D_GetTransformB1X(nativeInstance) }.FloatValue,
-                        new FloatIntUnion { LongValue = godot_icall_Node3D_GetTransformB1Y(nativeInstance) }.FloatValue,
-                        new FloatIntUnion { LongValue = godot_icall_Node3D_GetTransformB1Z(nativeInstance) }.FloatValue),
+                        new FloatIntUnion { IntValue = (int)godot_icall_Node3D_GetTransformB1X(nativeInstance) }.FloatValue,
+                        new FloatIntUnion { IntValue = (int)godot_icall_Node3D_GetTransformB1Y(nativeInstance) }.FloatValue,
+                        new FloatIntUnion { IntValue = (int)godot_icall_Node3D_GetTransformB1Z(nativeInstance) }.FloatValue),
                     new Vector3(
-                        new FloatIntUnion { LongValue = godot_icall_Node3D_GetTransformB2X(nativeInstance) }.FloatValue,
-                        new FloatIntUnion { LongValue = godot_icall_Node3D_GetTransformB2Y(nativeInstance) }.FloatValue,
-                        new FloatIntUnion { LongValue = godot_icall_Node3D_GetTransformB2Z(nativeInstance) }.FloatValue));
+                        new FloatIntUnion { IntValue = (int)godot_icall_Node3D_GetTransformB2X(nativeInstance) }.FloatValue,
+                        new FloatIntUnion { IntValue = (int)godot_icall_Node3D_GetTransformB2Y(nativeInstance) }.FloatValue,
+                        new FloatIntUnion { IntValue = (int)godot_icall_Node3D_GetTransformB2Z(nativeInstance) }.FloatValue));
                 Vector3 origin = new Vector3(
-                    new FloatIntUnion { LongValue = godot_icall_Node3D_GetTransformOX(nativeInstance) }.FloatValue,
-                    new FloatIntUnion { LongValue = godot_icall_Node3D_GetTransformOY(nativeInstance) }.FloatValue,
-                    new FloatIntUnion { LongValue = godot_icall_Node3D_GetTransformOZ(nativeInstance) }.FloatValue);
+                    new FloatIntUnion { IntValue = (int)godot_icall_Node3D_GetTransformOX(nativeInstance) }.FloatValue,
+                    new FloatIntUnion { IntValue = (int)godot_icall_Node3D_GetTransformOY(nativeInstance) }.FloatValue,
+                    new FloatIntUnion { IntValue = (int)godot_icall_Node3D_GetTransformOZ(nativeInstance) }.FloatValue);
                 return new Transform3D(basis, origin);
             }
             set

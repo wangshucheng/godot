@@ -13,6 +13,7 @@
 extern "C" {
 MonoClassField *mono_class_get_field_from_name(MonoClass *klass, const char *name);
 void mono_field_set_value(MonoObject *obj, MonoClassField *field, void *value);
+void mono_field_get_value(MonoObject *obj, MonoClassField *field, void *value);
 MonoClass *mono_class_get_parent(MonoClass *klass);
 const char *mono_class_get_namespace(MonoClass *klass);
 const char *mono_class_get_name(MonoClass *klass);
@@ -658,13 +659,26 @@ bool CSharpInstance::initialize(Object *p_owner) {
 		if (native_field) {
 			int64_t value = (int64_t)(intptr_t)p_owner;
 			mono_field_set_value(mono_object, native_field, &value);
+
+			// [DIAG] Read back the field to verify it was actually set in WASM
+			int64_t readback = 0;
+			mono_field_get_value(mono_object, native_field, &readback);
+			printf("[DIAG] initialize: set nativeInstance=%lld, readback=%lld (owner=%p, match=%d)\n",
+				(long long)value, (long long)readback, (void*)p_owner, (readback == value ? 1 : 0));
+			fflush(stdout);
+		} else {
+			printf("[DIAG] initialize: nativeInstance field NOT FOUND on GodotObject!\n");
+			fflush(stdout);
 		}
+	} else {
+		printf("[DIAG] initialize: GodotObject base class NOT FOUND in inheritance chain!\n");
+		fflush(stdout);
 	}
 
 	// Now call the C# constructor. For scene-loaded nodes, nativeInstance is
 	// already set, so constructors skip CreateObject. For user `new Node2D()`,
 	// nativeInstance is zero, so constructors create the native object.
-	printf("[DIAG] initialize: calling constructor for %s\n", mono_class_get_name(raw_class));
+	printf("[DIAG] initialize: calling constructor for %s (mono_object=%p)\n", mono_class_get_name(raw_class), (void*)mono_object);
 	fflush(stdout);
 	mono_runtime_object_init(mono_object);
 	printf("[DIAG] initialize: constructor returned OK\n");

@@ -469,12 +469,11 @@ $RECYCLE.BIN/
 #
 # git 规则：父目录被 [Bb]in/ 排除则子目录无法 re-include，
 # 必须先 !bin/ re-include 整个 bin/ 目录，再用单独的 ignore 规则
-# 排除不需要跟踪的子目录（obj/exports/.web_zip 等）。
+# 排除不需要跟踪的子目录（obj/.web_zip 等）。
 !bin/
 
-# 仍然忽略的 bin/ 子目录（中间产物 / 可重新生成的导出包）
+# 仍然忽略的 bin/ 子目录（中间产物）
 bin/obj/
-bin/exports/
 
 # Web WASM 模板（WASM 重链 24+ 分钟）
 !bin/templates/web/

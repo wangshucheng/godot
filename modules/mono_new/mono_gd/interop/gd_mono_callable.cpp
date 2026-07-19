@@ -53,12 +53,15 @@ ObjectID MonoCallableCustom::get_object() const {
 }
 
 int MonoCallableCustom::get_argument_count(bool &r_is_valid) const {
-	r_is_valid = delegate_handle != nullptr;
+	// S2 修复: 用 gchandle 判断而非裸 delegate_handle
+	r_is_valid = (gchandle != 0) && (mono_gchandle_get_target(gchandle) != nullptr);
 	return 0;
 }
 
 void MonoCallableCustom::call(const Variant **p_arguments, int p_argcount, Variant &r_return_value, Callable::CallError &r_call_error) const {
-	if (!delegate_handle) {
+	// S2 修复: 通过 gchandle 取 delegate_handle，避免 GC 移动后悬垂
+	MonoObject *delegate = (gchandle != 0) ? mono_gchandle_get_target(gchandle) : nullptr;
+	if (!delegate) {
 		r_call_error.error = Callable::CallError::CALL_ERROR_INSTANCE_IS_NULL;
 		return;
 	}
@@ -75,7 +78,7 @@ void MonoCallableCustom::call(const Variant **p_arguments, int p_argcount, Varia
 		return;
 	}
 
-	MonoClass *delegate_class = mono_object_get_class(delegate_handle);
+	MonoClass *delegate_class = mono_object_get_class(delegate);
 	MonoMethod *invoke_method = mono_class_get_method_from_name(delegate_class, "Invoke", p_argcount);
 	if (!invoke_method) {
 		r_call_error.error = Callable::CallError::CALL_ERROR_INVALID_METHOD;
@@ -128,7 +131,8 @@ void MonoCallableCustom::call(const Variant **p_arguments, int p_argcount, Varia
 	}
 
 	MonoObject *exc = nullptr;
-	MonoObject *ret = mono_runtime_invoke(invoke_method, delegate_handle, params, &exc);
+	// S2 修复: 使用通过 gchandle 重新获取的 delegate（确保地址有效）
+	MonoObject *ret = mono_runtime_invoke(invoke_method, delegate, params, &exc);
 
 	// Free heap-allocated value type memory
 	if (value_storage) {
@@ -167,7 +171,8 @@ void MonoCallableCustom::release_delegate() {
 }
 
 bool MonoCallableCustom::is_valid() const {
-	return delegate_handle != nullptr && ObjectDB::get_instance(object_id) != nullptr;
+	// S2 修复: 通过 gchandle 验证对象仍存在
+	return (gchandle != 0) && (mono_gchandle_get_target(gchandle) != nullptr) && ObjectDB::get_instance(object_id) != nullptr;
 }
 
 MonoCallableCustom::MonoCallableCustom(Object *p_object, MonoObject *p_delegate, const StringName &p_method) {
@@ -175,7 +180,8 @@ MonoCallableCustom::MonoCallableCustom(Object *p_object, MonoObject *p_delegate,
 	delegate_handle = p_delegate;
 	method_name = p_method;
 	if (p_delegate) {
-		gchandle = mono_gchandle_new(p_delegate, false);
+		// S2 修复: 使用 pinned gchandle 钉住 delegate，防止 SGen GC 移动后悬垂
+		gchandle = mono_gchandle_new_pinned(p_delegate);
 	} else {
 		gchandle = 0;
 	}

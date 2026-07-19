@@ -38,6 +38,15 @@ namespace Godot
         public Callable(Delegate @delegate)
         {
             TargetDelegate = @delegate;
+            // S5 修复: 立即创建 native Callable 并缓存到 nativeCallable。
+            // 这样 Connect/Disconnect/IsConnected 用同一指针，compare_equal 能匹配。
+            // 原实现每次都新建 Callable（不同 gchandle），导致 Disconnect 永远找不到匹配项。
+            // 注意: godot_icall_Callable_CreateFromDelegatePtr 声明在 Signal 类
+            // (与 C++ 注册名 Godot.Signal::... 对齐)，需用 Signal. 限定。
+            if (@delegate != null)
+            {
+                nativeCallable = Signal.godot_icall_Callable_CreateFromDelegatePtr(@delegate);
+            }
         }
 
         public Callable(GodotObject target, string method)
@@ -73,7 +82,8 @@ namespace Godot
 
         public static Callable FromDelegate(Delegate @delegate)
         {
-            return godot_icall_Callable_CreateFromDelegate(@delegate) ?? new Callable(@delegate);
+            // S5 修复: 直接用构造函数，构造函数内部会创建并缓存 nativeCallable
+            return new Callable(@delegate);
         }
 
         public static implicit operator Callable(Delegate @delegate)

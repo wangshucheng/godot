@@ -780,13 +780,18 @@ namespace Godot
         None = 0,
         Space = 32,
         A = 65, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
+        Key0 = 48, Key1, Key2, Key3, Key4, Key5, Key6, Key7, Key8, Key9,
+        // Special keys (Godot 4 core/os/keyboard.h, 0x400000 + n).
+        // P2-11 修复: Tab 原误写为 4194308（实为 BACKSPACE），改回 4194306。
         Escape = 4194305,
+        Tab = 4194306,
+        Backspace = 4194308,
         Enter = 4194309,
-        Tab = 4194308,
         Left = 4194319,
         Up = 4194320,
         Right = 4194321,
         Down = 4194322,
-        Key0 = 48, Key1, Key2, Key3, Key4, Key5, Key6, Key7, Key8, Key9,
+        // F1-F12 (4194332 ~ 4194343).
+        F1 = 4194332, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
     }
 }

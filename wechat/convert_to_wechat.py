@@ -175,10 +175,13 @@ globalThis._pckFileName = "{pck_file}";
 globalThis._executableName = "{executable}";
 globalThis._fileSizes = {file_sizes};
 globalThis._pckEmbedded = {pck_embedded};
+globalThis._wasmSubpkg = "{wasm_subpkg}";      // F4: 承载 .wasm.br 的分包名（空字符串表示无分包）
+globalThis._wasmBrInSubpkg = {wasm_br_in_subpkg};  // F4: 分包内是否有 .wasm.br
 // === End WeChat Variables ==='''.strip()
 
 
 # game.json - 微信小游戏配置
+# subpackages 在 convert() 中动态追加（用于承载超 4MB 的 .wasm.br）
 GAME_JSON_TEMPLATE = {
     "deviceOrientation": "portrait",
     "showStatusBar": False,
@@ -192,6 +195,11 @@ GAME_JSON_TEMPLATE = {
     "plugins": {},
     "maxConcurrency": 10
 }
+
+# F4 修复: .wasm.br 走分包方案（WXWebAssembly.instantiate 只接受包内路径，
+# 拒绝 wxfile:/http:; 主包限 4MB，故将 .wasm.br 放入 20MB 分包）
+WASM_SUBPACKAGE_NAME = "wasm_pkg"
+WASM_SUBPACKAGE_ROOT = "wasm_pkg/"
 
 
 # project.config.json - 微信开发者工具配置

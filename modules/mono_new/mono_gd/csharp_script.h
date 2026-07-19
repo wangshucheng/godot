@@ -92,6 +92,7 @@ class CSharpInstance : public ScriptInstance {
 	Object *owner = nullptr;
 	Ref<CSharpScript> script;
 	MonoObject *mono_object = nullptr;
+	uint32_t mono_object_gchandle = 0; // S1 修复: 钉住 MonoObject* 防止 SGen GC 移动/回收
 	GDMonoClass *mono_class = nullptr;
 	bool ready_called = false;
 

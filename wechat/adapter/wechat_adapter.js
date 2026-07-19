@@ -35,165 +35,13 @@
   console.log('[WeChat Adapter] USER_DATA_PATH = ' + USER_DATA_PATH);
 
   // ============================================================
-  // 模块 0a: zlib 解压（用于解压 .wasm.br 文件）
-  // 微信小游戏环境没有原生 zlib，需要自己实现 inflate
+  // 模块 0a: zlib 解压（已删除 - F2 修复）
+  // 原实现按 MSB-first 读位（DEFLATE 是 LSB-first）+ decodeSymbol
+  // 无退出保护，node 实测死循环。改为：
+  //   1. .wasm.br 文件直接交给 WXWebAssembly（微信原生支持 .br 自动解压）
+  //   2. 不再自解压，避免死循环
   // ============================================================
-  var Zlib = (function() {
-    var INFLATE_TABLE = [
-      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-      16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
-      32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
-      48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63,
-      64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79,
-      80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95,
-      96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111,
-      112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127,
-      128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143,
-      144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159,
-      160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175,
-      176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191,
-      192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207,
-      208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223,
-      224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239,
-      240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255
-    ];
-
-    function inflate(data) {
-      var input = new Uint8Array(data);
-      var output = [];
-      var inputIndex = 0;
-      var bitBuffer = 0;
-      var bitCount = 0;
-
-      function readBits(n) {
-        while (bitCount < n) {
-          if (inputIndex >= input.length) return 0;
-          bitBuffer = (bitBuffer << 8) | input[inputIndex++];
-          bitCount += 8;
-        }
-        var result = (bitBuffer >>> (bitCount - n)) & ((1 << n) - 1);
-        bitCount -= n;
-        return result;
-      }
-
-      function readByte() {
-        return readBits(8);
-      }
-
-      function inflateBlock() {
-        var bfinal = readBits(1);
-        var btype = readBits(2);
-
-        if (btype === 0) {
-          while (bitCount > 0) bitCount--;
-          var len = readBits(16);
-          var nlen = readBits(16);
-          if ((len ^ nlen) !== 0xFFFF) return false;
-          for (var i = 0; i < len; i++) {
-            output.push(readByte());
-          }
-        } else if (btype === 1 || btype === 2) {
-          var literalLengthTable = buildHuffmanTable(readBits, btype === 1 ? 9 : 15);
-          var distanceTable = buildHuffmanTable(readBits, 5);
-
-          while (true) {
-            var symbol = decodeSymbol(readBits, literalLengthTable);
-            if (symbol < 256) {
-              output.push(symbol);
-            } else if (symbol === 256) {
-              break;
-            } else {
-              var len = symbol - 254;
-              if (len === 0) {
-                var extraBits = readBits(2);
-                len = 3 + extraBits;
-              } else if (len === 1) {
-                var extraBits = readBits(4);
-                len = 15 + extraBits;
-              } else if (len === 2) {
-                var extraBits = readBits(6);
-                len = 63 + extraBits;
-              } else {
-                var extraBits = readBits(8);
-                len = 258 + extraBits;
-              }
-
-              var distSymbol = decodeSymbol(readBits, distanceTable);
-              var distExtraBits = distSymbol < 4 ? distSymbol : distSymbol - 2;
-              var distance = (1 << distExtraBits) | readBits(distExtraBits);
-
-              for (var i = 0; i < len; i++) {
-                output.push(output[output.length - distance]);
-              }
-            }
-          }
-        }
-
-        return bfinal === 0;
-      }
-
-      function buildHuffmanTable(readBits, maxBits) {
-        var lengths = new Array(288);
-        var numCodes = readBits(5);
-        for (var i = 0; i < numCodes; i++) {
-          lengths[i] = readBits(3);
-        }
-        for (var i = numCodes; i < 288; i++) {
-          lengths[i] = 0;
-        }
-        return buildCodeTable(lengths);
-      }
-
-      function buildCodeTable(lengths) {
-        var codes = new Array(288);
-        var code = 0;
-        var bits = 1;
-        var sorted = [];
-        for (var i = 0; i < lengths.length; i++) {
-          if (lengths[i] > 0) {
-            sorted.push({ symbol: i, len: lengths[i] });
-          }
-        }
-        sorted.sort(function(a, b) { return a.len - b.len; });
-        for (var i = 0; i < sorted.length; i++) {
-          var item = sorted[i];
-          while (bits < item.len) {
-            code <<= 1;
-            bits++;
-          }
-          codes[item.symbol] = { code: code, len: item.len };
-          code++;
-        }
-        return codes;
-      }
-
-      function decodeSymbol(readBits, table) {
-        var code = 0;
-        var bits = 0;
-        while (true) {
-          code = (code << 1) | readBits(1);
-          bits++;
-          for (var i = 0; i < table.length; i++) {
-            var entry = table[i];
-            if (entry && entry.len === bits && entry.code === code) {
-              return i;
-            }
-          }
-        }
-      }
-
-      while (inflateBlock());
-
-      var result = new Uint8Array(output.length);
-      for (var i = 0; i < output.length; i++) {
-        result[i] = output[i];
-      }
-      return result.buffer;
-    }
-
-    return { inflate: inflate };
-  })();
-  console.log('[WeChat Adapter] zlib inflate module loaded');
+  var Zlib = null; // 已废弃，保留引用避免下游报错
 
   // ============================================================
   // 模块 0: WebAssembly 诊断 + polyfill
@@ -357,100 +205,107 @@
   safeDefineGlobal('_resolveWasmPath', function () {
     var wasmFileName = globalThis._wasmFileName || 'index.wasm';
     var cdnBaseUrl = globalThis._cdnBaseUrl || '';
+    // F4 修复: 优先使用 .wasm.br（29MB vs 104MB）
+    // WXWebAssembly 原生支持 .wasm.br 自动解压（不需要 JS 层解压）
+    var brFileName = wasmFileName + '.br';
 
-    // 1. 尝试主包内文件
-    try {
-      fileSystemManager.accessSync(wasmFileName);
-      console.log('[WeChat] WASM in main package: ' + wasmFileName);
-      return Promise.resolve(wasmFileName);
-    } catch (e) {}
+    // 候选文件列表：优先 .wasm.br，回退 .wasm
+    var candidates = [brFileName, wasmFileName];
 
-    // 2. 检查 USER_DATA_PATH 缓存
-    if (USER_DATA_PATH) {
-      var cachedPath = USER_DATA_PATH + '/' + wasmFileName;
+    // 1. 尝试主包内文件（先 .wasm.br 再 .wasm）
+    for (var i = 0; i < candidates.length; i++) {
+      var fname = candidates[i];
       try {
-        var stat = fileSystemManager.statSync(cachedPath);
-        if (stat.size > 0) {
-          console.log('[WeChat] Using cached WASM: ' + cachedPath + ' (' + (stat.size / 1048576).toFixed(2) + ' MB)');
-          return Promise.resolve(cachedPath);
-        }
+        fileSystemManager.accessSync(fname);
+        console.log('[WeChat] WASM in main package: ' + fname);
+        return Promise.resolve(fname);
       } catch (e) {}
     }
 
-    // 3. 从 CDN 下载
+    // 2. 检查 USER_DATA_PATH 缓存
+    if (USER_DATA_PATH) {
+      for (var i = 0; i < candidates.length; i++) {
+        var fname = candidates[i];
+        var cachedPath = USER_DATA_PATH + '/' + fname;
+        try {
+          var stat = fileSystemManager.statSync(cachedPath);
+          if (stat.size > 0) {
+            console.log('[WeChat] Using cached WASM: ' + cachedPath + ' (' + (stat.size / 1048576).toFixed(2) + ' MB)');
+            return Promise.resolve(cachedPath);
+          }
+        } catch (e) {}
+      }
+    }
+
+    // 3. 从 CDN 下载（优先 .wasm.br）
     if (!cdnBaseUrl) {
       return Promise.reject(new Error('No CDN URL for WASM download'));
     }
-    var cdnUrl = cdnBaseUrl + '/' + wasmFileName;
-    console.log('[WeChat] Downloading WASM: ' + cdnUrl);
 
-    return new Promise(function (resolve, reject) {
-      wx.downloadFile({
-        url: cdnUrl,
-        success: function (res) {
-          if (res.statusCode !== 200 || !res.tempFilePath) {
-            reject(new Error('WASM download HTTP ' + res.statusCode));
-            return;
-          }
-          var tempFilePath = res.tempFilePath;
-          console.log('[WeChat] WASM downloaded to temp: ' + tempFilePath);
-
-          // WXWebAssembly.instantiate 严格要求路径以 .wasm 或 .wasm.br 结尾
-          // wx.downloadFile 返回的 tempFilePath 通常没有 .wasm 扩展名
-          // 必须保存到 USER_DATA_PATH 下以 wasmFileName 命名（带 .wasm 扩展名）
-          if (!USER_DATA_PATH) {
-            reject(new Error('USER_DATA_PATH unavailable, cannot save WASM with .wasm extension'));
-            return;
-          }
-          var savedPath = USER_DATA_PATH + '/' + wasmFileName;
-
-          // 如果已存在缓存文件，先删除（saveFileSync 在目标已存在时可能失败）
-          try { fileSystemManager.unlinkSync(savedPath); } catch (e) {}
-
-          // 尝试 saveFileSync
-          var saved = false;
-          try {
-            fileSystemManager.saveFileSync(tempFilePath, savedPath);
-            saved = true;
-          } catch (saveErr) {
-            console.warn('[WeChat] saveFileSync failed: ' + saveErr.message + ', trying manual copy');
-          }
-
-          // saveFileSync 失败时，回退到 readFileSync + writeFileSync 手动复制
-          if (!saved) {
-            try {
-              var fileData = fileSystemManager.readFileSync(tempFilePath);
-              fileSystemManager.writeFileSync(savedPath, fileData, 'binary');
-              saved = true;
-              console.log('[WeChat] WASM manually copied via readFileSync + writeFileSync');
-            } catch (copyErr) {
-              console.error('[WeChat] Manual copy failed: ' + copyErr.message);
-            }
-          }
-
-          if (!saved) {
-            reject(new Error('Failed to save WASM with .wasm extension (both saveFileSync and manual copy failed)'));
-            return;
-          }
-
-          // 验证保存的文件可访问且大小 > 0
-          try {
-            var stat = fileSystemManager.statSync(savedPath);
-            if (!stat || stat.size <= 0) {
-              reject(new Error('Saved WASM file is empty or invalid'));
+    function downloadOne(fileName) {
+      var cdnUrl = cdnBaseUrl + '/' + fileName;
+      console.log('[WeChat] Downloading: ' + cdnUrl);
+      return new Promise(function (resolve, reject) {
+        wx.downloadFile({
+          url: cdnUrl,
+          success: function (res) {
+            if (res.statusCode !== 200 || !res.tempFilePath) {
+              reject(new Error('Download ' + fileName + ' HTTP ' + res.statusCode));
               return;
             }
-            console.log('[WeChat] WASM saved: ' + savedPath + ' (' + (stat.size / 1048576).toFixed(2) + ' MB)');
-          } catch (statErr) {
-            console.warn('[WeChat] statSync failed after save: ' + statErr.message);
-          }
+            var tempFilePath = res.tempFilePath;
+            console.log('[WeChat] Downloaded: ' + fileName + ' -> ' + tempFilePath);
 
-          resolve(savedPath);
-        },
-        fail: function (err) {
-          reject(new Error('WASM download failed: ' + (err.errMsg || 'unknown')));
-        },
+            if (!USER_DATA_PATH) {
+              reject(new Error('USER_DATA_PATH unavailable'));
+              return;
+            }
+            var savedPath = USER_DATA_PATH + '/' + fileName;
+            try { fileSystemManager.unlinkSync(savedPath); } catch (e) {}
+
+            var saved = false;
+            try {
+              fileSystemManager.saveFileSync(tempFilePath, savedPath);
+              saved = true;
+            } catch (saveErr) {
+              console.warn('[WeChat] saveFileSync failed: ' + saveErr.message + ', trying manual copy');
+            }
+            if (!saved) {
+              try {
+                var fileData = fileSystemManager.readFileSync(tempFilePath);
+                fileSystemManager.writeFileSync(savedPath, fileData, 'binary');
+                saved = true;
+              } catch (copyErr) {
+                console.error('[WeChat] Manual copy failed: ' + copyErr.message);
+              }
+            }
+            if (!saved) {
+              reject(new Error('Failed to save ' + fileName));
+              return;
+            }
+            try {
+              var st = fileSystemManager.statSync(savedPath);
+              if (!st || st.size <= 0) {
+                reject(new Error('Saved ' + fileName + ' is empty'));
+                return;
+              }
+              console.log('[WeChat] Saved: ' + savedPath + ' (' + (st.size / 1048576).toFixed(2) + ' MB)');
+            } catch (e) {
+              console.warn('[WeChat] statSync failed: ' + e.message);
+            }
+            resolve(savedPath);
+          },
+          fail: function (err) {
+            reject(new Error('Download ' + fileName + ' failed: ' + (err.errMsg || 'unknown')));
+          },
+        });
       });
+    }
+
+    // 依次尝试 .wasm.br 和 .wasm
+    return downloadOne(brFileName).catch(function (brErr) {
+      console.warn('[WeChat] .wasm.br failed: ' + brErr.message + ', trying .wasm');
+      return downloadOne(wasmFileName);
     });
   });
 
@@ -461,101 +316,103 @@
   safeDefineGlobal('_resolveWasmBuffer', function () {
     var wasmFileName = globalThis._wasmFileName || 'index.wasm';
     var cdnBaseUrl = globalThis._cdnBaseUrl || '';
-    var brFileName = wasmFileName + '.br';
 
-    // 尝试下载 .wasm.br 压缩文件（更小，28MB vs 104MB）
-    function tryDownloadBr() {
+    // F2 修复: 已禁用自研 zlib inflate（死循环）。
+    // .wasm.br 由 WXWebAssembly 原生解压（不需要 JS 层解压）。
+    // 此函数仅下载普通 .wasm 文件并读为 ArrayBuffer。
+    return _resolveWasmPath().then(function (wasmPath) {
+      console.log('[WeChat] Reading WASM as ArrayBuffer: ' + wasmPath);
       return new Promise(function (resolve, reject) {
-        var cdnUrl = cdnBaseUrl + '/' + brFileName;
-        console.log('[WeChat] Downloading compressed WASM: ' + cdnUrl);
-        wx.downloadFile({
-          url: cdnUrl,
-          success: function (res) {
-            if (res.statusCode !== 200 || !res.tempFilePath) {
-              console.warn('[WeChat] .wasm.br download failed (HTTP ' + res.statusCode + '), trying .wasm');
-              reject(new Error('br download failed'));
-              return;
-            }
-            console.log('[WeChat] .wasm.br downloaded: ' + res.tempFilePath);
-            try {
-              var compressedData = fileSystemManager.readFileSync(res.tempFilePath);
-              var compressedBuffer = compressedData instanceof ArrayBuffer ? compressedData : (compressedData.buffer ? compressedData.buffer.slice(compressedData.byteOffset, compressedData.byteOffset + compressedData.byteLength) : new ArrayBuffer(0));
-              console.log('[WeChat] Decompressing .wasm.br (' + (compressedBuffer.byteLength / 1048576).toFixed(2) + ' MB)...');
-              var decompressedBuffer = Zlib.inflate(compressedBuffer);
-              console.log('[WeChat] WASM ArrayBuffer after decompression: ' + (decompressedBuffer.byteLength / 1048576).toFixed(2) + ' MB');
-              resolve(decompressedBuffer);
-            } catch (e) {
-              console.warn('[WeChat] Decompression failed: ' + e.message + ', trying .wasm');
-              reject(e);
-            }
-          },
-          fail: function (err) {
-            console.warn('[WeChat] .wasm.br download failed: ' + err.errMsg + ', trying .wasm');
-            reject(err);
-          },
-        });
-      });
-    }
-
-    // 回退：下载普通 .wasm
-    function tryDownloadWasm() {
-      return _resolveWasmPath().then(function (wasmPath) {
-        console.log('[WeChat] Reading WASM as ArrayBuffer: ' + wasmPath);
-        return new Promise(function (resolve, reject) {
-          try {
-            var buffer = fileSystemManager.readFileSync(wasmPath);
-            if (buffer instanceof ArrayBuffer) {
-              console.log('[WeChat] WASM ArrayBuffer: ' + (buffer.byteLength / 1048576).toFixed(2) + ' MB');
-              resolve(buffer);
-            } else if (buffer && buffer.buffer instanceof ArrayBuffer) {
-              console.log('[WeChat] WASM ArrayBuffer (from view): ' + (buffer.buffer.byteLength / 1048576).toFixed(2) + ' MB');
-              resolve(buffer.buffer);
-            } else {
-              reject(new Error('readFileSync returned unexpected type: ' + typeof buffer));
-            }
-          } catch (e) {
-            reject(new Error('readFileSync failed: ' + e.message));
+        try {
+          var buffer = fileSystemManager.readFileSync(wasmPath);
+          if (buffer instanceof ArrayBuffer) {
+            console.log('[WeChat] WASM ArrayBuffer: ' + (buffer.byteLength / 1048576).toFixed(2) + ' MB');
+            resolve(buffer);
+          } else if (buffer && buffer.buffer instanceof ArrayBuffer) {
+            console.log('[WeChat] WASM ArrayBuffer (from view): ' + (buffer.buffer.byteLength / 1048576).toFixed(2) + ' MB');
+            resolve(buffer.buffer);
+          } else {
+            reject(new Error('readFileSync returned unexpected type: ' + typeof buffer));
           }
-        });
+        } catch (e) {
+          reject(new Error('readFileSync failed: ' + e.message));
+        }
       });
-    }
-
-    // 优先 .wasm.br，失败回退 .wasm
-    return tryDownloadBr().catch(function () {
-      return tryDownloadWasm();
     });
   });
 
   // ============================================================
   // 模块 0d: _instantiateWasmSmart - 智能实例化 WASM
-  // 优先级:
-  //   1. 原生 WebAssembly.instantiate(ArrayBuffer, imports) —— 标准 API，接受 buffer
-  //   2. WXWebAssembly.instantiate(path, imports) —— 文件路径方式
-  //      （devtool 可能拒绝 http:// 路径，但真机可能接受）
+  // F4 修复（重写）: 根据 .wasm vs .wasm.br 选择正确实例化路径
+  //   - .wasm.br (Brotli 压缩): 必须用 WXWebAssembly.instantiate(path) 自动解压
+  //     （不能用 native WebAssembly.instantiate(buffer)，因为 buffer 是压缩字节）
+  //   - .wasm (未压缩): 优先 native WebAssembly.instantiate(buffer)，
+  //     回退 WXWebAssembly.instantiate(path)
   // 返回 Promise<{instance, module}>
   // ============================================================
   safeDefineGlobal('_instantiateWasmSmart', function (imports) {
     console.log('[WeChat] _instantiateWasmSmart called, imports keys: ' + (imports ? Object.keys(imports).join(',') : 'none'));
 
-    // 策略 1: 用原生 WebAssembly + ArrayBuffer（标准 API，最可靠）
-    if (_nativeWA && typeof _nativeWA.instantiate === 'function') {
-      console.log('[WeChat] Strategy 1: native WebAssembly.instantiate(ArrayBuffer, imports)');
-      return _resolveWasmBuffer().then(function (buffer) {
-        return _nativeWA.instantiate(buffer, imports);
-      }).then(function (result) {
-        console.log('[WeChat] Native WebAssembly.instantiate succeeded');
-        return result;
-      }, function (err) {
-        console.warn('[WeChat] Native WebAssembly.instantiate failed: ' + (err && err.message ? err.message : err));
-        // 回退到策略 2
-        return _tryBufferToFileToWXWA(imports);
-      });
-    }
+    return _resolveWasmPath().then(function (wasmPath) {
+      var isBr = wasmPath && wasmPath.length > 3 && wasmPath.substring(wasmPath.length - 3) === '.br';
+      console.log('[WeChat] Resolved WASM path: ' + wasmPath + ' (isBr=' + isBr + ')');
 
-    // 策略 2: ArrayBuffer → 临时文件 → WXWebAssembly.instantiate(tempPath)
-    // 绕过 WXWebAssembly 对 wxfile:/http: 路径的限制
-    console.log('[WeChat] Strategy 2: ArrayBuffer -> temp file -> WXWebAssembly.instantiate');
-    return _tryBufferToFileToWXWA(imports);
+      if (isBr) {
+        // .wasm.br: 只能用 WXWebAssembly.instantiate(path) 自动解压
+        if (!_WXWA || typeof _WXWA.instantiate !== 'function') {
+          return Promise.reject(new Error('.wasm.br requires WXWebAssembly.instantiate(path) for auto-decompression, but WXWebAssembly is unavailable'));
+        }
+        console.log('[WeChat] Strategy A: WXWebAssembly.instantiate(.wasm.br path) - auto-decompress');
+        return _WXWA.instantiate(wasmPath, imports).then(function (result) {
+          console.log('[WeChat] WXWebAssembly.instantiate(.wasm.br) succeeded');
+          if (result && result.instance && result.module) return result;
+          return { instance: result.instance || result, module: result.module || null };
+        });
+      }
+
+      // .wasm (未压缩): 优先 native WebAssembly + ArrayBuffer
+      if (_nativeWA && typeof _nativeWA.instantiate === 'function') {
+        console.log('[WeChat] Strategy B1: native WebAssembly.instantiate(ArrayBuffer)');
+        return new Promise(function (resolve, reject) {
+          try {
+            var buffer = fileSystemManager.readFileSync(wasmPath);
+            if (buffer && buffer.buffer instanceof ArrayBuffer) buffer = buffer.buffer;
+            if (!(buffer instanceof ArrayBuffer)) {
+              reject(new Error('readFileSync returned non-ArrayBuffer: ' + typeof buffer));
+              return;
+            }
+            console.log('[WeChat] WASM ArrayBuffer: ' + (buffer.byteLength / 1048576).toFixed(2) + ' MB');
+            _nativeWA.instantiate(buffer, imports).then(resolve, reject);
+          } catch (e) {
+            reject(new Error('Read WASM file failed: ' + e.message));
+          }
+        }).then(function (result) {
+          console.log('[WeChat] Native WebAssembly.instantiate succeeded');
+          return result;
+        }, function (err) {
+          console.warn('[WeChat] Native WA failed: ' + (err && err.message ? err.message : err) + ', fallback to WXWebAssembly');
+          // 回退到 WXWebAssembly.instantiate(path)
+          if (!_WXWA) return Promise.reject(err);
+          return _WXWA.instantiate(wasmPath, imports).then(function (result) {
+            console.log('[WeChat] WXWebAssembly.instantiate(.wasm) succeeded (fallback)');
+            if (result && result.instance && result.module) return result;
+            return { instance: result.instance || result, module: result.module || null };
+          });
+        });
+      }
+
+      // 既无 native WA，又是 .wasm，直接用 WXWebAssembly.instantiate(path)
+      if (_WXWA && typeof _WXWA.instantiate === 'function') {
+        console.log('[WeChat] Strategy B2: WXWebAssembly.instantiate(.wasm path)');
+        return _WXWA.instantiate(wasmPath, imports).then(function (result) {
+          console.log('[WeChat] WXWebAssembly.instantiate(.wasm) succeeded');
+          if (result && result.instance && result.module) return result;
+          return { instance: result.instance || result, module: result.module || null };
+        });
+      }
+
+      return Promise.reject(new Error('No WebAssembly implementation available'));
+    });
   });
 
   function _tryBufferToFileToWXWA(imports) {
@@ -732,6 +589,72 @@
     wx.onTouchEnd(function (e) { dispatchTouch('touchend', e.changedTouches); });
     wx.onTouchCancel(function (e) { dispatchTouch('touchcancel', e.changedTouches); });
   }
+
+  // ============================================================
+  // 模块 5b: atob/btoa polyfill（F1 修复）
+  // 微信小游戏运行时无全局 atob，pck_data.js 解码 base64 必需
+  // 优先使用 wx.base64ToArrayBuffer（性能好），否则纯 JS 实现
+  // ============================================================
+  var B64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  var B64_LOOKUP = (function () {
+    var t = {};
+    for (var i = 0; i < B64_CHARS.length; i++) t[B64_CHARS.charAt(i)] = i;
+    return t;
+  })();
+
+  function atobPolyfill(b64) {
+    // 优先使用微信原生 API（性能更好，返回 ArrayBuffer）
+    if (typeof wx !== 'undefined' && wx.base64ToArrayBuffer) {
+      var ab = wx.base64ToArrayBuffer(b64);
+      // 标准 atob 返回 binary string，这里同步行为
+      var bytes = new Uint8Array(ab);
+      var s = '';
+      for (var i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+      return s;
+    }
+    // 纯 JS 回退实现
+    b64 = String(b64).replace(/=+$/, '');
+    var output = '';
+    var bs = 0, buff = 0;
+    for (var i = 0; i < b64.length; i++) {
+      var c = B64_LOOKUP[b64.charAt(i)];
+      if (c === undefined) continue;
+      buff = (buff << 6) | c;
+      bs += 6;
+      if (bs >= 8) {
+        bs -= 8;
+        output += String.fromCharCode((buff >> bs) & 0xFF);
+      }
+    }
+    return output;
+  }
+
+  function btoaPolyfill(s) {
+    if (typeof wx !== 'undefined' && wx.arrayBufferToBase64) {
+      var bytes = new Uint8Array(s.length);
+      for (var i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i) & 0xFF;
+      return wx.arrayBufferToBase64(bytes.buffer);
+    }
+    var output = '';
+    var bs = 0, buff = 0;
+    for (var i = 0; i < s.length; i++) {
+      buff = (buff << 8) | (s.charCodeAt(i) & 0xFF);
+      bs += 8;
+      while (bs >= 6) {
+        bs -= 6;
+        output += B64_CHARS.charAt((buff >> bs) & 0x3F);
+      }
+    }
+    if (bs > 0) {
+      output += B64_CHARS.charAt((buff << (6 - bs)) & 0x3F);
+    }
+    while (output.length % 4) output += '=';
+    return output;
+  }
+
+  safeDefineGlobal('atob', atobPolyfill);
+  safeDefineGlobal('btoa', btoaPolyfill);
+  console.log('[WeChat Adapter] atob/btoa polyfill installed');
 
   // ============================================================
   // 模块 6: localStorage polyfill

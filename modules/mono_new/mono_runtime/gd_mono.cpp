@@ -233,14 +233,25 @@ bool GDMono::initialize() {
 	mono_set_dirs(mono_lib_utf8.get_data(), mono_etc_utf8.get_data());
 
 #ifdef WEB_ENABLED
-	MonoLogger::log("Installing Mono trace log handlers for diagnostics...");
-	mono_trace_set_level_string("debug");
-	mono_trace_set_mask_string("all");
-	// Also enable eglib log for ghashtable diagnostics
-	mono_trace_set_log_handler(web_mono_log_callback, nullptr);
-	mono_trace_set_print_handler(web_mono_print_callback);
-	mono_trace_set_printerr_handler(web_mono_print_callback);
-	MonoLogger::log("Mono trace log handlers installed");
+	// M5 修复: WASM 日志收口 - release 默认关闭，避免性能与隐私问题
+	// 通过环境变量 GDMONO_WASM_TRACE=1 可重新开启调试
+	{
+		const char *trace_env = OS::get_singleton()->get_environment("GDMONO_WASM_TRACE").utf8().get_data();
+		bool enable_trace = (trace_env && trace_env[0] == '1');
+		if (enable_trace) {
+			MonoLogger::log("Installing Mono trace log handlers for diagnostics...");
+			mono_trace_set_level_string("debug");
+			mono_trace_set_mask_string("all");
+			mono_trace_set_log_handler(web_mono_log_callback, nullptr);
+			mono_trace_set_print_handler(web_mono_print_callback);
+			mono_trace_set_printerr_handler(web_mono_print_callback);
+			MonoLogger::log("Mono trace log handlers installed");
+		} else {
+			// 默认只显示 error 级别，关闭 debug/info
+			mono_trace_set_level_string("error");
+			mono_trace_set_mask_string("all");
+		}
+	}
 #endif
 
 	mono_config_parse(nullptr);
@@ -721,16 +732,13 @@ bool GDMono::reload_domain() {
 	MonoLogger::log("Scripts AppDomain reloaded successfully");
 	return true;
 #else
-	// WASM (DISABLE_APPDOMAINS): cannot unload AppDomain, use pseudo-reload
+	// WASM (DISABLE_APPDOMAINS): cannot unload AppDomain, use pseudo-reload.
+	// M11 修复: 删除从未被读取的 saved_paths 死代码（caller reload_assembly 会
+	// 调用 clear_user_assemblies + load_assembly 重新装载，无需在此构建列表）。
 	MonoLogger::log("Pseudo hot reload (WASM mode): clearing assemblies and reloading...");
 	clear_user_assemblies();
 	loaded_assembly_paths.clear();
-	// Re-scan and load user assemblies
-	List<String> saved_paths;
-	for (const UserAssembly &ua : user_assemblies) {
-		saved_paths.push_back(ua.name);
-	}
-	// The caller (csharp_editor_on_script_saved) will call load_assembly
+	// The caller (csharp_editor_on_script_saved / reload_assembly) will call load_assembly
 	return false; // indicates domain reload not used
 #endif
 }
@@ -792,14 +800,18 @@ MonoClass *GDMono::get_class(const String &p_namespace, const String &p_class_na
 		if (klass) return klass;
 	}
 
-	const char *namespaces[] = { p_namespace.utf8().get_data(), "Godot", "System", nullptr };
+	// S4 修复: p_namespace.utf8() 返回临时 CharString，原代码将其存入数组后
+	// 临时对象立即销毁，namespaces[0] 悬垂。改为先保存到局部变量延长生命周期。
+	CharString ns_utf8 = p_namespace.utf8();
+	CharString class_utf8 = p_class_name.utf8();
+	const char *namespaces[] = { ns_utf8.get_data(), "Godot", "System", nullptr };
 	for (int i = 0; namespaces[i] != nullptr; i++) {
-		klass = mono_class_from_name(mono_get_corlib(), namespaces[i], p_class_name.utf8().get_data());
+		klass = mono_class_from_name(mono_get_corlib(), namespaces[i], class_utf8.get_data());
 		if (klass) return klass;
 	}
 
 	if (p_namespace.is_empty()) {
-		klass = mono_class_from_name(mono_get_corlib(), "", p_class_name.utf8().get_data());
+		klass = mono_class_from_name(mono_get_corlib(), "", class_utf8.get_data());
 	}
 
 	return klass;

@@ -551,10 +551,7 @@ Variant CSharpInstance::callp(const StringName &p_method, const Variant **p_args
 				}
 			}
 		}
-		printf("[DIAG] callp: EXCEPTION in '%s': %s.%s (exc=%p) msg=%s\n",
-			String(p_method).utf8().get_data(), exc_ns, exc_name, (void*)exc,
-			exc_msg_utf8 ? exc_msg_utf8 : "(no msg)");
-		fflush(stdout);
+		// M6 修复: 删除临时 [DIAG] printf 诊断（已由 MonoLogger::log_error 统一记录）。
 		MonoLogger::log_error(vformat("Exception in C# method call '%s': %s.%s %s",
 			String(p_method), exc_ns, exc_name, exc_msg_utf8 ? exc_msg_utf8 : ""));
 		if (exc_msg_utf8) mono_free(exc_msg_utf8);
@@ -639,6 +636,10 @@ bool CSharpInstance::initialize(Object *p_owner) {
 		return false;
 	}
 
+	// S1 修复: 创建 pinned gchandle 防止 SGen GC 移动/回收 mono_object
+	// pinned=1 钉住对象地址，GC 不会移动它；所有后续 mono_object 使用都安全
+	mono_object_gchandle = mono_gchandle_new_pinned(mono_object);
+
 	// Set nativeInstance BEFORE calling the constructor, so C# constructors
 	// can check `if (nativeInstance == IntPtr.Zero)` and skip native object
 	// creation for scene-loaded nodes (which already have a native object).
@@ -682,6 +683,12 @@ CSharpInstance::CSharpInstance() {
 }
 
 CSharpInstance::~CSharpInstance() {
+	// S1 修复: 析构时释放 pinned gchandle，允许 GC 回收 mono_object
+	if (mono_object_gchandle != 0) {
+		mono_gchandle_free(mono_object_gchandle);
+		mono_object_gchandle = 0;
+		mono_object = nullptr;
+	}
 }
 
 String CSharpLanguage::get_name() const {

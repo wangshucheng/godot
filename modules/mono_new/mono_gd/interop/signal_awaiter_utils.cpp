@@ -149,11 +149,12 @@ SignalAwaiterCallable::SignalAwaiterCallable(Object *p_source, uint32_t p_awaite
 }
 
 SignalAwaiterCallable::~SignalAwaiterCallable() {
-	// Release the GC handle so the C# awaiter can be collected.
-	if (awaiter_gchandle != 0) {
-		mono_gchandle_free(awaiter_gchandle);
-		awaiter_gchandle = 0;
-	}
+	// S3 修复: 不再在 C++ 析构时释放 gchandle。
+	// C# SignalAwaiter 终结器 (~SignalAwaiter) 会释放 _selfHandle，
+	// C++ 再释放会导致双重释放（同一个 handle 被 free 两次，UB）。
+	// gchandle 的所有权归 C# SignalAwaiter 对象所有。
+	// 这里仅清零标记，不调用 mono_gchandle_free。
+	awaiter_gchandle = 0;
 }
 
 // ---------------------------------------------------------------------------

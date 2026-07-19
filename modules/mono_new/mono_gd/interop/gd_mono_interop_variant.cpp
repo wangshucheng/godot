@@ -1144,6 +1144,8 @@ static void icall_Object_Delete(int64_t p_ptr) {
 
 // --- FileAccess icalls ---
 static mono_bool icall_FileAccess_FileExists(MonoString *p_path) {
+	// M3 修复: 补空检查
+	if (!p_path) return false;
 	char *path = mono_string_to_utf8(p_path);
 	String s = String::utf8(path);
 	mono_free(path);
@@ -1151,6 +1153,7 @@ static mono_bool icall_FileAccess_FileExists(MonoString *p_path) {
 }
 
 static MonoString *icall_FileAccess_GetFileAsString(MonoString *p_path) {
+	if (!p_path) return mono_string_new(mono_domain_get(), "");
 	char *path = mono_string_to_utf8(p_path);
 	String s = String::utf8(path);
 	mono_free(path);
@@ -1159,6 +1162,7 @@ static MonoString *icall_FileAccess_GetFileAsString(MonoString *p_path) {
 }
 
 static MonoArray *icall_FileAccess_GetFileAsBytes(MonoString *p_path) {
+	if (!p_path) return mono_array_new(mono_domain_get(), mono_get_byte_class(), 0);
 	char *path = mono_string_to_utf8(p_path);
 	String s = String::utf8(path);
 	mono_free(path);
@@ -1172,6 +1176,7 @@ static MonoArray *icall_FileAccess_GetFileAsBytes(MonoString *p_path) {
 }
 
 static int icall_FileAccess_WriteFile(MonoString *p_path, MonoArray *p_data) {
+	if (!p_path || !p_data) return (int)Error::ERR_INVALID_PARAMETER;
 	char *path = mono_string_to_utf8(p_path);
 	String s = String::utf8(path);
 	mono_free(path);
@@ -1187,6 +1192,7 @@ static int icall_FileAccess_WriteFile(MonoString *p_path, MonoArray *p_data) {
 }
 
 static int icall_FileAccess_MakeDirRecursive(MonoString *p_path) {
+	if (!p_path) return (int)Error::ERR_INVALID_PARAMETER;
 	char *path = mono_string_to_utf8(p_path);
 	String s = String::utf8(path);
 	mono_free(path);
@@ -1195,6 +1201,7 @@ static int icall_FileAccess_MakeDirRecursive(MonoString *p_path) {
 }
 
 static mono_bool icall_FileAccess_DirExists(MonoString *p_path) {
+	if (!p_path) return false;
 	char *path = mono_string_to_utf8(p_path);
 	String s = String::utf8(path);
 	mono_free(path);
@@ -1202,6 +1209,7 @@ static mono_bool icall_FileAccess_DirExists(MonoString *p_path) {
 }
 
 static int icall_FileAccess_Remove(MonoString *p_path) {
+	if (!p_path) return (int)Error::ERR_INVALID_PARAMETER;
 	char *path = mono_string_to_utf8(p_path);
 	String s = String::utf8(path);
 	mono_free(path);
@@ -1216,21 +1224,26 @@ static MonoString *icall_FileAccess_GetUserDataDir() {
 
 // --- Node icalls ---
 static int icall_Node_GetChildCount(int64_t p_node) {
+	// M3 修复: 补空检查
+	if (!p_node) return 0;
 	Node *n = (Node *)(intptr_t)p_node;
 	return n->get_child_count();
 }
 
 static int64_t icall_Node_GetChild(int64_t p_node, int p_index) {
+	if (!p_node) return 0;
 	Node *n = (Node *)(intptr_t)p_node;
 	return (int64_t)(intptr_t)n->get_child(p_index);
 }
 
 static MonoString *icall_Node_GetName(int64_t p_node) {
+	if (!p_node) return mono_string_new(mono_domain_get(), "");
 	Node *n = (Node *)(intptr_t)p_node;
 	return mono_string_new(mono_domain_get(), String(n->get_name()).utf8().ptr());
 }
 
 static void icall_Node_SetName(int64_t p_node, MonoString *p_name) {
+	if (!p_node || !p_name) return;
 	Node *n = (Node *)(intptr_t)p_node;
 	char *name = mono_string_to_utf8(p_name);
 	n->set_name(String::utf8(name));
@@ -1238,22 +1251,26 @@ static void icall_Node_SetName(int64_t p_node, MonoString *p_name) {
 }
 
 static void icall_Node_RemoveChild(int64_t p_node, int64_t p_child) {
+	if (!p_node || !p_child) return;
 	Node *n = (Node *)(intptr_t)p_node;
 	Node *c = (Node *)(intptr_t)p_child;
 	n->remove_child(c);
 }
 
 static MonoString *icall_Node_GetPath(int64_t p_node) {
+	if (!p_node) return mono_string_new(mono_domain_get(), "");
 	Node *n = (Node *)(intptr_t)p_node;
 	return mono_string_new(mono_domain_get(), String(n->get_path()).utf8().ptr());
 }
 
 static void icall_Node_QueueFree(int64_t p_node) {
+	if (!p_node) return;
 	Node *n = (Node *)(intptr_t)p_node;
 	n->queue_free();
 }
 
 static int64_t icall_Node_GetNode(int64_t p_node, MonoString *p_path) {
+	if (!p_node || !p_path) return 0;
 	Node *n = (Node *)(intptr_t)p_node;
 	char *path = mono_string_to_utf8(p_path);
 	Node *child = n->get_node(NodePath(String::utf8(path)));
@@ -1262,6 +1279,7 @@ static int64_t icall_Node_GetNode(int64_t p_node, MonoString *p_path) {
 }
 
 static MonoString *icall_Node_GetClassName(int64_t p_node) {
+	if (!p_node) return mono_string_new(mono_domain_get(), "");
 	Node *n = (Node *)(intptr_t)p_node;
 	return mono_string_new(mono_domain_get(), n->get_class().utf8().ptr());
 }
@@ -1305,9 +1323,11 @@ static MonoString *icall_GD_DoubleToString(int64_t p_val_bits) {
     double p_val;
     memcpy(&p_val, &p_val_bits, sizeof(double));
     char buf[64];
-    // Simple formatting: show up to 6 decimal places, strip trailing zeros
+    // Simple formatting: show up to 6 decimal places, strip trailing zeros.
+    // P2-7 修复: 原代码 (int)p_val 会把 int64 截断为 int32，导致大整数
+    // (例如 5_000_000_000) 被错误地截断显示。改用 %lld + (long long)。
     if (p_val == (int64_t)p_val) {
-        snprintf(buf, sizeof(buf), "%d", (int)p_val);
+        snprintf(buf, sizeof(buf), "%lld", (long long)(int64_t)p_val);
     } else {
         snprintf(buf, sizeof(buf), "%.6f", p_val);
         // Strip trailing zeros

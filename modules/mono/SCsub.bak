@@ -354,27 +354,21 @@ elif env["platform"] == "web":
         wasm_glue = env_mono.Object(source="#modules/mono/mono_wasm_glue.cpp")
         env.Prepend(LIBS=[wasm_glue])
 
-        # Embed BCL assemblies into WASM MEMFS via emcc --embed-file.
-        # Only embed top-level .dll files (exclude AOT subdirectories, .so artifacts, etc.)
-        import os as _os_bcl
-        from glob import glob as _glob_bcl
-        bcl_wasm_dir = _os_bcl.environ.get("BCL_WASM_DIR", "")
+        # Embed BCL assemblies into WASM MEMFS via emcc --embed-file
+        bcl_wasm_dir = os.environ.get("BCL_WASM_DIR", "")
         if not bcl_wasm_dir:
+            # Try Mono source BCL (WASM-specific, from illinker-test-assets)
             bcl_wasm_dir = r"E:\workspace\godot\mono\external\illinker-test-assets\wasm\HelloWorld\bin\Release\netstandard2.0\dist\_framework\_bin"
-        if not _os_bcl.path.isdir(bcl_wasm_dir):
-            bcl_wasm_dir = _os_bcl.join(str(Dir("#").abspath), "mono", "lib", "mono", "4.5")
-        if _os_bcl.path.isdir(bcl_wasm_dir):
-            _bcl_dlls = sorted(_glob_bcl(_os_bcl.path.join(bcl_wasm_dir, "*.dll")))
-            for _dll in _bcl_dlls:
-                _dll_name = _os_bcl.path.basename(_dll)
-                env.Append(LINKFLAGS=[
-                    "--embed-file", _dll + "@/lib/mono/4.5/" + _dll_name,
-                ])
-            print("[Mono] WASM: BCL assemblies embedded from %s (%d DLLs, %.1f MB)"
-                  % (bcl_wasm_dir, len(_bcl_dlls),
-                     sum(_os_bcl.path.getsize(d) for d in _bcl_dlls) / (1024*1024)))
+        if not os.path.isdir(bcl_wasm_dir):
+            # Fallback to local mono/lib/mono/4.5 (desktop BCL)
+            bcl_wasm_dir = os.path.join(str(Dir("#").abspath), "mono", "lib", "mono", "4.5")
+        if os.path.isdir(bcl_wasm_dir):
+            env.Append(LINKFLAGS=[
+                "--embed-file", bcl_wasm_dir + "@/lib/mono/4.5",
+            ])
+            print("[Mono] WASM AOT: BCL assemblies embedded from %s" % bcl_wasm_dir)
         else:
-            print("[Mono] WASM: WARNING - BCL directory not found at %s" % bcl_wasm_dir)
+            print("[Mono] WASM AOT: WARNING - BCL directory not found at %s" % bcl_wasm_dir)
 
     else:
         # ========================================
@@ -440,24 +434,22 @@ elif env["platform"] == "web":
         env.Prepend(LIBS=[wasm_glue])
 
         # Embed BCL assemblies into WASM MEMFS via emcc --embed-file.
-        # Only embed top-level .dll files (exclude AOT subdirectories, .so artifacts, etc.)
-        import os as _os_bcl
-        from glob import glob as _glob_bcl
-        bcl_wasm_dir = _os_bcl.environ.get("BCL_WASM_DIR", "")
+        # BCL .dll files are accessible at /lib/mono/ in MEMFS at runtime.
+        # Path resolution order:
+        #   1. BCL_WASM_DIR environment variable (absolute path)
+        #   2. Mono source WASM BCL (illinker-test-assets)
+        #   3. Local mono/lib/mono/4.5 (desktop BCL fallback)
+        import os
+        bcl_wasm_dir = os.environ.get("BCL_WASM_DIR", "")
         if not bcl_wasm_dir:
             bcl_wasm_dir = r"E:\workspace\godot\mono\external\illinker-test-assets\wasm\HelloWorld\bin\Release\netstandard2.0\dist\_framework\_bin"
-        if not _os_bcl.path.isdir(bcl_wasm_dir):
-            bcl_wasm_dir = _os_bcl.join(str(Dir("#").abspath), "mono", "lib", "mono", "4.5")
-        if _os_bcl.path.isdir(bcl_wasm_dir):
-            _bcl_dlls = sorted(_glob_bcl(_os_bcl.path.join(bcl_wasm_dir, "*.dll")))
-            for _dll in _bcl_dlls:
-                _dll_name = _os_bcl.path.basename(_dll)
-                env.Append(LINKFLAGS=[
-                    "--embed-file", _dll + "@/lib/mono/4.5/" + _dll_name,
-                ])
-            print("[Mono] WASM: BCL assemblies embedded from %s (%d DLLs, %.1f MB)"
-                  % (bcl_wasm_dir, len(_bcl_dlls),
-                     sum(_os_bcl.path.getsize(d) for d in _bcl_dlls) / (1024*1024)))
+        if not os.path.isdir(bcl_wasm_dir):
+            bcl_wasm_dir = os.path.join(str(Dir("#").abspath), "mono", "lib", "mono", "4.5")
+        if os.path.isdir(bcl_wasm_dir):
+            env.Append(LINKFLAGS=[
+                "--embed-file", bcl_wasm_dir + "@/lib/mono/4.5",
+            ])
+            print("[Mono] WASM: BCL assemblies embedded from %s" % bcl_wasm_dir)
         else:
             print("[Mono] WASM: WARNING - BCL directory not found at %s" % bcl_wasm_dir)
 

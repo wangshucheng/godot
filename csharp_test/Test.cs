@@ -1369,9 +1369,70 @@ public partial class Test : Node
 		}
 
 		// ============================================================
-		// Summary
+		// Scenario 23: WXAudio (WeChat InnerAudioContext adapter)
+		// 桌面平台 stub：Play 返回 0，其他方法无操作。测试验证 stub 不崩溃 + API 完整。
+		// WASM 平台：实际调用 GameGlobal.GodotAudioWX（InnerAudioContext）。
 		// ============================================================
 		if (_state == 23)
+		{
+			Runtime.DebugUiAddLine("--- Scenario 23: WXAudio ---");
+
+			// 1. Play (桌面 stub 返回 0，WASM 返回 audio id)
+			int id1 = WXAudio.Play("res://sounds/test.wav", false);
+			Runtime.DebugUiAddLineInt("Play id1=", id1);
+			Runtime.TestAssert("WXAudio.Play returns int (stub=0/wasm>0)", id1 >= 0 ? 1 : 0);
+
+			// 2. PlayEffect (不循环)
+			int id2 = WXAudio.PlayEffect("res://sounds/effect.wav");
+			Runtime.DebugUiAddLineInt("PlayEffect id2=", id2);
+			Runtime.TestAssert("WXAudio.PlayEffect returns int", id2 >= 0 ? 1 : 0);
+
+			// 3. PlayBgm (默认循环)
+			int id3 = WXAudio.PlayBgm("res://music/bgm.mp3");
+			Runtime.DebugUiAddLineInt("PlayBgm id3=", id3);
+			Runtime.TestAssert("WXAudio.PlayBgm returns int", id3 >= 0 ? 1 : 0);
+
+			// 4. SetVolume (0.0~1.0)
+			WXAudio.SetVolume(id3, 0.5f);
+			Runtime.TestAssert("WXAudio.SetVolume no throw", 1);
+
+			// 5. SetVolume 边界值
+			WXAudio.SetVolume(id3, 0.0f);
+			WXAudio.SetVolume(id3, 1.0f);
+			WXAudio.SetVolume(id3, -0.5f);  // 应被 clamp 到 0
+			WXAudio.SetVolume(id3, 2.0f);   // 应被 clamp 到 1
+			Runtime.TestAssert("WXAudio.SetVolume boundary clamp no throw", 1);
+
+			// 6. Pause / Resume
+			WXAudio.Pause(id3);
+			WXAudio.Resume(id3);
+			Runtime.TestAssert("WXAudio.Pause/Resume no throw", 1);
+
+			// 7. Stop 单个
+			WXAudio.Stop(id1);
+			WXAudio.Stop(id2);
+			Runtime.TestAssert("WXAudio.Stop no throw", 1);
+
+			// 8. StopAll
+			WXAudio.StopAll();
+			Runtime.TestAssert("WXAudio.StopAll no throw", 1);
+
+			// 9. 对 id=0 (无效 id) 的操作不应崩溃
+			WXAudio.Stop(0);
+			WXAudio.Pause(0);
+			WXAudio.Resume(0);
+			WXAudio.SetVolume(0, 0.5f);
+			Runtime.TestAssert("WXAudio invalid id=0 no throw", 1);
+
+			Runtime.TestFinishTest("23. WXAudio: Play/Stop/Pause/Resume/SetVolume");
+			_state = 24;
+			return;
+		}
+
+		// ============================================================
+		// Summary
+		// ============================================================
+		if (_state == 24)
 		{
 			int passCount = Runtime.TestGetPassCount();
 			int failCount = Runtime.TestGetFailCount();
@@ -1390,13 +1451,13 @@ public partial class Test : Node
 				Runtime.DebugUiAddLine("Platform: Desktop");
 			}
 			Runtime.DebugUiAddSeparator();
-			Runtime.DebugUiAddLine("All 22 scenarios complete.");
-			_state = 24;
+			Runtime.DebugUiAddLine("All 23 scenarios complete.");
+			_state = 25;
 			return;
 		}
 
-		// State 24: Idle - periodic display refresh
-		if (_state == 24)
+		// State 25: Idle - periodic display refresh
+		if (_state == 25)
 		{
 			_waitFrames++;
 			if (_waitFrames >= 600)

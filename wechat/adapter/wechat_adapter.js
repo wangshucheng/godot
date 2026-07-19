@@ -1,94 +1,693 @@
 // wechat_adapter.js - 微信小游戏适配层
-// 提供 13 个 polyfill 模块，让 Godot Web 导出包在微信小游戏环境中运行
+// 提供完整的 Web API polyfill，让 Godot 4.7 Web 导出包在微信小游戏环境中运行
 //
 // 核心差异:
 // - 微信小游戏使用 WXWebAssembly 而非标准 WebAssembly
-// - 微信无 DOM API (document/window/XMLHttpRequest/fetch)
+// - 微信无 DOM API (window/document/XMLHttpRequest/fetch/Response/ReadableStream)
 // - Canvas 通过 wx.createCanvas() 创建
 // - 触摸事件通过 wx.onTouchStart/Move/End/Cancel 注册
-//
-// 本文件在 game.js 中通过 require() 最先加载，确保后续 index.js 运行时
-// 所有 polyfill 已就位。
+// - 文件系统: 主包文件通过 wx.getFileSystemManager() 读取，CDN文件通过wx.downloadFile下载
 
 (function () {
   'use strict';
 
-  // ============================================================
-  // 模块 1: WXWebAssembly → WebAssembly polyfill
-  // 微信提供 WXWebAssembly.instantiate(path, imports)，path 为文件路径
-  // 标准用 WebAssembly.instantiate(ArrayBuffer, imports)
-  // ============================================================
-  if (typeof WebAssembly === 'undefined' && typeof WXWebAssembly !== 'undefined') {
-    globalThis.WebAssembly = WXWebAssembly;
+  function safeDefineGlobal(name, value) {
+    try {
+      globalThis[name] = value;
+      if (globalThis[name] === value) return;
+    } catch (e) {}
+    try {
+      Object.defineProperty(globalThis, name, {
+        value: value,
+        writable: true,
+        configurable: true,
+      });
+    } catch (e2) {
+      console.warn('[WeChat Adapter] Cannot define global: ' + name);
+    }
   }
 
   // ============================================================
-  // 模块 2: Canvas (HTMLCanvasElement) polyfill
-  // 微信通过 wx.createCanvas() 创建主画布
+  // 前置: 文件系统 (提前定义，供 module 0 使用)
   // ============================================================
-  let _mainCanvas = null;
+  var fileSystemManager = wx.getFileSystemManager ? wx.getFileSystemManager() : null;
+  var USER_DATA_PATH = (wx.env && wx.env.USER_DATA_PATH) ? wx.env.USER_DATA_PATH : '';
+  console.log('[WeChat Adapter] USER_DATA_PATH = ' + USER_DATA_PATH);
+
+  // ============================================================
+  // 模块 0a: zlib 解压（用于解压 .wasm.br 文件）
+  // 微信小游戏环境没有原生 zlib，需要自己实现 inflate
+  // ============================================================
+  var Zlib = (function() {
+    var INFLATE_TABLE = [
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+      16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+      32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
+      48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63,
+      64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79,
+      80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95,
+      96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111,
+      112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127,
+      128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143,
+      144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159,
+      160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175,
+      176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191,
+      192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207,
+      208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223,
+      224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239,
+      240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255
+    ];
+
+    function inflate(data) {
+      var input = new Uint8Array(data);
+      var output = [];
+      var inputIndex = 0;
+      var bitBuffer = 0;
+      var bitCount = 0;
+
+      function readBits(n) {
+        while (bitCount < n) {
+          if (inputIndex >= input.length) return 0;
+          bitBuffer = (bitBuffer << 8) | input[inputIndex++];
+          bitCount += 8;
+        }
+        var result = (bitBuffer >>> (bitCount - n)) & ((1 << n) - 1);
+        bitCount -= n;
+        return result;
+      }
+
+      function readByte() {
+        return readBits(8);
+      }
+
+      function inflateBlock() {
+        var bfinal = readBits(1);
+        var btype = readBits(2);
+
+        if (btype === 0) {
+          while (bitCount > 0) bitCount--;
+          var len = readBits(16);
+          var nlen = readBits(16);
+          if ((len ^ nlen) !== 0xFFFF) return false;
+          for (var i = 0; i < len; i++) {
+            output.push(readByte());
+          }
+        } else if (btype === 1 || btype === 2) {
+          var literalLengthTable = buildHuffmanTable(readBits, btype === 1 ? 9 : 15);
+          var distanceTable = buildHuffmanTable(readBits, 5);
+
+          while (true) {
+            var symbol = decodeSymbol(readBits, literalLengthTable);
+            if (symbol < 256) {
+              output.push(symbol);
+            } else if (symbol === 256) {
+              break;
+            } else {
+              var len = symbol - 254;
+              if (len === 0) {
+                var extraBits = readBits(2);
+                len = 3 + extraBits;
+              } else if (len === 1) {
+                var extraBits = readBits(4);
+                len = 15 + extraBits;
+              } else if (len === 2) {
+                var extraBits = readBits(6);
+                len = 63 + extraBits;
+              } else {
+                var extraBits = readBits(8);
+                len = 258 + extraBits;
+              }
+
+              var distSymbol = decodeSymbol(readBits, distanceTable);
+              var distExtraBits = distSymbol < 4 ? distSymbol : distSymbol - 2;
+              var distance = (1 << distExtraBits) | readBits(distExtraBits);
+
+              for (var i = 0; i < len; i++) {
+                output.push(output[output.length - distance]);
+              }
+            }
+          }
+        }
+
+        return bfinal === 0;
+      }
+
+      function buildHuffmanTable(readBits, maxBits) {
+        var lengths = new Array(288);
+        var numCodes = readBits(5);
+        for (var i = 0; i < numCodes; i++) {
+          lengths[i] = readBits(3);
+        }
+        for (var i = numCodes; i < 288; i++) {
+          lengths[i] = 0;
+        }
+        return buildCodeTable(lengths);
+      }
+
+      function buildCodeTable(lengths) {
+        var codes = new Array(288);
+        var code = 0;
+        var bits = 1;
+        var sorted = [];
+        for (var i = 0; i < lengths.length; i++) {
+          if (lengths[i] > 0) {
+            sorted.push({ symbol: i, len: lengths[i] });
+          }
+        }
+        sorted.sort(function(a, b) { return a.len - b.len; });
+        for (var i = 0; i < sorted.length; i++) {
+          var item = sorted[i];
+          while (bits < item.len) {
+            code <<= 1;
+            bits++;
+          }
+          codes[item.symbol] = { code: code, len: item.len };
+          code++;
+        }
+        return codes;
+      }
+
+      function decodeSymbol(readBits, table) {
+        var code = 0;
+        var bits = 0;
+        while (true) {
+          code = (code << 1) | readBits(1);
+          bits++;
+          for (var i = 0; i < table.length; i++) {
+            var entry = table[i];
+            if (entry && entry.len === bits && entry.code === code) {
+              return i;
+            }
+          }
+        }
+      }
+
+      while (inflateBlock());
+
+      var result = new Uint8Array(output.length);
+      for (var i = 0; i < output.length; i++) {
+        result[i] = output[i];
+      }
+      return result.buffer;
+    }
+
+    return { inflate: inflate };
+  })();
+  console.log('[WeChat Adapter] zlib inflate module loaded');
+
+  // ============================================================
+  // 模块 0: WebAssembly 诊断 + polyfill
+  // 关键问题: devtool 的 WXWebAssembly.instantiate(path) 只接受主包内裸文件名
+  //   拒绝所有 wxfile: / http: 路径。104MB WASM 无法放进 4MB 主包。
+  // 唯一出路: devtool JS 上下文是否提供原生 V8 WebAssembly (接受 ArrayBuffer)?
+  // ============================================================
+  console.log('[WeChat Diag] === WebAssembly Environment Diagnostic ===');
+
+  // 诊断 1: WXWebAssembly
+  var _WXWA = null;
+  try {
+    if (typeof WXWebAssembly !== 'undefined') {
+      _WXWA = WXWebAssembly;
+      console.log('[WeChat Diag] WXWebAssembly type: ' + typeof _WXWA);
+      console.log('[WeChat Diag] WXWebAssembly keys: ' + (_WXWA ? Object.keys(_WXWA).join(',') : 'null'));
+      console.log('[WeChat Diag] WXWebAssembly.instantiate type: ' + typeof (_WXWA && _WXWA.instantiate));
+      console.log('[WeChat Diag] WXWebWA.compile type: ' + typeof (_WXWA && _WXWA.compile));
+      console.log('[WeChat Diag] WXWebWA.validate type: ' + typeof (_WXWA && _WXWA.validate));
+    } else {
+      console.log('[WeChat Diag] WXWebAssembly: UNDEFINED');
+    }
+  } catch (e) {
+    console.log('[WeChat Diag] WXWebAssembly access error: ' + e.message);
+  }
+
+  // 诊断 2: 原生 WebAssembly (V8 提供，接受 ArrayBuffer)
+  // 关键: 微信小游戏上下文可能不提供原生 WebAssembly，只有 WXWebAssembly
+  var _nativeWA = null;
+  try {
+    var waType = typeof WebAssembly;
+    console.log('[WeChat Diag] global WebAssembly type: ' + waType);
+    if (waType !== 'undefined' && WebAssembly) {
+      console.log('[WeChat Diag] WebAssembly keys: ' + Object.keys(WebAssembly).join(','));
+      console.log('[WeChat Diag] WebAssembly.instantiate type: ' + typeof WebAssembly.instantiate);
+      console.log('[WeChat Diag] WebAssembly.compile type: ' + typeof WebAssembly.compile);
+      console.log('[WeChat Diag] WebAssembly.Memory type: ' + typeof WebAssembly.Memory);
+      console.log('[WeChat Diag] WebAssembly.Table type: ' + typeof WebAssembly.Table);
+      // 检查 instantiate 是否接受 ArrayBuffer (标准 V8 WebAssembly 接受)
+      // WXWebAssembly.instantiate 只接受 string path
+      var instStr = (WebAssembly.instantiate && WebAssembly.instantiate.toString) ? WebAssembly.instantiate.toString() : 'unknown';
+      console.log('[WeChat Diag] WebAssembly.instantiate signature: ' + instStr.substring(0, 200));
+      // 如果 instantiate 存在且不是 WXWebAssembly (不同对象)，视为原生
+      if (typeof WebAssembly.instantiate === 'function') {
+        _nativeWA = WebAssembly;
+        console.log('[WeChat Diag] => Native WebAssembly SAVED for ArrayBuffer instantiation');
+      }
+    } else {
+      console.log('[WeChat Diag] => Native WebAssembly NOT AVAILABLE in this context');
+    }
+  } catch (e) {
+    console.log('[WeChat Diag] WebAssembly access error: ' + e.message);
+  }
+
+  // 诊断 3: 尝试用原生 WebAssembly.instantiate 编译最小 WASM 模块 (8 字节空模块)
+  // 这能确认原生 WebAssembly 是否真正接受 ArrayBuffer
+  if (_nativeWA) {
+    try {
+      // 最小有效 WASM 模块: magic + version + empty module
+      var minimalWasm = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
+      console.log('[WeChat Diag] Testing native WebAssembly.instantiate(ArrayBuffer)...');
+      _nativeWA.instantiate(minimalWasm.buffer, {}).then(function (res) {
+        console.log('[WeChat Diag] ✓ Native WebAssembly.instantiate(ArrayBuffer) WORKS! instance: ' + typeof res.instance);
+      }, function (err) {
+        console.log('[WeChat Diag] ✗ Native WebAssembly.instantiate(ArrayBuffer) FAILED: ' + (err && err.message ? err.message : err));
+        // 失败说明不是真正的 V8 WebAssembly，清除
+        _nativeWA = null;
+      });
+    } catch (e) {
+      console.log('[WeChat Diag] ✗ Native WebAssembly.instantiate synchronous throw: ' + e.message);
+      _nativeWA = null;
+    }
+  }
+
+  console.log('[WeChat Diag] === End Diagnostic ===');
+
+  var _tempWasmCounter = 0;
+
+  function _writeBufferToTempWasm(buffer) {
+    var tempPath = USER_DATA_PATH + '/_temp_' + (++_tempWasmCounter) + '_' + Date.now() + '.wasm';
+    var data = buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : new Uint8Array(buffer.buffer || buffer);
+    fileSystemManager.writeFileSync(tempPath, data.buffer, 'binary');
+    return tempPath;
+  }
+
+  var WAPolyfill = {
+    instantiate: function (source, imports) {
+      if (typeof source === 'string') {
+        // 文件路径，直接用 WXWebAssembly
+        return _WXWA.instantiate(source, imports);
+      }
+      // ArrayBuffer/TypedArray: 写入临时文件再实例化
+      return new Promise(function (resolve, reject) {
+        var tempPath;
+        try {
+          tempPath = _writeBufferToTempWasm(source);
+        } catch (e) {
+          reject(new Error('Write temp wasm failed: ' + e.message));
+          return;
+        }
+        _WXWA.instantiate(tempPath, imports).then(function (result) {
+          try { fileSystemManager.unlinkSync(tempPath); } catch (e) {}
+          resolve(result);
+        }, function (err) {
+          try { fileSystemManager.unlinkSync(tempPath); } catch (e) {}
+          reject(err);
+        });
+      });
+    },
+    compile: function (source) {
+      if (typeof source === 'string') return _WXWA.compile(source);
+      return new Promise(function (resolve, reject) {
+        var tempPath;
+        try {
+          tempPath = _writeBufferToTempWasm(source);
+        } catch (e) { reject(e); return; }
+        _WXWA.compile(tempPath).then(function (mod) {
+          try { fileSystemManager.unlinkSync(tempPath); } catch (e) {}
+          resolve(mod);
+        }, function (err) {
+          try { fileSystemManager.unlinkSync(tempPath); } catch (e) {}
+          reject(err);
+        });
+      });
+    },
+    validate: function (source) {
+      if (typeof source === 'string') return _WXWA.validate(source);
+      // ArrayBuffer 模式：写临时文件再验证
+      try {
+        var tempPath = _writeBufferToTempWasm(source);
+        var result = _WXWA.validate(tempPath);
+        try { fileSystemManager.unlinkSync(tempPath); } catch (e) {}
+        return result;
+      } catch (e) { return false; }
+    },
+    instantiateStreaming: function (source, imports) {
+      // 不支持 streaming，回退到 instantiate
+      if (source && typeof source.then === 'function') {
+        return source.then(function (resp) {
+          return resp.arrayBuffer();
+        }).then(function (buf) {
+          return WAPolyfill.instantiate(buf, imports);
+        });
+      }
+      return Promise.reject(new Error('instantiateStreaming not supported'));
+    },
+    Memory: _WXWA ? _WXWA.Memory : function () {},
+    Table: _WXWA ? _WXWA.Table : function () {},
+    Global: _WXWA ? _WXWA.Global : function () {},
+    RuntimeError: Error,
+    CompileError: Error,
+    LinkError: Error,
+  };
+  safeDefineGlobal('WebAssembly', WAPolyfill);
+  console.log('[WeChat Adapter] WebAssembly polyfill installed (path + buffer support)');
+
+  // ============================================================
+  // 模块 0b: _resolveWasmPath - 解析 WASM 文件路径
+  // 优先主包 -> 缓存 -> CDN 下载
+  // ============================================================
+  safeDefineGlobal('_resolveWasmPath', function () {
+    var wasmFileName = globalThis._wasmFileName || 'index.wasm';
+    var cdnBaseUrl = globalThis._cdnBaseUrl || '';
+
+    // 1. 尝试主包内文件
+    try {
+      fileSystemManager.accessSync(wasmFileName);
+      console.log('[WeChat] WASM in main package: ' + wasmFileName);
+      return Promise.resolve(wasmFileName);
+    } catch (e) {}
+
+    // 2. 检查 USER_DATA_PATH 缓存
+    if (USER_DATA_PATH) {
+      var cachedPath = USER_DATA_PATH + '/' + wasmFileName;
+      try {
+        var stat = fileSystemManager.statSync(cachedPath);
+        if (stat.size > 0) {
+          console.log('[WeChat] Using cached WASM: ' + cachedPath + ' (' + (stat.size / 1048576).toFixed(2) + ' MB)');
+          return Promise.resolve(cachedPath);
+        }
+      } catch (e) {}
+    }
+
+    // 3. 从 CDN 下载
+    if (!cdnBaseUrl) {
+      return Promise.reject(new Error('No CDN URL for WASM download'));
+    }
+    var cdnUrl = cdnBaseUrl + '/' + wasmFileName;
+    console.log('[WeChat] Downloading WASM: ' + cdnUrl);
+
+    return new Promise(function (resolve, reject) {
+      wx.downloadFile({
+        url: cdnUrl,
+        success: function (res) {
+          if (res.statusCode !== 200 || !res.tempFilePath) {
+            reject(new Error('WASM download HTTP ' + res.statusCode));
+            return;
+          }
+          var tempFilePath = res.tempFilePath;
+          console.log('[WeChat] WASM downloaded to temp: ' + tempFilePath);
+
+          // WXWebAssembly.instantiate 严格要求路径以 .wasm 或 .wasm.br 结尾
+          // wx.downloadFile 返回的 tempFilePath 通常没有 .wasm 扩展名
+          // 必须保存到 USER_DATA_PATH 下以 wasmFileName 命名（带 .wasm 扩展名）
+          if (!USER_DATA_PATH) {
+            reject(new Error('USER_DATA_PATH unavailable, cannot save WASM with .wasm extension'));
+            return;
+          }
+          var savedPath = USER_DATA_PATH + '/' + wasmFileName;
+
+          // 如果已存在缓存文件，先删除（saveFileSync 在目标已存在时可能失败）
+          try { fileSystemManager.unlinkSync(savedPath); } catch (e) {}
+
+          // 尝试 saveFileSync
+          var saved = false;
+          try {
+            fileSystemManager.saveFileSync(tempFilePath, savedPath);
+            saved = true;
+          } catch (saveErr) {
+            console.warn('[WeChat] saveFileSync failed: ' + saveErr.message + ', trying manual copy');
+          }
+
+          // saveFileSync 失败时，回退到 readFileSync + writeFileSync 手动复制
+          if (!saved) {
+            try {
+              var fileData = fileSystemManager.readFileSync(tempFilePath);
+              fileSystemManager.writeFileSync(savedPath, fileData, 'binary');
+              saved = true;
+              console.log('[WeChat] WASM manually copied via readFileSync + writeFileSync');
+            } catch (copyErr) {
+              console.error('[WeChat] Manual copy failed: ' + copyErr.message);
+            }
+          }
+
+          if (!saved) {
+            reject(new Error('Failed to save WASM with .wasm extension (both saveFileSync and manual copy failed)'));
+            return;
+          }
+
+          // 验证保存的文件可访问且大小 > 0
+          try {
+            var stat = fileSystemManager.statSync(savedPath);
+            if (!stat || stat.size <= 0) {
+              reject(new Error('Saved WASM file is empty or invalid'));
+              return;
+            }
+            console.log('[WeChat] WASM saved: ' + savedPath + ' (' + (stat.size / 1048576).toFixed(2) + ' MB)');
+          } catch (statErr) {
+            console.warn('[WeChat] statSync failed after save: ' + statErr.message);
+          }
+
+          resolve(savedPath);
+        },
+        fail: function (err) {
+          reject(new Error('WASM download failed: ' + (err.errMsg || 'unknown')));
+        },
+      });
+    });
+  });
+
+  // ============================================================
+  // 模块 0c: _resolveWasmBuffer - 解析 WASM 路径并读取为 ArrayBuffer
+  // 用于原生 WebAssembly.instantiate(buffer, imports) 实例化
+  // ============================================================
+  safeDefineGlobal('_resolveWasmBuffer', function () {
+    var wasmFileName = globalThis._wasmFileName || 'index.wasm';
+    var cdnBaseUrl = globalThis._cdnBaseUrl || '';
+    var brFileName = wasmFileName + '.br';
+
+    // 尝试下载 .wasm.br 压缩文件（更小，28MB vs 104MB）
+    function tryDownloadBr() {
+      return new Promise(function (resolve, reject) {
+        var cdnUrl = cdnBaseUrl + '/' + brFileName;
+        console.log('[WeChat] Downloading compressed WASM: ' + cdnUrl);
+        wx.downloadFile({
+          url: cdnUrl,
+          success: function (res) {
+            if (res.statusCode !== 200 || !res.tempFilePath) {
+              console.warn('[WeChat] .wasm.br download failed (HTTP ' + res.statusCode + '), trying .wasm');
+              reject(new Error('br download failed'));
+              return;
+            }
+            console.log('[WeChat] .wasm.br downloaded: ' + res.tempFilePath);
+            try {
+              var compressedData = fileSystemManager.readFileSync(res.tempFilePath);
+              var compressedBuffer = compressedData instanceof ArrayBuffer ? compressedData : (compressedData.buffer ? compressedData.buffer.slice(compressedData.byteOffset, compressedData.byteOffset + compressedData.byteLength) : new ArrayBuffer(0));
+              console.log('[WeChat] Decompressing .wasm.br (' + (compressedBuffer.byteLength / 1048576).toFixed(2) + ' MB)...');
+              var decompressedBuffer = Zlib.inflate(compressedBuffer);
+              console.log('[WeChat] WASM ArrayBuffer after decompression: ' + (decompressedBuffer.byteLength / 1048576).toFixed(2) + ' MB');
+              resolve(decompressedBuffer);
+            } catch (e) {
+              console.warn('[WeChat] Decompression failed: ' + e.message + ', trying .wasm');
+              reject(e);
+            }
+          },
+          fail: function (err) {
+            console.warn('[WeChat] .wasm.br download failed: ' + err.errMsg + ', trying .wasm');
+            reject(err);
+          },
+        });
+      });
+    }
+
+    // 回退：下载普通 .wasm
+    function tryDownloadWasm() {
+      return _resolveWasmPath().then(function (wasmPath) {
+        console.log('[WeChat] Reading WASM as ArrayBuffer: ' + wasmPath);
+        return new Promise(function (resolve, reject) {
+          try {
+            var buffer = fileSystemManager.readFileSync(wasmPath);
+            if (buffer instanceof ArrayBuffer) {
+              console.log('[WeChat] WASM ArrayBuffer: ' + (buffer.byteLength / 1048576).toFixed(2) + ' MB');
+              resolve(buffer);
+            } else if (buffer && buffer.buffer instanceof ArrayBuffer) {
+              console.log('[WeChat] WASM ArrayBuffer (from view): ' + (buffer.buffer.byteLength / 1048576).toFixed(2) + ' MB');
+              resolve(buffer.buffer);
+            } else {
+              reject(new Error('readFileSync returned unexpected type: ' + typeof buffer));
+            }
+          } catch (e) {
+            reject(new Error('readFileSync failed: ' + e.message));
+          }
+        });
+      });
+    }
+
+    // 优先 .wasm.br，失败回退 .wasm
+    return tryDownloadBr().catch(function () {
+      return tryDownloadWasm();
+    });
+  });
+
+  // ============================================================
+  // 模块 0d: _instantiateWasmSmart - 智能实例化 WASM
+  // 优先级:
+  //   1. 原生 WebAssembly.instantiate(ArrayBuffer, imports) —— 标准 API，接受 buffer
+  //   2. WXWebAssembly.instantiate(path, imports) —— 文件路径方式
+  //      （devtool 可能拒绝 http:// 路径，但真机可能接受）
+  // 返回 Promise<{instance, module}>
+  // ============================================================
+  safeDefineGlobal('_instantiateWasmSmart', function (imports) {
+    console.log('[WeChat] _instantiateWasmSmart called, imports keys: ' + (imports ? Object.keys(imports).join(',') : 'none'));
+
+    // 策略 1: 用原生 WebAssembly + ArrayBuffer（标准 API，最可靠）
+    if (_nativeWA && typeof _nativeWA.instantiate === 'function') {
+      console.log('[WeChat] Strategy 1: native WebAssembly.instantiate(ArrayBuffer, imports)');
+      return _resolveWasmBuffer().then(function (buffer) {
+        return _nativeWA.instantiate(buffer, imports);
+      }).then(function (result) {
+        console.log('[WeChat] Native WebAssembly.instantiate succeeded');
+        return result;
+      }, function (err) {
+        console.warn('[WeChat] Native WebAssembly.instantiate failed: ' + (err && err.message ? err.message : err));
+        // 回退到策略 2
+        return _tryBufferToFileToWXWA(imports);
+      });
+    }
+
+    // 策略 2: ArrayBuffer → 临时文件 → WXWebAssembly.instantiate(tempPath)
+    // 绕过 WXWebAssembly 对 wxfile:/http: 路径的限制
+    console.log('[WeChat] Strategy 2: ArrayBuffer -> temp file -> WXWebAssembly.instantiate');
+    return _tryBufferToFileToWXWA(imports);
+  });
+
+  function _tryBufferToFileToWXWA(imports) {
+    return _resolveWasmBuffer().then(function (buffer) {
+      console.log('[WeChat] Writing WASM to temp file (' + (buffer.byteLength / 1048576).toFixed(2) + ' MB)...');
+      var tempPath;
+      try {
+        tempPath = _writeBufferToTempWasm(buffer);
+      } catch (e) {
+        return Promise.reject(new Error('Write temp wasm failed: ' + e.message));
+      }
+      console.log('[WeChat] WXWebAssembly.instantiate(temp file): ' + tempPath);
+      if (!_WXWA) {
+        try { fileSystemManager.unlinkSync(tempPath); } catch (e) {}
+        return Promise.reject(new Error('WXWebAssembly not available'));
+      }
+      return _WXWA.instantiate(tempPath, imports).then(function (result) {
+        try { fileSystemManager.unlinkSync(tempPath); } catch (e) {}
+        console.log('[WeChat] WXWebAssembly.instantiate(temp file) succeeded');
+        if (result && result.instance && result.module) {
+          return result;
+        }
+        return { instance: result.instance || result, module: result.module || null };
+      }, function (err) {
+        try { fileSystemManager.unlinkSync(tempPath); } catch (e) {}
+        console.warn('[WeChat] WXWebAssembly.instantiate(temp file) failed: ' + (err && err.message ? err.message : err));
+        // 回退到策略 3
+        return _tryWXInstantiate(imports);
+      });
+    });
+  }
+
+  function _tryWXInstantiate(imports) {
+    return _resolveWasmPath().then(function (wasmPath) {
+      console.log('[WeChat] Strategy 3 (fallback): WXWebAssembly.instantiate: ' + wasmPath);
+      if (!_WXWA) {
+        return Promise.reject(new Error('WXWebAssembly not available'));
+      }
+      return _WXWA.instantiate(wasmPath, imports);
+    }).then(function (result) {
+      console.log('[WeChat] WXWebAssembly.instantiate(path) succeeded');
+      if (result && result.instance && result.module) {
+        return result;
+      }
+      return { instance: result.instance || result, module: result.module || null };
+    });
+  }
+
+  // ============================================================
+  // 模块 1: Canvas (HTMLCanvasElement) polyfill
+  // ============================================================
+  var _mainCanvas = null;
+
   function getMainCanvas() {
     if (!_mainCanvas) {
       _mainCanvas = wx.createCanvas();
-      // 模拟 HTMLCanvasElement API
       _mainCanvas.style = _mainCanvas.style || {};
+      _mainCanvas.width = _mainCanvas.width || wx.getSystemInfoSync().windowWidth;
+      _mainCanvas.height = _mainCanvas.height || wx.getSystemInfoSync().windowHeight;
+      _mainCanvas.tabIndex = 0;
       _mainCanvas.getBoundingClientRect = function () {
         return {
-          left: 0,
-          top: 0,
-          width: _mainCanvas.width,
-          height: _mainCanvas.height,
-          right: _mainCanvas.width,
-          bottom: _mainCanvas.height,
+          left: 0, top: 0,
+          width: _mainCanvas.width, height: _mainCanvas.height,
+          right: _mainCanvas.width, bottom: _mainCanvas.height,
         };
       };
-      _mainCanvas.addEventListener = function () {};
-      _mainCanvas.removeEventListener = function () {};
+      _mainCanvas.addEventListener = function (type, listener) {
+        _mainCanvas._listeners = _mainCanvas._listeners || {};
+        _mainCanvas._listeners[type] = _mainCanvas._listeners[type] || [];
+        _mainCanvas._listeners[type].push(listener);
+      };
+      _mainCanvas.removeEventListener = function (type, listener) {
+        if (!_mainCanvas._listeners || !_mainCanvas._listeners[type]) return;
+        var arr = _mainCanvas._listeners[type];
+        var idx = arr.indexOf(listener);
+        if (idx >= 0) arr.splice(idx, 1);
+      };
+      _mainCanvas.dispatchEvent = function (event) {
+        if (!_mainCanvas._listeners) return;
+        var listeners = _mainCanvas._listeners[event.type] || [];
+        event.target = _mainCanvas;
+        event.currentTarget = _mainCanvas;
+        for (var i = 0; i < listeners.length; i++) {
+          try { listeners[i].call(_mainCanvas, event); } catch (e) { console.error(e); }
+        }
+      };
       _mainCanvas.focus = function () {};
     }
     return _mainCanvas;
   }
 
   function HTMLCanvasElement() {}
-  HTMLCanvasElement.prototype.getContext = function (type, attributes) {
-    return getMainCanvas().getContext(type, attributes);
+  var _origCreateCanvas = wx.createCanvas;
+  wx.createCanvas = function () {
+    var canvas = _origCreateCanvas.apply(wx, arguments);
+    if (!(canvas instanceof HTMLCanvasElement)) {
+      Object.setPrototypeOf(canvas, HTMLCanvasElement.prototype);
+    }
+    return canvas;
+  };
+  HTMLCanvasElement.prototype.getBoundingClientRect = function () {
+    return { left: 0, top: 0, width: this.width, height: this.height, right: this.width, bottom: this.height };
   };
   HTMLCanvasElement.prototype.addEventListener = function () {};
   HTMLCanvasElement.prototype.removeEventListener = function () {};
+  HTMLCanvasElement.prototype.focus = function () {};
+  safeDefineGlobal('HTMLCanvasElement', HTMLCanvasElement);
 
   // ============================================================
-  // 模块 3: Image polyfill
-  // 微信通过 wx.createImage() 创建图片对象
+  // 模块 2: Image polyfill
   // ============================================================
   function HTMLImageElement() {
-    var img = wx.createImage();
-    return img;
+    return wx.createImage();
   }
-  globalThis.Image = HTMLImageElement;
+  safeDefineGlobal('Image', HTMLImageElement);
+  safeDefineGlobal('HTMLImageElement', HTMLImageElement);
 
   // ============================================================
-  // 模块 4: Audio polyfill (Web Audio API)
-  // 微信通过 wx.createInnerAudioContext() 创建音频
+  // 模块 3: AudioContext polyfill
   // ============================================================
   function AudioContext() {
     this._ctx = wx.createInnerAudioContext();
   }
   AudioContext.prototype.createBufferSource = function () {
-    return {
-      buffer: null,
-      loop: false,
-      start: function () {},
-      stop: function () {},
-      connect: function () {},
-      disconnect: function () {},
-    };
+    return { buffer: null, loop: false, start: function () {}, stop: function () {}, connect: function () {}, disconnect: function () {} };
   };
   AudioContext.prototype.createGain = function () {
-    return {
-      gain: { value: 1 },
-      connect: function () {},
-      disconnect: function () {},
-    };
+    return { gain: { value: 1 }, connect: function () {}, disconnect: function () {} };
+  };
+  AudioContext.prototype.createScriptProcessor = function () {
+    return { connect: function () {}, disconnect: function () {}, onaudioprocess: null };
   };
   AudioContext.prototype.decodeAudioData = function (arrayBuffer, success, error) {
     if (success) success({});
@@ -96,91 +695,48 @@
   AudioContext.prototype.close = function () {};
   AudioContext.prototype.resume = function () {};
   AudioContext.prototype.suspend = function () {};
-  globalThis.AudioContext = AudioContext;
-  globalThis.webkitAudioContext = AudioContext;
+  AudioContext.prototype.destination = {};
+  AudioContext.prototype.sampleRate = 44100;
+  safeDefineGlobal('AudioContext', AudioContext);
+  safeDefineGlobal('webkitAudioContext', AudioContext);
 
   // ============================================================
-  // 模块 5: FileSystem polyfill
-  // 微信通过 wx.getFileSystemManager() 访问文件系统
+  // 模块 4: FileSystem helpers (fileSystemManager 和 USER_DATA_PATH 已在文件顶部前置定义)
   // ============================================================
-  var fileSystemManager = wx.getFileSystemManager ? wx.getFileSystemManager() : null;
-  globalThis.fs = globalThis.fs || {
-    readFileSync: function (path, encoding) {
-      if (fileSystemManager) {
-        return fileSystemManager.readFileSync(path, encoding);
-      }
-      return null;
-    },
-    writeFileSync: function (path, data, encoding) {
-      if (fileSystemManager) {
-        return fileSystemManager.writeFileSync(path, data, encoding);
-      }
-    },
-    existsSync: function (path) {
-      if (fileSystemManager) {
-        try {
-          fileSystemManager.accessSync(path);
-          return true;
-        } catch (e) {
-          return false;
-        }
-      }
-      return false;
-    },
-  };
 
   // ============================================================
-  // 模块 6: TouchEvents polyfill
-  // 微信: wx.onTouchStart/Move/End/Cancel
-  // 标准: canvas.addEventListener('touchstart', ...)
+  // 模块 5: TouchEvents polyfill
   // ============================================================
-  var _touchListeners = {
-    touchstart: [],
-    touchmove: [],
-    touchend: [],
-    touchcancel: [],
-  };
-
   function dispatchTouch(type, touches) {
+    var canvas = getMainCanvas();
     var event = {
       type: type,
-      target: getMainCanvas(),
-      currentTarget: getMainCanvas(),
+      target: canvas,
+      currentTarget: canvas,
       touches: touches.map(function (t) {
-        return { clientX: t.clientX, clientY: t.clientY, identifier: t.identifier };
+        return { clientX: t.clientX, clientY: t.clientY, identifier: t.identifier, pageX: t.pageX, pageY: t.pageY, screenX: t.screenX, screenY: t.screenY };
       }),
       changedTouches: touches.map(function (t) {
-        return { clientX: t.clientX, clientY: t.clientY, identifier: t.identifier };
+        return { clientX: t.clientX, clientY: t.clientY, identifier: t.identifier, pageX: t.pageX, pageY: t.pageY, screenX: t.screenX, screenY: t.screenY };
       }),
       preventDefault: function () {},
       stopPropagation: function () {},
       timeStamp: Date.now(),
     };
-    _touchListeners[type].forEach(function (cb) {
-      try { cb(event); } catch (e) { console.error(e); }
-    });
+    canvas.dispatchEvent(event);
   }
 
   if (wx.onTouchStart) {
-    wx.onTouchStart(function (e) {
-      dispatchTouch('touchstart', e.touches);
-    });
-    wx.onTouchMove(function (e) {
-      dispatchTouch('touchmove', e.touches);
-    });
-    wx.onTouchEnd(function (e) {
-      dispatchTouch('touchend', e.changedTouches);
-    });
-    wx.onTouchCancel(function (e) {
-      dispatchTouch('touchcancel', e.changedTouches);
-    });
+    wx.onTouchStart(function (e) { dispatchTouch('touchstart', e.touches); });
+    wx.onTouchMove(function (e) { dispatchTouch('touchmove', e.touches); });
+    wx.onTouchEnd(function (e) { dispatchTouch('touchend', e.changedTouches); });
+    wx.onTouchCancel(function (e) { dispatchTouch('touchcancel', e.changedTouches); });
   }
 
   // ============================================================
-  // 模块 7: Storage polyfill (localStorage)
-  // 微信: wx.setStorageSync/getStorageSync
+  // 模块 6: localStorage polyfill
   // ============================================================
-  globalThis.localStorage = {
+  safeDefineGlobal('localStorage', {
     getItem: function (key) {
       try { return wx.getStorageSync(key); } catch (e) { return null; }
     },
@@ -193,53 +749,552 @@
     clear: function () {
       try { wx.clearStorageSync(); } catch (e) {}
     },
-  };
+  });
 
   // ============================================================
-  // 模块 8: Network polyfill (fetch)
-  // 微信无 fetch，用 wx.request 适配
+  // 模块 7: URL polyfill
   // ============================================================
-  globalThis.fetch = function (url, options) {
-    options = options || {};
-    return new Promise(function (resolve, reject) {
-      wx.request({
-        url: url,
-        method: options.method || 'GET',
-        headers: options.headers || {},
-        responseType: options.responseType || 'text',
-        success: function (res) {
-          resolve({
-            ok: res.statusCode >= 200 && res.statusCode < 300,
-            status: res.statusCode,
-            statusText: '',
-            headers: {},
-            text: function () { return Promise.resolve(String(res.data)); },
-            json: function () { return Promise.resolve(JSON.parse(res.data)); },
-            arrayBuffer: function () { return Promise.resolve(res.data instanceof ArrayBuffer ? res.data : new ArrayBuffer(0)); },
-            blob: function () { return Promise.resolve(res.data); },
-          });
-        },
-        fail: function (err) {
-          reject(new Error(err.errMsg || 'wx.request failed'));
-        },
-      });
-    });
-  };
-
-  // ============================================================
-  // 模块 9: Timer polyfill
-  // 微信已内置 setTimeout/setInterval，这里只需对齐 clearXxx
-  // ============================================================
-  if (typeof globalThis.setTimeout === 'undefined') {
-    globalThis.setTimeout = function (cb, delay) { return setTimeout(cb, delay); };
-    globalThis.clearTimeout = function (id) { return clearTimeout(id); };
-    globalThis.setInterval = function (cb, delay) { return setInterval(cb, delay); };
-    globalThis.clearInterval = function (id) { return clearInterval(id); };
+  if (typeof URL === 'undefined') {
+    function URLShim(url, base) {
+      this.href = url;
+      this.pathname = url;
+      this.origin = '';
+    }
+    URLShim.createObjectURL = function () { return ''; };
+    URLShim.revokeObjectURL = function () {};
+    safeDefineGlobal('URL', URLShim);
+  } else if (!URL.createObjectURL) {
+    URL.createObjectURL = function () { return ''; };
+    URL.revokeObjectURL = function () {};
   }
 
   // ============================================================
-  // 模块 10: XMLHttpRequest polyfill
-  // 微信无 XHR，用 wx.request 适配
+  // 模块 8: ReadableStream polyfill
+  // Godot 4.7 的 Preloader.getTrackedResponse 使用 new ReadableStream({start, controller})
+  // ============================================================
+  if (typeof ReadableStream === 'undefined') {
+    function ReadableStream(underlyingSource) {
+      this._underlyingSource = underlyingSource || {};
+      this._started = false;
+      this._chunks = [];
+      this._waitResolver = null;
+      this._closed = false;
+      this._controller = {
+        enqueue: function (chunk) {
+          if (this._waitResolver) {
+            var resolve = this._waitResolver;
+            this._waitResolver = null;
+            resolve({ done: false, value: chunk });
+          } else {
+            this._chunks.push(chunk);
+          }
+        }.bind(this),
+        close: function () {
+          this._closed = true;
+          if (this._waitResolver) {
+            var resolve = this._waitResolver;
+            this._waitResolver = null;
+            resolve({ done: true, value: undefined });
+          }
+        }.bind(this),
+        error: function (err) {
+          this._closed = true;
+          this._error = err;
+          if (this._waitResolver) {
+            var resolve = this._waitResolver;
+            this._waitResolver = null;
+            resolve(Promise.reject(err));
+          }
+        }.bind(this),
+      };
+    }
+
+    ReadableStream.prototype.getReader = function () {
+      var stream = this;
+      if (!stream._started && stream._underlyingSource.start) {
+        stream._started = true;
+        try {
+          stream._underlyingSource.start(stream._controller);
+        } catch (e) {
+          console.error('[ReadableStream] start error:', e);
+        }
+      }
+      return {
+        read: function () {
+          if (stream._chunks.length > 0) {
+            return Promise.resolve({ done: false, value: stream._chunks.shift() });
+          }
+          if (stream._closed) {
+            return Promise.resolve({ done: true, value: undefined });
+          }
+          if (stream._error) {
+            return Promise.reject(stream._error);
+          }
+          return new Promise(function (resolve) {
+            stream._waitResolver = resolve;
+          });
+        },
+        cancel: function () {
+          stream._closed = true;
+          stream._chunks = [];
+          if (stream._waitResolver) {
+            var resolve = stream._waitResolver;
+            stream._waitResolver = null;
+            resolve({ done: true, value: undefined });
+          }
+          return Promise.resolve();
+        },
+        releaseLock: function () {},
+      };
+    };
+
+    safeDefineGlobal('ReadableStream', ReadableStream);
+  }
+
+  // ============================================================
+  // 模块 9: Headers polyfill
+  // ============================================================
+  if (typeof Headers === 'undefined') {
+    function Headers(init) {
+      this._headers = {};
+      if (init) {
+        if (Array.isArray(init)) {
+          for (var i = 0; i < init.length; i++) {
+            this._headers[init[i][0].toLowerCase()] = init[i][1];
+          }
+        } else if (typeof init === 'object') {
+          for (var key in init) {
+            if (init.hasOwnProperty(key)) {
+              this._headers[key.toLowerCase()] = init[key];
+            }
+          }
+        }
+      }
+    }
+    Headers.prototype.get = function (name) {
+      return this._headers[name.toLowerCase()] || null;
+    };
+    Headers.prototype.set = function (name, value) {
+      this._headers[name.toLowerCase()] = String(value);
+    };
+    Headers.prototype.has = function (name) {
+      return name.toLowerCase() in this._headers;
+    };
+    Headers.prototype.forEach = function (callback) {
+      for (var key in this._headers) {
+        if (this._headers.hasOwnProperty(key)) {
+          callback(this._headers[key], key, this);
+        }
+      }
+    };
+    safeDefineGlobal('Headers', Headers);
+  }
+
+  // ============================================================
+  // 模块 10: Response polyfill
+  // 支持两种构造方式:
+  //   1. createResponse(buffer, options) - 从 ArrayBuffer 创建（用于 fetch 返回）
+  //   2. new Response(readableStream, {headers}) - 从 ReadableStream 创建（getTrackedResponse 使用）
+  // ============================================================
+  function createResponseBodyFromBuffer(uint8) {
+    var _readIndex = 0;
+    return {
+      getReader: function () {
+        return {
+          read: function () {
+            if (_readIndex >= uint8.length) {
+              return Promise.resolve({ done: true, value: undefined });
+            }
+            var chunkSize = Math.min(65536, uint8.length - _readIndex);
+            var chunk = uint8.slice(_readIndex, _readIndex + chunkSize);
+            _readIndex += chunkSize;
+            return Promise.resolve({ done: false, value: chunk });
+          },
+          cancel: function () { _readIndex = uint8.length; return Promise.resolve(); },
+        };
+      },
+    };
+  }
+
+  function Response(body, init) {
+    init = init || {};
+    this.status = init.status || 200;
+    this.ok = this.status >= 200 && this.status < 300;
+    this.statusText = init.statusText || (this.ok ? 'OK' : 'Error');
+    this.headers = (init.headers instanceof Headers) ? init.headers : new Headers(init.headers);
+    this.bodyUsed = false;
+    this.url = init.url || '';
+    this.redirected = false;
+    this.type = 'basic';
+
+    if (body instanceof ReadableStream) {
+      this.body = body;
+      this._buffer = null;
+    } else if (body instanceof ArrayBuffer || (body && body.buffer instanceof ArrayBuffer)) {
+      var ab = body instanceof ArrayBuffer ? body : body.buffer;
+      this._buffer = ab;
+      this.body = createResponseBodyFromBuffer(new Uint8Array(ab));
+    } else if (typeof body === 'string') {
+      var arr = new Uint8Array(body.length);
+      for (var i = 0; i < body.length; i++) {
+        arr[i] = body.charCodeAt(i) & 0xFF;
+      }
+      this._buffer = arr.buffer;
+      this.body = createResponseBodyFromBuffer(arr);
+    } else if (body == null) {
+      this._buffer = new ArrayBuffer(0);
+      this.body = createResponseBodyFromBuffer(new Uint8Array(0));
+    } else {
+      this._buffer = body;
+      this.body = createResponseBodyFromBuffer(new Uint8Array(body));
+    }
+  }
+
+  Response.prototype.arrayBuffer = function () {
+    if (this._buffer) {
+      return Promise.resolve(this._buffer.slice ? this._buffer.slice(0) : this._buffer);
+    }
+    // 从 ReadableStream 读取
+    var reader = this.body.getReader();
+    var chunks = [];
+    var totalLength = 0;
+    function read() {
+      return reader.read().then(function (result) {
+        if (result.done) {
+          var combined = new Uint8Array(totalLength);
+          var offset = 0;
+          for (var i = 0; i < chunks.length; i++) {
+            combined.set(chunks[i], offset);
+            offset += chunks[i].length;
+          }
+          return combined.buffer;
+        }
+        chunks.push(result.value);
+        totalLength += result.value.length;
+        return read();
+      });
+    }
+    return read();
+  };
+
+  Response.prototype.text = function () {
+    return this.arrayBuffer().then(function (buf) {
+      var arr = new Uint8Array(buf);
+      var text = '';
+      for (var i = 0; i < arr.length; i++) {
+        text += String.fromCharCode(arr[i]);
+      }
+      try { return decodeURIComponent(escape(text)); } catch (e) { return text; }
+    });
+  };
+
+  Response.prototype.json = function () {
+    return this.text().then(function (t) { return JSON.parse(t); });
+  };
+
+  Response.prototype.blob = function () {
+    return this.arrayBuffer();
+  };
+
+  Response.prototype.clone = function () {
+    // Clone body: create new ReadableStream that reads from same source
+    // For simplicity, read all data first then create new response
+    var self = this;
+    if (self._buffer) {
+      return new Response(self._buffer.slice ? self._buffer.slice(0) : self._buffer, {
+        status: self.status,
+        statusText: self.statusText,
+        headers: self.headers,
+      });
+    }
+    // If body is a ReadableStream (not yet read), create a tee-like clone
+    // Simple approach: read all, then create two responses
+    // But this is called before arrayBuffer() in flow, so we need a different approach.
+    // Actually, Godot uses: const cloned = new Response(response.clone().body, {headers});
+    // So clone() returns a Response whose .body is a ReadableStream.
+    // We return a new Response with same stream (but note: stream can only be read once).
+    // For the Godot use case: response is from loadFetch (getTrackedResponse), which is
+    // a ReadableStream. Then response.clone().body is passed to new Response(), and
+    // the cloned Response's body is used in instantiateWasm via r.arrayBuffer().
+    // Since both getTrackedResponse's onloadprogress and instantiateWasm need to read,
+    // we need to tee the stream. But for simplicity in WeChat, let's buffer the whole thing.
+    var buffered = self.arrayBuffer().then(function (buf) { return buf; });
+    var resp = new Response(new ReadableStream({
+      start: function (controller) {
+        buffered.then(function (buf) {
+          var arr = new Uint8Array(buf);
+          var offset = 0;
+          function pushChunk() {
+            if (offset >= arr.length) {
+              controller.close();
+              return;
+            }
+            var chunkSize = Math.min(65536, arr.length - offset);
+            controller.enqueue(arr.slice(offset, offset + chunkSize));
+            offset += chunkSize;
+            setTimeout(pushChunk, 0);
+          }
+          pushChunk();
+        });
+      }
+    }), {
+      status: self.status,
+      statusText: self.statusText,
+      headers: self.headers,
+    });
+    // Store buffer for parent's later use
+    self.arrayBuffer = function () { return buffered; };
+    resp._bufferPromise = buffered;
+    resp.arrayBuffer = function () { return buffered; };
+    return resp;
+  };
+
+  safeDefineGlobal('Response', Response);
+
+  // ============================================================
+  // 模块 11: fetch polyfill
+  // 支持:
+  //   1. 主包内文件 (如 index.pck) → wx.getFileSystemManager().readFileSync
+  //   2. CDN URL (http:// 或 https://) → wx.downloadFile 下载（支持大文件）
+  //   3. 本地文件路径 (wx.env.USER_DATA_PATH) → fs.readFileSync
+  //   4. 本地找不到 → CDN 回退（如果配置了 _cdnBase）
+  // ============================================================
+  var _cdnBase = '';
+
+  safeDefineGlobal('_setCdnBase', function (url) {
+    _cdnBase = url.replace(/\/$/, '');
+    console.log('[WeChat Adapter] CDN base set to: ' + _cdnBase);
+  });
+
+  function readMainPackageFile(path) {
+    if (!fileSystemManager) throw new Error('File system not available');
+    // 微信小游戏中包内文件读取：
+    // - 必须用相对路径（从包根目录开始），不能用 '/' 开头（会 permission denied）
+    // - 去掉前导 './' 和 '/'
+    var filename = path.replace(/^\.\//, '').replace(/^\//, '').split('/').pop() || path;
+    // 只尝试相对路径格式（避免 / 开头导致 permission denied）
+    var attempts = [
+      filename,
+      './' + filename,
+    ];
+    var errors = [];
+    for (var i = 0; i < attempts.length; i++) {
+      try {
+        console.log('[WeChat fs] readFileSync: ' + attempts[i]);
+        var data = fileSystemManager.readFileSync(attempts[i]);
+        console.log('[WeChat fs] OK: ' + attempts[i] + ' type=' + Object.prototype.toString.call(data) + ' len=' + (data.byteLength || data.length || 0));
+        if (data instanceof ArrayBuffer) return data;
+        if (data && data.buffer instanceof ArrayBuffer) return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+        if (typeof data === 'string') {
+          var arr = new Uint8Array(data.length);
+          for (var j = 0; j < data.length; j++) arr[j] = data.charCodeAt(j) & 0xFF;
+          return arr.buffer;
+        }
+        // Uint8Array 或其他类型
+        if (data && typeof data.length === 'number') {
+          var buf = new ArrayBuffer(data.length);
+          var view = new Uint8Array(buf);
+          for (var k = 0; k < data.length; k++) view[k] = data[k];
+          return buf;
+        }
+        return data;
+      } catch (e) {
+        errors.push(attempts[i] + ': ' + e.message);
+      }
+    }
+    throw new Error('File not found in package: ' + path + ' (errors: ' + errors.join('; ') + ')');
+  }
+
+  function downloadCdnFile(url) {
+    return new Promise(function (resolve, reject) {
+      // 检查缓存
+      var fileName = '';
+      var parts = url.split('/');
+      fileName = parts[parts.length - 1].split('?')[0];
+      if (USER_DATA_PATH && fileName) {
+        var cachedPath = USER_DATA_PATH + '/' + fileName;
+        try {
+          fileSystemManager.accessSync(cachedPath);
+          var stat = fileSystemManager.statSync(cachedPath);
+          if (stat.size > 0) {
+            var cachedData = fileSystemManager.readFileSync(cachedPath);
+            var ab = cachedData instanceof ArrayBuffer ? cachedData : (cachedData.buffer ? cachedData.buffer.slice(cachedData.byteOffset, cachedData.byteOffset + cachedData.byteLength) : new ArrayBuffer(0));
+            if (ab.byteLength > 0) {
+              console.log('[WeChat] Cache hit: ' + fileName + ' (' + (ab.byteLength / 1024 / 1024).toFixed(2) + ' MB)');
+              resolve(ab);
+              return;
+            }
+          }
+        } catch (e) {}
+      }
+
+      console.log('[WeChat] Downloading: ' + url);
+      wx.downloadFile({
+        url: url,
+        success: function (res) {
+          if (res.statusCode === 200 && res.tempFilePath) {
+            try {
+              var data = fileSystemManager.readFileSync(res.tempFilePath);
+              var ab = data instanceof ArrayBuffer ? data : (data.buffer ? data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) : new ArrayBuffer(0));
+              // 缓存
+              if (USER_DATA_PATH && fileName && ab.byteLength > 0) {
+                try {
+                  fileSystemManager.writeFile({
+                    filePath: USER_DATA_PATH + '/' + fileName,
+                    data: ab,
+                    encoding: 'binary',
+                  });
+                } catch (we) {}
+              }
+              console.log('[WeChat] Downloaded: ' + fileName + ' (' + (ab.byteLength / 1024 / 1024).toFixed(2) + ' MB)');
+              resolve(ab);
+            } catch (e) {
+              reject(new Error('Read downloaded file failed: ' + e.message));
+            }
+          } else {
+            // downloadFile 失败，尝试 wx.request（小文件备用）
+            wx.request({
+              url: url,
+              method: 'GET',
+              responseType: 'arraybuffer',
+              success: function (r2) {
+                if (r2.statusCode >= 200 && r2.statusCode < 300 && r2.data) {
+                  resolve(r2.data instanceof ArrayBuffer ? r2.data : new ArrayBuffer(0));
+                } else {
+                  reject(new Error('Download failed: ' + res.statusCode));
+                }
+              },
+              fail: function () {
+                reject(new Error('Download failed: ' + res.statusCode));
+              }
+            });
+          }
+        },
+        fail: function (err) {
+          // 尝试 wx.request
+          wx.request({
+            url: url,
+            method: 'GET',
+            responseType: 'arraybuffer',
+            success: function (r2) {
+              if (r2.statusCode >= 200 && r2.statusCode < 300 && r2.data) {
+                resolve(r2.data instanceof ArrayBuffer ? r2.data : new ArrayBuffer(0));
+              } else {
+                reject(new Error(err.errMsg || 'Download failed'));
+              }
+            },
+            fail: function () {
+              reject(new Error(err.errMsg || 'Download failed'));
+            }
+          });
+        }
+      });
+    });
+  }
+
+  safeDefineGlobal('fetch', function (url, options) {
+    options = options || {};
+    var method = (options.method || 'GET').toUpperCase();
+
+    // 非 GET 请求走 wx.request
+    if (method !== 'GET') {
+      return new Promise(function (resolve, reject) {
+        wx.request({
+          url: url,
+          method: method,
+          header: options.headers || {},
+          responseType: 'arraybuffer',
+          data: options.body,
+          success: function (res) {
+            resolve(new Response(res.data instanceof ArrayBuffer ? res.data : new ArrayBuffer(0), { status: res.statusCode }));
+          },
+          fail: function (err) { reject(new Error(err.errMsg || 'fetch failed')); },
+        });
+      });
+    }
+
+    var urlStr = String(url);
+
+    // 绝对 URL (http/https)
+    if (urlStr.indexOf('http://') === 0 || urlStr.indexOf('https://') === 0) {
+      return downloadCdnFile(urlStr).then(function (ab) {
+        return new Response(ab, {
+          status: 200,
+          headers: { 'Content-Length': String(ab.byteLength) },
+        });
+      });
+    }
+
+    // file:// 协议
+    if (urlStr.indexOf('file://') === 0) {
+      urlStr = urlStr.replace('file://', '');
+    }
+
+    // USER_DATA_PATH 文件
+    if (USER_DATA_PATH && urlStr.indexOf(USER_DATA_PATH) === 0) {
+      return new Promise(function (resolve, reject) {
+        try {
+          var data = fileSystemManager.readFileSync(urlStr);
+          var ab = data instanceof ArrayBuffer ? data : (data.buffer ? data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) : new ArrayBuffer(0));
+          resolve(new Response(ab, { status: 200 }));
+        } catch (e) {
+          reject(e);
+        }
+      });
+    }
+
+    // 主包内文件
+    return new Promise(function (resolve, reject) {
+      var filename = urlStr.split('/').pop() || urlStr;
+      console.log('[WeChat fetch] Looking for: ' + filename + ' (url: ' + urlStr + ')');
+
+      // === WASM 文件特殊处理: 不读取内容，返回轻量占位 Response ===
+      // 原因: 104MB WASM 通过 getTrackedResponse 流式读取 (64KB chunk × 1664 次) 会卡死
+      // 真正的 WASM 实例化由 instantiateWasm 回调处理 (用文件路径，不经过 fetch)
+      if (filename.toLowerCase().endsWith('.wasm') || filename.toLowerCase().endsWith('.wasm.br')) {
+        console.log('[WeChat fetch] WASM file detected, returning placeholder response: ' + filename);
+        // 返回一个 1 字节的占位 ArrayBuffer，避免 null 检查失败
+        var placeholder = new ArrayBuffer(1);
+        resolve(new Response(placeholder, {
+          status: 200,
+          headers: { 'Content-Type': 'application/wasm', 'Content-Length': '1' },
+        }));
+        return;
+      }
+
+      try {
+        var data = readMainPackageFile(filename);
+        console.log('[WeChat fetch] Found in main package: ' + filename + ' (' + (data.byteLength || data.length) + ' bytes)');
+        resolve(new Response(data, {
+          status: 200,
+          headers: { 'Content-Length': String(data.byteLength || data.length || 0) },
+        }));
+      } catch (e) {
+        console.log('[WeChat fetch] Not in main package: ' + filename + ', trying CDN...');
+        // 本地找不到，尝试 CDN
+        if (_cdnBase) {
+          var cdnUrl = _cdnBase + '/' + filename;
+          console.log('[WeChat fetch] CDN URL: ' + cdnUrl);
+          downloadCdnFile(cdnUrl).then(function (ab) {
+            console.log('[WeChat fetch] CDN download OK: ' + filename + ' (' + ab.byteLength + ' bytes)');
+            resolve(new Response(ab, {
+              status: 200,
+              headers: { 'Content-Length': String(ab.byteLength) },
+            }));
+          }).catch(function(cdnErr) {
+            console.error('[WeChat fetch] CDN download failed: ' + filename + ': ' + (cdnErr.message || cdnErr));
+            reject(new Error('File not found: ' + filename + ' (main package: ' + e.message + ', CDN: ' + (cdnErr.message || cdnErr) + ')'));
+          });
+          return;
+        }
+        console.error('[WeChat fetch] No CDN base set, cannot fetch: ' + filename);
+        reject(new Error('File not found: ' + filename + ' (no CDN fallback available)'));
+      }
+    });
+  });
+
+  // ============================================================
+  // 模块 12: XMLHttpRequest polyfill
   // ============================================================
   function XMLHttpRequest() {
     this.readyState = 0;
@@ -250,6 +1305,9 @@
     this._headers = {};
     this._method = 'GET';
     this._url = '';
+    this.onreadystatechange = null;
+    this.onload = null;
+    this.onerror = null;
   }
   XMLHttpRequest.prototype.open = function (method, url) {
     this._method = method;
@@ -263,115 +1321,153 @@
   XMLHttpRequest.prototype.getResponseHeader = function () { return null; };
   XMLHttpRequest.prototype.send = function (body) {
     var self = this;
-    wx.request({
-      url: this._url,
-      method: this._method,
-      header: this._headers,
-      responseType: this.responseType === 'arraybuffer' ? 'arraybuffer' : 'text',
-      data: body,
-      success: function (res) {
-        self.status = res.statusCode;
-        self.responseText = typeof res.data === 'string' ? res.data : '';
-        self.response = res.data;
-        self.readyState = 4;
-        if (self.onreadystatechange) self.onreadystatechange();
-        if (self.onload) self.onload();
-      },
-      fail: function (err) {
-        self.status = 0;
-        self.readyState = 4;
-        if (self.onerror) self.onerror(err);
-      },
+    globalThis.fetch(this._url, { method: this._method, headers: this._headers, body: body }).then(function (response) {
+      if (self.responseType === 'arraybuffer') {
+        response.arrayBuffer().then(function (buf) {
+          self.status = response.status;
+          self.response = buf;
+          self.readyState = 4;
+          if (self.onreadystatechange) self.onreadystatechange();
+          if (self.onload) self.onload();
+        });
+      } else {
+        response.text().then(function (text) {
+          self.status = response.status;
+          self.responseText = text;
+          self.response = text;
+          self.readyState = 4;
+          if (self.onreadystatechange) self.onreadystatechange();
+          if (self.onload) self.onload();
+        });
+      }
+    }).catch(function (err) {
+      self.status = 0;
+      self.readyState = 4;
+      if (self.onerror) self.onerror(err);
     });
   };
-  XMLHttpRequest.prototype.abort = function () {
-    this.readyState = 0;
-  };
-  globalThis.XMLHttpRequest = XMLHttpRequest;
+  XMLHttpRequest.prototype.abort = function () { this.readyState = 0; };
+  safeDefineGlobal('XMLHttpRequest', XMLHttpRequest);
 
   // ============================================================
-  // 模块 11: WebGL/WebGL2 context 增强
-  // 微信 Canvas 的 WebGL2 context 已可用，这里确保扩展属性齐全
+  // 模块 13: WebGL context
   // ============================================================
-  var _webglExtensions = ['EXT_blend_minmax', 'OES_texture_float', 'OES_standard_derivatives'];
-  globalThis.WebGLRenderingContext = globalThis.WebGLRenderingContext || function () {};
-  if (typeof WebGL2RenderingContext !== 'undefined') {
-    var _origGetExtension = WebGL2RenderingContext.prototype.getExtension;
-    WebGL2RenderingContext.prototype.getExtension = function (name) {
-      if (_webglExtensions.indexOf(name) >= 0) return _origGetExtension ? _origGetExtension.call(this, name) : null;
-      return _origGetExtension ? _origGetExtension.call(this, name) : null;
-    };
-  }
+  safeDefineGlobal('WebGLRenderingContext', globalThis.WebGLRenderingContext || function () {});
+  safeDefineGlobal('WebGL2RenderingContext', globalThis.WebGL2RenderingContext || function () {});
 
   // ============================================================
-  // 模块 12: performance.now polyfill
-  // 微信: wx.getPerformance().now()
+  // 模块 14: performance.now polyfill
   // ============================================================
-  globalThis.performance = globalThis.performance || {
+  safeDefineGlobal('performance', globalThis.performance || {
     now: function () {
       if (wx.getPerformance) {
         return wx.getPerformance().now();
       }
       return Date.now();
     },
-  };
+  });
 
   // ============================================================
-  // 模块 13: DevicePixelRatio polyfill
-  // 微信: wx.getSystemInfoSync().pixelRatio
+  // 模块 15: devicePixelRatio
   // ============================================================
   if (typeof globalThis.devicePixelRatio === 'undefined') {
     try {
-      globalThis.devicePixelRatio = wx.getSystemInfoSync().pixelRatio;
+      safeDefineGlobal('devicePixelRatio', wx.getSystemInfoSync().pixelRatio);
     } catch (e) {
-      globalThis.devicePixelRatio = 1;
+      safeDefineGlobal('devicePixelRatio', 1);
     }
   }
 
   // ============================================================
-  // 全局 window / document 最小化 shim
-  // Godot index.js 会访问 window 和 document 的部分属性
+  // 模块 16: navigator.languages
   // ============================================================
-  globalThis.window = globalThis.window || globalThis;
-  globalThis.navigator = globalThis.navigator || {
+  safeDefineGlobal('navigator', globalThis.navigator || {
     userAgent: 'WeChat MiniGame',
     language: 'zh-CN',
+    languages: ['zh-CN', 'en'],
     platform: 'wechat',
-  };
+    onLine: true,
+  });
+  if (!globalThis.navigator.languages) {
+    globalThis.navigator.languages = ['zh-CN', 'en'];
+  }
 
-  // document 最小化 shim
-  globalThis.document = globalThis.document || {
+  // ============================================================
+  // 模块 17: window polyfill
+  // ============================================================
+  safeDefineGlobal('window', globalThis.window || globalThis);
+
+  // ============================================================
+  // 模块 18: document polyfill
+  // 关键: getElementsByTagName('canvas') 必须返回 wx canvas，且 instanceof HTMLCanvasElement
+  // ============================================================
+  var _document = {
     createElement: function (tagName) {
       if (tagName === 'canvas') return getMainCanvas();
       if (tagName === 'img') return new HTMLImageElement();
-      return { style: {}, appendChild: function () {} };
+      return { style: {}, appendChild: function () {}, addEventListener: function () {}, removeEventListener: function () {} };
     },
-    getElementById: function () { return null; },
+    getElementById: function (id) {
+      if (id === 'canvas') return getMainCanvas();
+      return null;
+    },
+    getElementsByTagName: function (tagName) {
+      if (tagName === 'canvas') {
+        var arr = [getMainCanvas()];
+        arr.length = 1;
+        return arr;
+      }
+      var empty = [];
+      empty.length = 0;
+      return empty;
+    },
+    querySelector: function (sel) {
+      if (sel === 'canvas' || sel === '#canvas') return getMainCanvas();
+      return null;
+    },
     addEventListener: function () {},
     removeEventListener: function () {},
-    body: { appendChild: function () {}, removeChild: function () {} },
-    documentElement: { style: {} },
+    body: {
+      appendChild: function () {},
+      removeChild: function () {},
+      style: {},
+      addEventListener: function () {},
+      removeEventListener: function () {},
+    },
+    documentElement: { style: {}, addEventListener: function () {}, removeEventListener: function () {} },
     hidden: false,
     visibilityState: 'visible',
+    currentScript: null,
+    location: { href: '', pathname: '', origin: '', search: '' },
+    title: '',
   };
+  safeDefineGlobal('document', _document);
 
   // ============================================================
-  // 路径解析: 在本地缓存和包内路径间查找
-  // - 首先查 USER_DATA_PATH 缓存 (CDN 已下载)
-  // - 然后查包内 (主包或分包)
+  // 模块 19: requestAnimationFrame
   // ============================================================
-  var USER_DATA_PATH = wx.env && wx.env.USER_DATA_PATH ? wx.env.USER_DATA_PATH : '';
-  globalThis._resolveFilePath = function (filename) {
-    // 1. 本地缓存
-    if (USER_DATA_PATH) {
-      var cachedPath = USER_DATA_PATH + '/' + filename;
-      if (globalThis.fs.existsSync(cachedPath)) {
-        return cachedPath;
-      }
+  if (typeof globalThis.requestAnimationFrame === 'undefined') {
+    var canvas = getMainCanvas();
+    if (canvas.requestAnimationFrame) {
+      safeDefineGlobal('requestAnimationFrame', canvas.requestAnimationFrame.bind(canvas));
+      safeDefineGlobal('cancelAnimationFrame', (canvas.cancelAnimationFrame || function (id) { clearTimeout(id); }).bind(canvas));
+    } else {
+      var _rafId = 0;
+      safeDefineGlobal('requestAnimationFrame', function (cb) {
+        _rafId++;
+        return setTimeout(function () { cb(Date.now()); }, 16);
+      });
+      safeDefineGlobal('cancelAnimationFrame', function (id) { clearTimeout(id); });
     }
-    // 2. 包内
-    return filename;
-  };
+  }
 
-  console.log('[WeChat Adapter] All 13 polyfill modules loaded.');
+  // ============================================================
+  // 模块 20: 其他必要 polyfill
+  // ============================================================
+  if (typeof globalThis.HTMLElement === 'undefined') {
+    function HTMLElement() {}
+    safeDefineGlobal('HTMLElement', HTMLElement);
+  }
+
+  console.log('[WeChat Adapter] All polyfill modules loaded successfully.');
 })();

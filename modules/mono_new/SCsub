@@ -161,7 +161,7 @@ elif mono_static:
             "-s", "EXPORTED_RUNTIME_METHODS=['ccall','cwrap','stringToUTF8','UTF8ToString','FS']",
             "-s", "ERROR_ON_UNDEFINED_SYMBOLS=0",
             "-s", "WARN_ON_UNDEFINED_SYMBOLS=0",
-            "-O1",
+            "-O0",
             "--profiling-funcs",
         ])
         # Provide JS implementations of Mono WASM runtime functions

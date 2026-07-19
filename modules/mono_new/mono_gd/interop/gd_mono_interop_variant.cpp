@@ -787,25 +787,17 @@ static mono_bool icall_Input_IsActionPressed(MonoString *p_action) {
 
 static int64_t icall_CreateObject(MonoString *p_class_name) {
 	if (!p_class_name) {
-		printf("[DIAG] icall_CreateObject: NULL class_name!\n");
-		fflush(stdout);
 		return 0;
 	}
 	char *utf8 = mono_string_to_utf8(p_class_name);
 	if (!utf8) return 0;
 	String class_name = String::utf8(utf8);
 	mono_free(utf8);
-	printf("[DIAG] icall_CreateObject: CALLED with class_name='%s'\n", class_name.utf8().get_data());
-	fflush(stdout);
 	Object *obj = ClassDB::instantiate(class_name);
 	if (!obj) {
-		printf("[DIAG] icall_CreateObject: FAILED to instantiate '%s'\n", class_name.utf8().get_data());
-		fflush(stdout);
 		MonoLogger::log_error("Failed to create object of type: " + class_name);
 		return 0;
 	}
-	printf("[DIAG] icall_CreateObject: SUCCESS obj=%p\n", (void*)obj);
-	fflush(stdout);
 	return (int64_t)(intptr_t)obj;
 }
 

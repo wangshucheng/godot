@@ -659,74 +659,21 @@ bool CSharpInstance::initialize(Object *p_owner) {
 		if (native_field) {
 			int64_t value = (int64_t)(intptr_t)p_owner;
 			mono_field_set_value(mono_object, native_field, &value);
-
-			// [DIAG] Read back the field to verify it was actually set in WASM
-			int64_t readback = 0;
-			mono_field_get_value(mono_object, native_field, &readback);
-			printf("[DIAG] initialize: set nativeInstance=%lld, readback=%lld (owner=%p, match=%d)\n",
-				(long long)value, (long long)readback, (void*)p_owner, (readback == value ? 1 : 0));
-			fflush(stdout);
-		} else {
-			printf("[DIAG] initialize: nativeInstance field NOT FOUND on GodotObject!\n");
-			fflush(stdout);
 		}
-	} else {
-		printf("[DIAG] initialize: GodotObject base class NOT FOUND in inheritance chain!\n");
-		fflush(stdout);
 	}
 
-	// Now call the C# constructor. For scene-loaded nodes, nativeInstance is
-	// already set, so constructors skip CreateObject. For user `new Node2D()`,
-	// nativeInstance is zero, so constructors create the native object.
-	printf("[DIAG] initialize: calling constructor for %s (mono_object=%p)\n", mono_class_get_name(raw_class), (void*)mono_object);
-	fflush(stdout);
+	// [WASM WORKAROUND] In WEB_ENABLED mode, skip the constructor call entirely.
+	// The Mono WASM interpreter crashes with "function signature mismatch" when
+	// calling mono_runtime_object_init on user types. Since nativeInstance is
+	// already set above, and mono_object_new zeroes all fields (so ownsNative=false,
+	// disposed=false by default), skipping the constructor is safe for scene-loaded
+	// nodes. User-created objects (new Node2D()) won't get their native object
+	// created, but that's a separate issue to address later.
+#ifdef WEB_ENABLED
+	// Skip constructor in WASM mode - nativeInstance is already set.
+#else
 	mono_runtime_object_init(mono_object);
-	printf("[DIAG] initialize: constructor returned OK\n");
-	fflush(stdout);
-
-	// Diagnostic: check if Godot.GD class and Print method are findable
-	{
-		GDMono *gdmono = GDMono::get_singleton();
-		if (gdmono && gdmono->get_godotsharp_image()) {
-			MonoImage *gs_image = gdmono->get_godotsharp_image();
-			printf("[DIAG] init: GodotSharp image name=%s\n", mono_image_get_name(gs_image));
-			fflush(stdout);
-
-			MonoClass *gd_class = mono_class_from_name(gs_image, "Godot", "GD");
-			printf("[DIAG] init: Godot.GD class=%p\n", (void*)gd_class);
-			fflush(stdout);
-
-			if (gd_class) {
-				// Try to find Print method with param_count=1 (should match Print(string))
-				MonoMethod *print_str = mono_class_get_method_from_name(gd_class, "Print", 1);
-				printf("[DIAG] init: GD.Print(1 param)=%p\n", (void*)print_str);
-				fflush(stdout);
-
-				// Try with param_count=-1 (any)
-				MonoMethod *print_any = mono_class_get_method_from_name(gd_class, "Print", -1);
-				printf("[DIAG] init: GD.Print(-1 param)=%p\n", (void*)print_any);
-				fflush(stdout);
-
-				// Try to find PrintErr with param_count=1
-				MonoMethod *printerr_str = mono_class_get_method_from_name(gd_class, "PrintErr", 1);
-				printf("[DIAG] init: GD.PrintErr(1 param)=%p\n", (void*)printerr_str);
-				fflush(stdout);
-
-				// Try Randi (no params)
-				MonoMethod *randi = mono_class_get_method_from_name(gd_class, "Randi", 0);
-				printf("[DIAG] init: GD.Randi(0 param)=%p\n", (void*)randi);
-				fflush(stdout);
-
-				// Try godot_icall_GD_Print (the internal call)
-				MonoMethod *icall_print = mono_class_get_method_from_name(gd_class, "godot_icall_GD_Print", 1);
-				printf("[DIAG] init: GD.godot_icall_GD_Print(1 param)=%p\n", (void*)icall_print);
-				fflush(stdout);
-			}
-		} else {
-			printf("[DIAG] init: GodotSharp image is NULL!\n");
-			fflush(stdout);
-		}
-	}
+#endif
 
 	return true;
 }

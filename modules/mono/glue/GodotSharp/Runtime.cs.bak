@@ -271,32 +271,5 @@ namespace Godot {
         public static void TestResetCounters() {
             Bridge.godot_icall_Test_ResetCounters();
         }
-
-        // ===== WeChat minigame audio adapter (InnerAudioContext-based) =====
-        // Desktop platforms: stubs (return 0 / no-op).
-        // WeChat minigame: routes to GameGlobal.GodotAudioWX via EM_ASM.
-        // Returns audio id (>0) on success, 0 on failure or unsupported platform.
-        public static int WxAudioPlay(string src, bool loop) {
-            return Bridge.godot_icall_WXAudio_Play(src, loop ? 1 : 0);
-        }
-        public static void WxAudioStop(int id) {
-            Bridge.godot_icall_WXAudio_Stop(id);
-        }
-        public static void WxAudioStopAll() {
-            Bridge.godot_icall_WXAudio_StopAll();
-        }
-        // volume: 0.0~1.0 (will be scaled to int 0~100 in icall)
-        public static void WxAudioSetVolume(int id, float volume) {
-            int vol_x100 = (int)(volume * 100.0f);
-            if (vol_x100 < 0) vol_x100 = 0;
-            if (vol_x100 > 100) vol_x100 = 100;
-            Bridge.godot_icall_WXAudio_SetVolume(id, vol_x100);
-        }
-        public static void WxAudioPause(int id) {
-            Bridge.godot_icall_WXAudio_Pause(id);
-        }
-        public static void WxAudioResume(int id) {
-            Bridge.godot_icall_WXAudio_Resume(id);
-        }
     }
 }

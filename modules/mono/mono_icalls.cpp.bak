@@ -2156,74 +2156,6 @@ static void godot_icall_Dict_Dispose(intptr_t ptr) {
 	memdelete(dict);
 }
 
-// ===== WeChat minigame audio adapter (InnerAudioContext-based) =====
-// WASM 平台：调用 mono_wasm_glue.cpp 中的 godot_wx_audio_* 桥接函数，
-//            最终通过 EM_ASM 调用 GameGlobal.GodotAudioWX.* JS API。
-// 桌面平台：stub（返回 0 / 无操作），不影响测试。
-#ifdef WEB_ENABLED
-extern "C" {
-int32_t godot_wx_audio_play(const char *src, int32_t loop);
-void godot_wx_audio_stop(int32_t id);
-void godot_wx_audio_stop_all(void);
-void godot_wx_audio_set_volume(int32_t id, int32_t vol_x100);
-void godot_wx_audio_pause(int32_t id);
-void godot_wx_audio_resume(int32_t id);
-}
-#endif
-
-static int32_t godot_icall_WXAudio_Play(MonoString *src, int32_t loop) {
-	if (!src) return 0;
-	char *utf8 = mono_string_to_utf8(src);
-	if (!utf8) return 0;
-#ifdef WEB_ENABLED
-	int32_t id = godot_wx_audio_play(utf8, loop);
-#else
-	// Desktop stub: print debug log, return 0 (no audio).
-	printf("[WXAudio] Play (desktop stub): src=%s loop=%d\n", utf8, loop);
-	int32_t id = 0;
-#endif
-	mono_free(utf8);
-	return id;
-}
-
-static void godot_icall_WXAudio_Stop(int32_t id) {
-#ifdef WEB_ENABLED
-	godot_wx_audio_stop(id);
-#else
-	(void)id; // Desktop stub: no-op
-#endif
-}
-
-static void godot_icall_WXAudio_StopAll() {
-#ifdef WEB_ENABLED
-	godot_wx_audio_stop_all();
-#endif
-}
-
-static void godot_icall_WXAudio_SetVolume(int32_t id, int32_t volume_x100) {
-#ifdef WEB_ENABLED
-	godot_wx_audio_set_volume(id, volume_x100);
-#else
-	(void)id; (void)volume_x100; // Desktop stub: no-op
-#endif
-}
-
-static void godot_icall_WXAudio_Pause(int32_t id) {
-#ifdef WEB_ENABLED
-	godot_wx_audio_pause(id);
-#else
-	(void)id; // Desktop stub: no-op
-#endif
-}
-
-static void godot_icall_WXAudio_Resume(int32_t id) {
-#ifdef WEB_ENABLED
-	godot_wx_audio_resume(id);
-#else
-	(void)id; // Desktop stub: no-op
-#endif
-}
-
 void godot_register_icalls() {
 	// All internalcalls are declared in Godot.Bridge (matching our compiled GodotSharp.dll)
 	mono_add_internal_call("Godot.Bridge::godot_icall_GD_Print", (const void *)godot_icall_GD_Print);
@@ -2384,14 +2316,6 @@ void godot_register_icalls() {
 	mono_add_internal_call("Godot.Bridge::godot_icall_Dict_Remove", (const void *)godot_icall_Dict_Remove);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Dict_Clear", (const void *)godot_icall_Dict_Clear);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Dict_Dispose", (const void *)godot_icall_Dict_Dispose);
-
-	// WeChat minigame audio adapter (InnerAudioContext-based)
-	mono_add_internal_call("Godot.Bridge::godot_icall_WXAudio_Play", (const void *)godot_icall_WXAudio_Play);
-	mono_add_internal_call("Godot.Bridge::godot_icall_WXAudio_Stop", (const void *)godot_icall_WXAudio_Stop);
-	mono_add_internal_call("Godot.Bridge::godot_icall_WXAudio_StopAll", (const void *)godot_icall_WXAudio_StopAll);
-	mono_add_internal_call("Godot.Bridge::godot_icall_WXAudio_SetVolume", (const void *)godot_icall_WXAudio_SetVolume);
-	mono_add_internal_call("Godot.Bridge::godot_icall_WXAudio_Pause", (const void *)godot_icall_WXAudio_Pause);
-	mono_add_internal_call("Godot.Bridge::godot_icall_WXAudio_Resume", (const void *)godot_icall_WXAudio_Resume);
 
 	printf("[Mono] Registered all internal calls (Godot.Bridge::*).\n");
 	fflush(stdout);

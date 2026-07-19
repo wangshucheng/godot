@@ -430,27 +430,5 @@ namespace Godot {
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern void godot_icall_Dict_Dispose(IntPtr ptr);
-
-        // WeChat minigame audio adapter (InnerAudioContext-based).
-        // Returns audio id (0 on failure). loop: 0=false, 1=true.
-        // Desktop platforms stub: return 0 / no-op.
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        internal static extern int godot_icall_WXAudio_Play(string src, int loop);
-
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        internal static extern void godot_icall_WXAudio_Stop(int id);
-
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        internal static extern void godot_icall_WXAudio_StopAll();
-
-        // volume_x100: 0~100 (0.0~1.0 scaled by 100 to avoid float ABI issues)
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        internal static extern void godot_icall_WXAudio_SetVolume(int id, int volume_x100);
-
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        internal static extern void godot_icall_WXAudio_Pause(int id);
-
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        internal static extern void godot_icall_WXAudio_Resume(int id);
     }
 }

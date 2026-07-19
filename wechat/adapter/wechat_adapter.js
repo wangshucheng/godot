@@ -200,19 +200,72 @@
 
   // ============================================================
   // 模块 0b: _resolveWasmPath - 解析 WASM 文件路径
-  // 优先主包 -> 缓存 -> CDN 下载
+  // F4 修复（分包方案）: 优先分包 -> 主包 -> USER_DATA_PATH 缓存 -> CDN 下载
+  //   分包路径（如 "wasm_pkg/Game2048.wasm.br"）是裸相对路径，无 wxfile:/http: 前缀，
+  //   是 WXWebAssembly.instantiate 唯一接受的格式（devtool/真机均如此）。
+  //   USER_DATA_PATH 缓存路径（http://usr/... 或 wxfile://...）仅真机可用，devtool 拒绝。
   // ============================================================
+
+  // 加载分包（如果已加载则立即 resolve）。返回 Promise。
+  function _ensureSubpkgLoaded(subpkgName) {
+    if (!subpkgName) return Promise.resolve();
+    return new Promise(function (resolve, reject) {
+      // 微信小游戏 wx.loadSubpackage 在已加载时会立即 success
+      if (typeof wx !== 'undefined' && typeof wx.loadSubpackage === 'function') {
+        wx.loadSubpackage({
+          name: subpkgName,
+          success: function () { console.log('[WeChat] Subpackage loaded: ' + subpkgName); resolve(); },
+          fail: function (err) { console.warn('[WeChat] Subpackage load failed: ' + subpkgName + ': ' + (err.errMsg || 'unknown')); reject(new Error('Subpackage ' + subpkgName + ' load failed')); },
+        });
+      } else {
+        // 不支持 loadSubpackage（老版本），假设已可用
+        resolve();
+      }
+    });
+  }
+
   safeDefineGlobal('_resolveWasmPath', function () {
     var wasmFileName = globalThis._wasmFileName || 'index.wasm';
     var cdnBaseUrl = globalThis._cdnBaseUrl || '';
-    // F4 修复: 优先使用 .wasm.br（29MB vs 104MB）
-    // WXWebAssembly 原生支持 .wasm.br 自动解压（不需要 JS 层解压）
+    var wasmSubpkg = globalThis._wasmSubpkg || '';
+    var brInSubpkg = globalThis._wasmBrInSubpkg === true;
     var brFileName = wasmFileName + '.br';
 
     // 候选文件列表：优先 .wasm.br，回退 .wasm
     var candidates = [brFileName, wasmFileName];
 
-    // 1. 尝试主包内文件（先 .wasm.br 再 .wasm）
+    // 1. 分包内 .wasm.br（F4 主路径 - 唯一在 devtool 和真机都可用的方案）
+    if (wasmSubpkg && brInSubpkg) {
+      var subpkgBrPath = wasmSubpkg + '/' + brFileName;
+      return _ensureSubpkgLoaded(wasmSubpkg).then(function () {
+        try {
+          fileSystemManager.accessSync(subpkgBrPath);
+          console.log('[WeChat] WASM in subpackage: ' + subpkgBrPath);
+          return subpkgBrPath;
+        } catch (e) {
+          console.warn('[WeChat] Subpackage accessible but file not found: ' + subpkgBrPath + ' (' + e.message + ')');
+          throw e;
+        }
+      }).catch(function (loadErr) {
+        // 分包加载失败，回退到主包/CDN 路径
+        console.warn('[WeChat] Subpackage fallback to main/CDN: ' + loadErr.message);
+        return null;
+      }).then(function (path) {
+        if (path) return path;
+        // 继续后续候选
+        return _resolveWasmFallback(candidates, cdnBaseUrl);
+      });
+    }
+
+    return _resolveWasmFallback(candidates, cdnBaseUrl);
+  });
+
+  // 回退路径：主包 -> USER_DATA_PATH 缓存 -> CDN 下载
+  function _resolveWasmFallback(candidates, cdnBaseUrl) {
+    var wasmFileName = globalThis._wasmFileName || 'index.wasm';
+    var brFileName = wasmFileName + '.br';
+
+    // 2. 尝试主包内文件（先 .wasm.br 再 .wasm）
     for (var i = 0; i < candidates.length; i++) {
       var fname = candidates[i];
       try {
@@ -222,7 +275,7 @@
       } catch (e) {}
     }
 
-    // 2. 检查 USER_DATA_PATH 缓存
+    // 3. 检查 USER_DATA_PATH 缓存（仅真机可用，devtool 路径为 http://usr/... 被拒绝）
     if (USER_DATA_PATH) {
       for (var i = 0; i < candidates.length; i++) {
         var fname = candidates[i];
@@ -237,7 +290,7 @@
       }
     }
 
-    // 3. 从 CDN 下载（优先 .wasm.br）
+    // 4. 从 CDN 下载（优先 .wasm.br）
     if (!cdnBaseUrl) {
       return Promise.reject(new Error('No CDN URL for WASM download'));
     }
@@ -307,7 +360,7 @@
       console.warn('[WeChat] .wasm.br failed: ' + brErr.message + ', trying .wasm');
       return downloadOne(wasmFileName);
     });
-  });
+  }
 
   // ============================================================
   // 模块 0c: _resolveWasmBuffer - 解析 WASM 路径并读取为 ArrayBuffer

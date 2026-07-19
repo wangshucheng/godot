@@ -181,7 +181,8 @@ MonoCallableCustom::MonoCallableCustom(Object *p_object, MonoObject *p_delegate,
 	method_name = p_method;
 	if (p_delegate) {
 		// S2 修复: 使用 pinned gchandle 钉住 delegate，防止 SGen GC 移动后悬垂
-		gchandle = mono_gchandle_new_pinned(p_delegate);
+		// 注意: 精简版 mono-publib.h 只声明了 mono_gchandle_new(obj, pinned)，无独立 _pinned 后缀 API
+		gchandle = mono_gchandle_new(p_delegate, /*pinned=*/1);
 	} else {
 		gchandle = 0;
 	}

@@ -638,7 +638,8 @@ bool CSharpInstance::initialize(Object *p_owner) {
 
 	// S1 修复: 创建 pinned gchandle 防止 SGen GC 移动/回收 mono_object
 	// pinned=1 钉住对象地址，GC 不会移动它；所有后续 mono_object 使用都安全
-	mono_object_gchandle = mono_gchandle_new_pinned(mono_object);
+	// 注意: 精简版 mono-publib.h 只声明了 mono_gchandle_new(obj, pinned)，无独立 _pinned 后缀 API
+	mono_object_gchandle = mono_gchandle_new(mono_object, /*pinned=*/1);
 
 	// Set nativeInstance BEFORE calling the constructor, so C# constructors
 	// can check `if (nativeInstance == IntPtr.Zero)` and skip native object

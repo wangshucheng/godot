@@ -262,7 +262,7 @@ PROJECT_CONFIG_TEMPLATE = {
 }
 
 
-def patch_index_js(content: str, cdn_url: str, wasm_file: str, data_file: str, pck_file: str, file_sizes: dict, executable: str, pck_embedded: bool) -> str:
+def patch_index_js(content: str, cdn_url: str, wasm_file: str, data_file: str, pck_file: str, file_sizes: dict, executable: str, pck_embedded: bool, wasm_subpkg: str = "", wasm_br_in_subpkg: bool = False) -> str:
     """对 Godot index.js 应用核心修补点"""
     # 1. 在文件开头注入变量
     vars_block = WECHAT_VARS_TEMPLATE.format(
@@ -273,6 +273,8 @@ def patch_index_js(content: str, cdn_url: str, wasm_file: str, data_file: str, p
         executable=executable,
         file_sizes=json.dumps(file_sizes),
         pck_embedded="true" if pck_embedded else "false",
+        wasm_subpkg=wasm_subpkg,
+        wasm_br_in_subpkg="true" if wasm_br_in_subpkg else "false",
     )
     content = vars_block + "\n\n" + content
 
@@ -931,17 +933,52 @@ def convert(source_dir: str, output_dir: str, cdn_url: str) -> str:
     file_sizes = {}
 
     # 3. 处理 WASM 文件
+    # F4 修复: 优先使用 .wasm.br 分包方案
+    #   - .wasm.br 放入分包（20MB 限制），WXWebAssembly.instantiate 自动解压
+    #   - 无 .wasm.br 时: 小 .wasm 放主包，大 .wasm 走 CDN（真机 wxfile 路径）
     wasm_size = wasm_file.stat().st_size
     wasm_size_mb = wasm_size / (1024 * 1024)
     wasm_in_main = wasm_size_mb <= 3.8
     wasm_output_name = f"{executable_name}.wasm"
     file_sizes[wasm_output_name] = wasm_size
 
-    if wasm_in_main:
-        shutil.copy(wasm_file, output / wasm_output_name)
-        print(f"[Copy] {wasm_file.name} -> {wasm_output_name} ({wasm_size_mb:.2f} MB, in main package)")
-    else:
-        print(f"[CDN]  {wasm_file.name} ({wasm_size_mb:.2f} MB) -> CDN (exceeds 4MB limit)")
+    # 查找同名 .wasm.br（Brotli 压缩，微信原生支持自动解压）
+    wasm_br_file = wasm_file.with_suffix(".wasm.br")
+    wasm_br_in_subpkg = False
+    wasm_subpkg_name = ""
+
+    if wasm_br_file.exists():
+        br_size = wasm_br_file.stat().st_size
+        br_size_mb = br_size / (1024 * 1024)
+        if br_size_mb <= 19.0:  # 分包限 20MB，留 1MB 余量
+            # 创建分包目录并复制 .wasm.br
+            subpkg_dir = output / WASM_SUBPACKAGE_ROOT.rstrip("/")
+            subpkg_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy(wasm_br_file, subpkg_dir / f"{executable_name}.wasm.br")
+            # 微信小游戏分包硬性要求：每个分包 root 下必须有 game.js 入口文件
+            # 否则报错 "未找到 [subpackages][N][root] 对应的 /xxx/game.js 文件"
+            # 并可能回退识别为小程序而非小游戏
+            subpkg_entry = subpkg_dir / "game.js"
+            subpkg_entry.write_text(
+                f"// {WASM_SUBPACKAGE_NAME} subpackage entry (auto-generated)\n"
+                f"// 本分包仅用于承载 {executable_name}.wasm.br，无需任何 JS 逻辑\n",
+                encoding="utf-8"
+            )
+            wasm_br_in_subpkg = True
+            wasm_subpkg_name = WASM_SUBPACKAGE_NAME
+            print(f"[Subpkg] {wasm_br_file.name} -> {WASM_SUBPACKAGE_ROOT}{executable_name}.wasm.br ({br_size_mb:.2f} MB, in subpackage)")
+            print(f"[Subpkg] Wrote {WASM_SUBPACKAGE_ROOT}game.js (subpackage entry stub)")
+            file_sizes[f"{wasm_output_name}.br"] = br_size
+        else:
+            print(f"[CDN]  {wasm_br_file.name} ({br_size_mb:.2f} MB) -> CDN (exceeds 20MB subpackage limit)")
+
+    if not wasm_br_in_subpkg:
+        # 无 .wasm.br 分包，按原逻辑处理 .wasm
+        if wasm_in_main:
+            shutil.copy(wasm_file, output / wasm_output_name)
+            print(f"[Copy] {wasm_file.name} -> {wasm_output_name} ({wasm_size_mb:.2f} MB, in main package)")
+        else:
+            print(f"[CDN]  {wasm_file.name} ({wasm_size_mb:.2f} MB) -> CDN (exceeds 4MB limit)")
 
     # 4. 处理 PCK 文件
     # 微信小游戏不允许 readFileSync 读取包内 .pck 文件（permission denied）
@@ -1007,14 +1044,24 @@ def convert(source_dir: str, output_dir: str, cdn_url: str) -> str:
         file_sizes=file_sizes,
         executable=executable_name,
         pck_embedded=pck_embedded,
+        wasm_subpkg=wasm_subpkg_name,
+        wasm_br_in_subpkg=wasm_br_in_subpkg,
     )
     (output / "index.js").write_text(patched_content, encoding='utf-8')
     print(f"[Write] index.js (patched, {len(patched_content)} chars)")
 
-    # 8. 生成 game.json
+    # 8. 生成 game.json（动态追加 .wasm.br 分包）
+    game_json = dict(GAME_JSON_TEMPLATE)
+    if wasm_br_in_subpkg:
+        game_json["subpackages"] = [{
+            "name": WASM_SUBPACKAGE_NAME,
+            "root": WASM_SUBPACKAGE_ROOT,
+        }]
+        print(f"[Write] game.json (with subpackage: {WASM_SUBPACKAGE_NAME})")
+    else:
+        print(f"[Write] game.json (no subpackage)")
     with open(output / "game.json", "w", encoding="utf-8") as f:
-        json.dump(GAME_JSON_TEMPLATE, f, ensure_ascii=False, indent=2)
-    print(f"[Write] game.json")
+        json.dump(game_json, f, ensure_ascii=False, indent=2)
 
     # 9. 生成 project.config.json
     with open(output / "project.config.json", "w", encoding="utf-8") as f:

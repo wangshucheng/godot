@@ -149,12 +149,14 @@ SignalAwaiterCallable::SignalAwaiterCallable(Object *p_source, uint32_t p_awaite
 }
 
 SignalAwaiterCallable::~SignalAwaiterCallable() {
-	// S3 修复: 不再在 C++ 析构时释放 gchandle。
-	// C# SignalAwaiter 终结器 (~SignalAwaiter) 会释放 _selfHandle，
-	// C++ 再释放会导致双重释放（同一个 handle 被 free 两次，UB）。
-	// gchandle 的所有权归 C# SignalAwaiter 对象所有。
-	// 这里仅清零标记，不调用 mono_gchandle_free。
-	awaiter_gchandle = 0;
+	// S3 修复(v2): gchandle 所有权归 C++ 侧，与连接同寿命。
+	// OneShot 触发后（或源对象销毁/断开连接时）Callable 析构，在此释放 gchandle，
+	// 解除对 C# SignalAwaiter 的根引用，awaiter 及其 continuation 随后可被 GC 回收。
+	// C# 侧不再释放该 handle（原"双重释放"与"强句柄自根化导致永不释放"均已消除）。
+	if (awaiter_gchandle != 0) {
+		mono_gchandle_free(awaiter_gchandle);
+		awaiter_gchandle = 0;
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -165,6 +167,8 @@ bool GDSignalAwaiter::connect_signal_awaiter(Object *p_source, const StringName 
 	if (!p_source || p_awaiter_gchandle == 0) return false;
 	if (!p_source->has_signal(p_signal)) {
 		MonoLogger::log_warning(vformat("connect_signal_awaiter: object has no signal '%s'", String(p_signal)));
+		// gchandle 所有权自 icall 进入 C++ 侧，失败路径也必须释放，否则强句柄自根化泄漏
+		mono_gchandle_free(p_awaiter_gchandle);
 		return false;
 	}
 

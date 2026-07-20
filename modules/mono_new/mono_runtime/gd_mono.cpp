@@ -784,26 +784,27 @@ MonoClass *GDMono::get_class(const String &p_namespace, const String &p_class_na
 
 	MonoClass *klass = nullptr;
 
+	// S4 修复: p_namespace.utf8() 返回临时 CharString，直接存 .get_data() 会悬垂；
+	// 统一先保存到局部变量延长生命周期（整个函数内有效）。
+	CharString ns_utf8 = p_namespace.utf8();
+	CharString class_utf8 = p_class_name.utf8();
+
 	for (const UserAssembly &ua : user_assemblies) {
 		if (ua.image) {
 			klass = mono_class_from_name(ua.image,
-					p_namespace.utf8().get_data(),
-					p_class_name.utf8().get_data());
+					ns_utf8.get_data(),
+					class_utf8.get_data());
 			if (klass) return klass;
 		}
 	}
 
 	if (godotsharp_image) {
 		klass = mono_class_from_name(godotsharp_image,
-				p_namespace.utf8().get_data(),
-				p_class_name.utf8().get_data());
+				ns_utf8.get_data(),
+				class_utf8.get_data());
 		if (klass) return klass;
 	}
 
-	// S4 修复: p_namespace.utf8() 返回临时 CharString，原代码将其存入数组后
-	// 临时对象立即销毁，namespaces[0] 悬垂。改为先保存到局部变量延长生命周期。
-	CharString ns_utf8 = p_namespace.utf8();
-	CharString class_utf8 = p_class_name.utf8();
 	const char *namespaces[] = { ns_utf8.get_data(), "Godot", "System", nullptr };
 	for (int i = 0; namespaces[i] != nullptr; i++) {
 		klass = mono_class_from_name(mono_get_corlib(), namespaces[i], class_utf8.get_data());

@@ -14,7 +14,6 @@ namespace Godot
         private bool _completed;
         private object[] _result;
         private Action _continuation;
-        private GCHandle _selfHandle;
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal extern static void godot_icall_SignalAwaiter_Connect(
@@ -28,11 +27,18 @@ namespace Godot
         {
             if (source == null) throw new ArgumentNullException("source");
             if (signal == null) throw new ArgumentNullException("signal");
-            // Pin self with a strong GCHandle so C++ can call back into it.
-            _selfHandle = GCHandle.Alloc(this, GCHandleType.Normal);
+            // S3 修复(v2): 用强 GCHandle 让 C++ 连接期间保活 awaiter。
+            // 保活链: gchandle → awaiter → _continuation → async 状态机。
+            // handle 所有权归 C++ SignalAwaiterCallable（与连接同寿命）：
+            // OneShot 信号触发后（或源对象销毁/断开时）Callable 析构释放 handle，
+            // 解除根引用，awaiter 随后可被 GC 正常回收。
+            // 原实现由 C# 终结器释放 handle —— 强句柄把自身钉为 GC 根，
+            // 终结器永不运行，每次 ToSignal 泄漏一个 handle + 对象。
+            // C# 侧不再持有也不再释放该 handle。
+            GCHandle selfHandle = GCHandle.Alloc(this, GCHandleType.Normal);
             // GCHandle.ToIntPtr returns an IntPtr whose bits are the handle.
             // We pass as long (int64) to avoid IntPtr marshalling issues in WASM.
-            long handleBits = GCHandle.ToIntPtr(_selfHandle).ToInt64();
+            long handleBits = GCHandle.ToIntPtr(selfHandle).ToInt64();
             godot_icall_SignalAwaiter_Connect(source.nativeInstance, signal,
                 target != null ? target.nativeInstance : 0, handleBits);
         }
@@ -69,14 +75,6 @@ namespace Godot
             else
             {
                 _continuation?.Invoke();
-            }
-        }
-
-        ~SignalAwaiter()
-        {
-            if (_selfHandle.IsAllocated)
-            {
-                _selfHandle.Free();
             }
         }
     }

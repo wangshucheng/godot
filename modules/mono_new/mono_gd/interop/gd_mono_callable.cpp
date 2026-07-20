@@ -10,6 +10,8 @@
 #include "core/os/memory.h"
 #include "core/templates/hashfuncs.h"
 #include "core/string/print_string.h"
+#include "core/os/thread.h"
+#include "core/os/mutex.h"
 
 #include <mono/mono-publib.h>
 #include <cstdint>
@@ -18,14 +20,27 @@
 bool MonoCallableCustom::compare_equal(const CallableCustom *p_a, const CallableCustom *p_b) {
 	const MonoCallableCustom *a = static_cast<const MonoCallableCustom *>(p_a);
 	const MonoCallableCustom *b = static_cast<const MonoCallableCustom *>(p_b);
-	return a->object_id == b->object_id && a->gchandle == b->gchandle;
+	if (a->object_id != b->object_id) {
+		return false;
+	}
+	// S5 修复: 比较 gchandle 解析后的委托对象而非 gchandle 值本身。
+	// 同一委托重新包装（新 gchandle）也能匹配，引擎 disconnect 因此可靠
+	// （借鉴参考项目 mono_callable.cpp 的做法）。
+	MonoObject *del_a = a->gchandle ? mono_gchandle_get_target(a->gchandle) : nullptr;
+	MonoObject *del_b = b->gchandle ? mono_gchandle_get_target(b->gchandle) : nullptr;
+	return del_a != nullptr && del_a == del_b;
 }
 
 bool MonoCallableCustom::compare_less(const CallableCustom *p_a, const CallableCustom *p_b) {
 	const MonoCallableCustom *a = static_cast<const MonoCallableCustom *>(p_a);
 	const MonoCallableCustom *b = static_cast<const MonoCallableCustom *>(p_b);
-	if (a->object_id != b->object_id) return a->object_id < b->object_id;
-	return a->gchandle < b->gchandle;
+	if (a->object_id != b->object_id) {
+		return a->object_id < b->object_id;
+	}
+	// 与 compare_equal 保持一致：按解析后的委托对象排序。
+	MonoObject *del_a = a->gchandle ? mono_gchandle_get_target(a->gchandle) : nullptr;
+	MonoObject *del_b = b->gchandle ? mono_gchandle_get_target(b->gchandle) : nullptr;
+	return del_a < del_b;
 }
 
 uint32_t MonoCallableCustom::hash() const {
@@ -53,13 +68,13 @@ ObjectID MonoCallableCustom::get_object() const {
 }
 
 int MonoCallableCustom::get_argument_count(bool &r_is_valid) const {
-	// S2 修复: 用 gchandle 判断而非裸 delegate_handle
+	// S2 修复: 用 gchandle 判断而非裸指针
 	r_is_valid = (gchandle != 0) && (mono_gchandle_get_target(gchandle) != nullptr);
 	return 0;
 }
 
 void MonoCallableCustom::call(const Variant **p_arguments, int p_argcount, Variant &r_return_value, Callable::CallError &r_call_error) const {
-	// S2 修复: 通过 gchandle 取 delegate_handle，避免 GC 移动后悬垂
+	// S2 修复: 通过 gchandle 现取 delegate，避免 GC 移动后悬垂
 	MonoObject *delegate = (gchandle != 0) ? mono_gchandle_get_target(gchandle) : nullptr;
 	if (!delegate) {
 		r_call_error.error = Callable::CallError::CALL_ERROR_INSTANCE_IS_NULL;
@@ -167,7 +182,6 @@ void MonoCallableCustom::release_delegate() {
 		mono_gchandle_free(gchandle);
 		gchandle = 0;
 	}
-	delegate_handle = nullptr;
 }
 
 bool MonoCallableCustom::is_valid() const {
@@ -177,7 +191,6 @@ bool MonoCallableCustom::is_valid() const {
 
 MonoCallableCustom::MonoCallableCustom(Object *p_object, MonoObject *p_delegate, const StringName &p_method) {
 	object_id = p_object ? p_object->get_instance_id() : ObjectID();
-	delegate_handle = p_delegate;
 	method_name = p_method;
 	if (p_delegate) {
 		// S2 修复: 使用 pinned gchandle 钉住 delegate，防止 SGen GC 移动后悬垂
@@ -343,10 +356,31 @@ static void icall_Signal_Emit(int64_t p_owner_ptr, MonoString *p_signal, MonoArr
 	obj->emit_signalp(signal_name, (const Variant **)argptrs.ptr(), argcount);
 }
 
+// S5 修复(b): C# ~Callable() 终结器跑在 GC 终结器线程，引擎 API 非主线程不安全。
+// 借鉴参考项目 H8 方案：非主线程仅入队，由主线程在下一次 callable 相关 icall 时排空。
+static Mutex g_callable_free_mutex;
+static Vector<int64_t> g_deferred_callable_free_queue;
+
+static void flush_deferred_callable_free() {
+	Vector<int64_t> pending;
+	{
+		MutexLock lock(g_callable_free_mutex);
+		pending = g_deferred_callable_free_queue;
+		g_deferred_callable_free_queue.clear();
+	}
+	for (int i = 0; i < pending.size(); i++) {
+		Callable *callable = (Callable *)(intptr_t)pending[i];
+		memdelete(callable);
+	}
+}
+
 // Wrap a Delegate into a native Callable and return its pointer (int64).
 // Reuses the existing create_callable_from_mono_delegate machinery.
 static int64_t icall_Callable_CreateFromDelegatePtr(MonoObject *p_delegate) {
 	if (!p_delegate) return 0;
+	if (Thread::is_main_thread()) {
+		flush_deferred_callable_free();
+	}
 	Callable callable = GDMonoCallable::create_callable_from_mono_delegate(p_delegate);
 	if (!callable.is_valid()) return 0;
 	Callable *heap_callable = memnew(Callable(callable));
@@ -356,8 +390,16 @@ static int64_t icall_Callable_CreateFromDelegatePtr(MonoObject *p_delegate) {
 // Free a native Callable pointer allocated by icall_Callable_CreateFromDelegate or icall_Callable_CreateFromTarget.
 static void icall_Callable_Free(int64_t p_callable_ptr) {
 	if (!p_callable_ptr) return;
-	Callable *callable = (Callable *)(intptr_t)p_callable_ptr;
-	memdelete(callable);
+	if (Thread::is_main_thread()) {
+		Callable *callable = (Callable *)(intptr_t)p_callable_ptr;
+		memdelete(callable);
+		// 顺手排空终结器线程入队的延迟释放
+		flush_deferred_callable_free();
+	} else {
+		// GC 终结器线程：仅入队，等待主线程排空
+		MutexLock lock(g_callable_free_mutex);
+		g_deferred_callable_free_queue.push_back(p_callable_ptr);
+	}
 }
 
 void GDMonoCallable::register_icalls() {

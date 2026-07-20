@@ -9,7 +9,8 @@
 
 class MonoCallableCustom : public CallableCustom {
 	ObjectID object_id;
-	MonoObject *delegate_handle;
+	// S2 修复: 不再保存裸 MonoObject* delegate 字段（GC 移动后会悬垂），
+	// 一律通过 gchandle 现取（mono_gchandle_get_target）。
 	uint32_t gchandle;
 	StringName method_name;
 

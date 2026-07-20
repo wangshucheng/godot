@@ -168,7 +168,7 @@ def patch_instantiate_wasm(content: str) -> str:
 # 注入的变量声明（放在 index.js 顶部）
 WECHAT_VARS_TEMPLATE = r'''// === WeChat MiniGame Bootstrap Variables ===
 // 使用 globalThis 而非 var，确保跨模块（index.js -> game.js）可访问
-globalThis._cdnBaseUrl = "{cdn_url}";
+globalThis._cdnBaseUrl = {cdn_url_json};
 globalThis._wasmFileName = "{wasm_file}";
 globalThis._dataFileName = "{data_file}";
 globalThis._pckFileName = "{pck_file}";
@@ -182,8 +182,9 @@ globalThis._wasmBrInSubpkg = {wasm_br_in_subpkg};  // F4: 分包内是否有 .wa
 
 # game.json - 微信小游戏配置
 # subpackages 在 convert() 中动态追加（用于承载超 4MB 的 .wasm.br）
+# 注意: 必须有 game.json (而非 app.json) 才会被识别为小游戏
 GAME_JSON_TEMPLATE = {
-    "deviceOrientation": "portrait",
+    "deviceOrientation": "landscape",
     "showStatusBar": False,
     "networkTimeout": {
         "request": 30000,
@@ -191,9 +192,7 @@ GAME_JSON_TEMPLATE = {
         "uploadFile": 30000,
         "downloadFile": 30000
     },
-    "subpackages": [],
-    "plugins": {},
-    "maxConcurrency": 10
+    "subpackages": []
 }
 
 # F4 修复: .wasm.br 走分包方案（WXWebAssembly.instantiate 只接受包内路径，
@@ -203,61 +202,25 @@ WASM_SUBPACKAGE_ROOT = "wasm_pkg/"
 
 
 # project.config.json - 微信开发者工具配置
-# es6/enhance 设为 false, babelSetting.ignore 包含 index.js
-# 防御性措施 - 即使 index.js 已不含顶层 await，也避免微信 Babel 误处理
+# 注意: 不包含 miniprogramRoot 字段（该字段名含 "miniprogram" 可能干扰项目类型识别）
+# 极简配置，仅保留必需字段，让 DevTools 根据 compileType + game.json 自动识别
 PROJECT_CONFIG_TEMPLATE = {
     "description": "2048 WeChat MiniGame",
-    "miniprogramRoot": "./",
-    "packOptions": {
-        "ignore": [],
-        "include": []
-    },
+    "compileType": "game",
+    "libVersion": "3.17.0",
+    "appid": "wxc07c26935264a5e5",
+    "projectname": "2048-minigame",
     "setting": {
         "urlCheck": False,
         "es6": False,
         "enhance": False,
-        "postcss": True,
-        "preloadBackgroundData": False,
+        "postcss": False,
         "minified": False,
-        "newFeature": False,
-        "coverView": True,
-        "nodeModules": False,
-        "autoAudits": False,
-        "showShadowRootDuringWxmlPreview": False,
-        "scopeDataCheck": False,
-        "uglifyFileName": False,
-        "checkInvalidKey": True,
-        "checkSiteMap": True,
-        "uploadWithSourceMap": True,
-        "compileHotReLoad": False,
-        "lazyloadPlaceholderEnable": False,
-        "useMultiFrameRuntime": True,
-        "useApiHook": True,
-        "useApiHostProcess": True,
         "babelSetting": {
             "ignore": ["index.js"],
             "disablePlugins": [],
             "outputPath": ""
-        },
-        "enableEngineNative": False,
-        "useIsolateContext": True,
-        "userConfirmedBundleSwitch": False,
-        "packNpmManually": False,
-        "packNpmRelationList": [],
-        "minifyWXSS": True,
-        "disableUseStrict": False,
-        "minifyWXML": True,
-        "showES6CompileOption": False,
-        "useCompilerPlugins": False
-    },
-    "compileType": "miniGame",
-    "libVersion": "3.17.0",
-    "appid": "wxc07c26935264a5e5",
-    "projectname": "2048-minigame",
-    "condition": {},
-    "editorSetting": {
-        "tabIndent": "insertSpaces",
-        "tabSize": 2
+        }
     }
 }
 
@@ -266,7 +229,9 @@ def patch_index_js(content: str, cdn_url: str, wasm_file: str, data_file: str, p
     """对 Godot index.js 应用核心修补点"""
     # 1. 在文件开头注入变量
     vars_block = WECHAT_VARS_TEMPLATE.format(
-        cdn_url=cdn_url.rstrip('/'),
+        # S6 加固: cdn_url 是用户输入，用 json.dumps 转义后再进 JS 字符串字面量，
+        # 防止引号/反斜杠/特殊字符破坏 index.js 语法（原直接 format 进引号内）
+        cdn_url_json=json.dumps(cdn_url.rstrip('/')),
         wasm_file=wasm_file,
         data_file=data_file,
         pck_file=pck_file,
@@ -283,6 +248,13 @@ def patch_index_js(content: str, cdn_url: str, wasm_file: str, data_file: str, p
 
     # 3. ES2020+ 语法降级: ?. ?? ??= ||= &&= 类字段
     content = patch_optional_chaining(content)
+
+    # S6 加固: 注入结果 fail-fast 校验（S6 的教训是"静默失效"，不是模式本身）。
+    # 变量块必须存在于产物中；显式传入 CDN URL 时，其转义后的值必须真的写进去了。
+    if 'globalThis._cdnBaseUrl = ' not in content:
+        raise RuntimeError("[S6] CDN 变量注入失败：产物 index.js 缺少 _cdnBaseUrl")
+    if cdn_url and json.dumps(cdn_url.rstrip('/')) not in content:
+        raise RuntimeError("[S6] CDN URL 未正确写入产物 index.js: " + cdn_url)
 
     return content
 
@@ -1068,39 +1040,10 @@ def convert(source_dir: str, output_dir: str, cdn_url: str) -> str:
         json.dump(PROJECT_CONFIG_TEMPLATE, f, ensure_ascii=False, indent=2)
     print(f"[Write] project.config.json")
 
-    # 9.1 生成 project.private.config.json
-    # 微信开发者工具会自动生成此文件并覆盖 project.config.json 的部分字段。
-    # 如果不显式生成，工具首次打开时会创建一个不含 compileType 的默认版本，
-    # 导致项目被识别为小程序而非小游戏。这里预先写入正确的配置，
-    # 强制 compileType=miniGame，确保项目类型识别正确。
-    private_config = {
-        "compileType": "miniGame",
-        "libVersion": PROJECT_CONFIG_TEMPLATE.get("libVersion", "3.17.0"),
-        "projectname": PROJECT_CONFIG_TEMPLATE.get("projectname", "2048-minigame"),
-        "appid": PROJECT_CONFIG_TEMPLATE.get("appid", "touristappid"),
-        "condition": {},
-        "setting": {
-            "urlCheck": False,
-            "coverView": True,
-            "lazyloadPlaceholderEnable": False,
-            "skylineRenderEnable": False,
-            "preloadBackgroundData": False,
-            "autoAudits": False,
-            "useApiHook": True,
-            "showShadowRootInWxmlPanel": False,
-            "useStaticServer": False,
-            "useLanDebug": False,
-            "showES6CompileOption": False,
-            "compileHotReLoad": False,
-            "checkInvalidKey": True,
-            "ignoreDevUnusedFiles": True,
-            "bigPackageSizeSupport": False,
-            "useIsolateContext": True,
-        },
-    }
-    with open(output / "project.private.config.json", "w", encoding="utf-8") as f:
-        json.dump(private_config, f, ensure_ascii=False, indent="\t")
-    print(f"[Write] project.private.config.json (pre-seeded with compileType=miniGame)")
+    # 9.1 不生成 project.private.config.json
+    # 该文件优先级高于 project.config.json，如果生成错配置会覆盖正确的 compileType。
+    # 让 DevTools 首次打开时基于 project.config.json 自动创建，确保 compileType=minigame 生效。
+    print(f"[Skip] project.private.config.json (let DevTools create from project.config.json)")
 
     # 10. 打印最终目录结构
     print("\n=== Output structure ===")

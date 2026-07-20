@@ -135,6 +135,7 @@ namespace Godot
             {
                 // Fallback: wrap delegate-based Callable into native Callable.
                 callablePtr = godot_icall_Callable_CreateFromDelegatePtr(callable.TargetDelegate);
+                callable.nativeCallable = callablePtr; // S5 修复: 回写缓存，Connect/Disconnect/IsConnected 共用同一指针且不再泄漏
             }
             if (callablePtr == 0) return false;
             return godot_icall_Signal_Connect(Owner.nativeInstance, Name.ToString(), callablePtr, oneshot);
@@ -147,6 +148,7 @@ namespace Godot
             if (callablePtr == 0 && callable.TargetDelegate != null)
             {
                 callablePtr = godot_icall_Callable_CreateFromDelegatePtr(callable.TargetDelegate);
+                callable.nativeCallable = callablePtr; // S5 修复: 回写缓存，Connect/Disconnect/IsConnected 共用同一指针且不再泄漏
             }
             if (callablePtr == 0) return;
             godot_icall_Signal_Disconnect(Owner.nativeInstance, Name.ToString(), callablePtr);
@@ -159,6 +161,7 @@ namespace Godot
             if (callablePtr == 0 && callable.TargetDelegate != null)
             {
                 callablePtr = godot_icall_Callable_CreateFromDelegatePtr(callable.TargetDelegate);
+                callable.nativeCallable = callablePtr; // S5 修复: 回写缓存，Connect/Disconnect/IsConnected 共用同一指针且不再泄漏
             }
             if (callablePtr == 0) return false;
             return godot_icall_Signal_IsConnected(Owner.nativeInstance, Name.ToString(), callablePtr);

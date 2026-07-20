@@ -1288,9 +1288,13 @@ static MonoString *icall_Node_GetClassName(int64_t p_node) {
 static int icall_SceneTree_ChangeSceneToFile(int64_t p_tree, MonoString *p_path) {
 	SceneTree *tree = (SceneTree *)(intptr_t)p_tree;
 	char *path = mono_string_to_utf8(p_path);
-	Error err = tree->change_scene_to_file(String::utf8(path));
+	String path_str = String::utf8(path);
 	mono_free(path);
-	return (int)err;
+	// 延迟到当前帧末尾执行：在 _Ready 中直接调 change_scene_to_file 会触发
+	// "Parent node is busy adding/removing children" + DEV_ASSERT(!current_scene) 崩溃。
+	// Godot 官方同样建议切换场景走 call_deferred。
+	tree->call_deferred("change_scene_to_file", path_str);
+	return (int)OK;
 }
 
 static int64_t icall_SceneTree_GetCurrentScene(int64_t p_tree) {

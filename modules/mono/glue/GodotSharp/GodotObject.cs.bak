@@ -58,15 +58,6 @@ namespace Godot {
             _bridgeGCHandle = gcHandle;
         }
 
-        // Public accessor for the native pointer. Needed by user code that
-        // uses the WASM-safe Runtime.R2D* icalls (e.g. passing `this` as
-        // IntPtr parent to Runtime.R2DAddChild). Without this, user classes
-        // (which live outside the Godot namespace) cannot access the internal
-        // NativePtr field.
-        public IntPtr GetNativePtr() {
-            return NativePtr;
-        }
-
         public bool IsInstanceValid() {
             if (NativePtr == IntPtr.Zero) return false;
             return Bridge.godot_icall_Object_IsInstanceValid(NativePtr);

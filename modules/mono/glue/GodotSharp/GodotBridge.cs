@@ -128,6 +128,58 @@ namespace Godot {
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern void godot_icall_Control_SetPosition(IntPtr ctrlPtr, int x, int y);
 
+        // Runtime2D icalls: WASM-safe general-purpose Godot node manipulation.
+        // All icalls use only IntPtr/string/int parameters - no object/array.
+        // C# side tracks native nodes via IntPtr handles returned by NodeCreate.
+        // Lifetime: explicit NodeFree(IntPtr), or freed with parent scene tree.
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern IntPtr godot_icall_R2D_NodeCreate(string className);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_R2D_NodeFree(IntPtr node);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_R2D_AddChild(IntPtr parent, IntPtr child);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_R2D_SetName(IntPtr node, string name);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_R2D_SetPosition(IntPtr node, int x, int y);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_R2D_SetSize(IntPtr node, int w, int h);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_R2D_SetAnchorsPreset(IntPtr node, int preset);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_R2D_LabelSetText(IntPtr node, string text);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_R2D_LabelSetAlign(IntPtr node, int halign, int valign);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_R2D_LabelSetFontSize(IntPtr node, int size);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_R2D_LabelSetFontColor(IntPtr node, int r, int g, int b, int a);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_R2D_ColorRectSetColor(IntPtr node, int r, int g, int b, int a);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern IntPtr godot_icall_R2D_GetTreeRoot();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern IntPtr godot_icall_R2D_CreateCanvasLayer(IntPtr parent);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_R2D_GetMouseX();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_R2D_GetMouseY();
+
         // WebSocket icalls - global pointer model (NO STRING RETURNS to C#)
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern int godot_icall_WebSocket_Init(string url);

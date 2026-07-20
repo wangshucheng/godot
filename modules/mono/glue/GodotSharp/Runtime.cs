@@ -127,6 +127,116 @@ namespace Godot {
         }
 
         // =============================================
+        // Runtime2D helpers: WASM-safe general-purpose Godot node manipulation.
+        //
+        // 用途：让 C# 用户代码在 WASM 端能直接创建/操作 Godot 节点，
+        // 绕开 GodotObject.Set/Call（带 object 参数，在 WASM 解释器下
+        // 触发 signature mismatch）。
+        //
+        // 模式：C# 持 IntPtr 句柄，所有操作走静态 icall。
+        // 参数只用 IntPtr/string/int；返回 IntPtr/int/void。
+        //
+        // 对齐枚举：
+        //   Label halign/valign: 0=Begin, 1=Center, 2=End
+        //   Control anchors preset: 15=FullRect, 0=TopLeft, 1=TopRight...
+        //   颜色 RGBA: 0-255 整数（避免 WASM float ABI 问题）
+        // =============================================
+
+        // Anchors preset constants (Control::LayoutPreset)
+        public const int PresetTopLeft = 0;
+        public const int PresetTopRight = 1;
+        public const int PresetBottomRight = 2;
+        public const int PresetBottomLeft = 3;
+        public const int PresetCenter = 8;
+        public const int PresetFullRect = 15;
+
+        // Label alignment constants
+        public const int AlignBegin = 0;
+        public const int AlignCenter = 1;
+        public const int AlignEnd = 2;
+
+        // Create a Node by class name. Returns IntPtr (Zero on failure).
+        // Example: Runtime.R2DNodeCreate("Label")
+        public static IntPtr R2DNodeCreate(string className) {
+            return Bridge.godot_icall_R2D_NodeCreate(className);
+        }
+
+        // Free a Node (queue_free if Node, else memdelete).
+        public static void R2DNodeFree(IntPtr node) {
+            Bridge.godot_icall_R2D_NodeFree(node);
+        }
+
+        // Add child node. parent must be a Node.
+        public static void R2DAddChild(IntPtr parent, IntPtr child) {
+            Bridge.godot_icall_R2D_AddChild(parent, child);
+        }
+
+        // Set Node name.
+        public static void R2DSetName(IntPtr node, string name) {
+            Bridge.godot_icall_R2D_SetName(node, name);
+        }
+
+        // Set Control position (x, y).
+        public static void R2DSetPosition(IntPtr node, int x, int y) {
+            Bridge.godot_icall_R2D_SetPosition(node, x, y);
+        }
+
+        // Set Control size (w, h).
+        public static void R2DSetSize(IntPtr node, int w, int h) {
+            Bridge.godot_icall_R2D_SetSize(node, w, h);
+        }
+
+        // Set Control anchors preset (use PresetFullRect etc.)
+        public static void R2DSetAnchorsPreset(IntPtr node, int preset) {
+            Bridge.godot_icall_R2D_SetAnchorsPreset(node, preset);
+        }
+
+        // Set Label text.
+        public static void R2DLabelSetText(IntPtr node, string text) {
+            Bridge.godot_icall_R2D_LabelSetText(node, text);
+        }
+
+        // Set Label alignment (halign/valign: AlignBegin/AlignCenter/AlignEnd).
+        public static void R2DLabelSetAlign(IntPtr node, int halign, int valign) {
+            Bridge.godot_icall_R2D_LabelSetAlign(node, halign, valign);
+        }
+
+        // Set Label font size.
+        public static void R2DLabelSetFontSize(IntPtr node, int size) {
+            Bridge.godot_icall_R2D_LabelSetFontSize(node, size);
+        }
+
+        // Set Label font color (r,g,b,a 0-255).
+        public static void R2DLabelSetFontColor(IntPtr node, int r, int g, int b, int a) {
+            Bridge.godot_icall_R2D_LabelSetFontColor(node, r, g, b, a);
+        }
+
+        // Set ColorRect color (r,g,b,a 0-255).
+        public static void R2DColorRectSetColor(IntPtr node, int r, int g, int b, int a) {
+            Bridge.godot_icall_R2D_ColorRectSetColor(node, r, g, b, a);
+        }
+
+        // Get SceneTree root Window (the main viewport).
+        public static IntPtr R2DGetTreeRoot() {
+            return Bridge.godot_icall_R2D_GetTreeRoot();
+        }
+
+        // Create a CanvasLayer and add it to a parent Node. Returns IntPtr.
+        public static IntPtr R2DCreateCanvasLayer(IntPtr parent) {
+            return Bridge.godot_icall_R2D_CreateCanvasLayer(parent);
+        }
+
+        // Get mouse X (WASM-safe: int return, no Vector2 object).
+        public static int R2DGetMouseX() {
+            return Bridge.godot_icall_R2D_GetMouseX();
+        }
+
+        // Get mouse Y.
+        public static int R2DGetMouseY() {
+            return Bridge.godot_icall_R2D_GetMouseY();
+        }
+
+        // =============================================
         // Test support helpers: global pointer model (WASM-safe).
         // All operations use string/int only - no IntPtr.
         // =============================================

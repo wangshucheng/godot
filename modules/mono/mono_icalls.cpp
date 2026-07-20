@@ -676,6 +676,207 @@ static void godot_icall_Control_SetPosition(intptr_t ctrl_ptr, int32_t x, int32_
 }
 
 // ============================================================
+// Runtime2D icalls: WASM-safe general-purpose Godot node manipulation.
+//
+// 设计目的：让 C# 用户代码在 WASM 端能直接创建/操作 Godot 节点，
+// 而无需经过 GodotObject.Set/Call（这两个 icall 在 WASM 解释器下
+// 会触发 "function signature mismatch"，因为它们带 MonoObject*/MonoArray*
+// 参数；详见 AGENTS.md §4.3）。
+//
+// WASM 安全约束（与 Test_* / GameUI_* 系列一致）：
+//   - 参数只用 intptr_t / MonoString* / int32_t
+//   - 返回只用 intptr_t / int32_t / void
+//   - 不使用 MonoObject* 或 MonoArray*
+//   - 不在 C# 侧做 string+int 拼接或 ToString
+//
+// 对象生命周期：C# 侧持有 IntPtr 句柄；C++ 侧通过 ObjectDB 验证存活性
+// （R2D 创建的对象不在 GC 桥中，is_native_alive 不适用）。
+// 释放通过显式 NodeFree(IntPtr) 调用，或随父节点场景树一起释放。
+// ============================================================
+
+// Verify a raw Object pointer is still alive in the engine's ObjectDB.
+// Used for R2D objects created via ClassDB::instantiate (NOT in GC bridge).
+static bool _r2d_alive(Object *obj) {
+	if (!obj) return false;
+	return ObjectDB::get_instance(obj->get_instance_id()) != nullptr;
+}
+
+// Create a Node by class name. Returns IntPtr (0 on failure).
+static intptr_t godot_icall_R2D_NodeCreate(MonoString *className) {
+	char *utf8 = className ? mono_string_to_utf8(className) : nullptr;
+	if (!utf8) return 0;
+	StringName class_name(utf8);
+	mono_free(utf8);
+	if (!ClassDB::can_instantiate(class_name)) {
+		printf("[R2D] Cannot instantiate class: %s\n", String(class_name).utf8().get_data());
+		return 0;
+	}
+	Object *obj = ClassDB::instantiate(class_name);
+	if (!obj) return 0;
+	return (intptr_t)obj;
+}
+
+// Free a Node (queue_free if Node, else memdelete).
+static void godot_icall_R2D_NodeFree(intptr_t node) {
+	if (node == 0) return;
+	Object *obj = (Object *)node;
+	if (!_r2d_alive(obj)) return;
+	Node *n = Object::cast_to<Node>(obj);
+	if (n) {
+		n->queue_free();
+	} else {
+		memdelete(obj);
+	}
+}
+
+// Add child node. parent must be a Node.
+static void godot_icall_R2D_AddChild(intptr_t parent, intptr_t child) {
+	if (parent == 0 || child == 0) return;
+	Object *pobj = (Object *)parent;
+	Object *cobj = (Object *)child;
+	if (!_r2d_alive(pobj) || !_r2d_alive(cobj)) return;
+	Node *p = Object::cast_to<Node>(pobj);
+	Node *c = Object::cast_to<Node>(cobj);
+	if (!p || !c) return;
+	p->add_child(c);
+}
+
+// Set Node name.
+static void godot_icall_R2D_SetName(intptr_t node, MonoString *name) {
+	if (node == 0) return;
+	Object *obj = (Object *)node;
+	if (!_r2d_alive(obj)) return;
+	Node *n = Object::cast_to<Node>(obj);
+	if (!n) return;
+	char *utf8 = name ? mono_string_to_utf8(name) : nullptr;
+	if (utf8) {
+		n->set_name(utf8);
+		mono_free(utf8);
+	}
+}
+
+// Set Control/Node2D position (x, y).
+static void godot_icall_R2D_SetPosition(intptr_t node, int32_t x, int32_t y) {
+	if (node == 0) return;
+	Object *obj = (Object *)node;
+	if (!_r2d_alive(obj)) return;
+	Control *c = Object::cast_to<Control>(obj);
+	if (c) {
+		c->set_position(Vector2((real_t)x, (real_t)y));
+	}
+}
+
+// Set Control size (w, h).
+static void godot_icall_R2D_SetSize(intptr_t node, int32_t w, int32_t h) {
+	if (node == 0) return;
+	Object *obj = (Object *)node;
+	if (!_r2d_alive(obj)) return;
+	Control *c = Object::cast_to<Control>(obj);
+	if (!c) return;
+	c->set_size(Vector2((real_t)w, (real_t)h));
+}
+
+// Set Control anchors preset (e.g. 15 = full rect).
+static void godot_icall_R2D_SetAnchorsPreset(intptr_t node, int32_t preset) {
+	if (node == 0) return;
+	Object *obj = (Object *)node;
+	if (!_r2d_alive(obj)) return;
+	Control *c = Object::cast_to<Control>(obj);
+	if (!c) return;
+	c->set_anchors_preset((Control::LayoutPreset)preset);
+}
+
+// Set Label text.
+static void godot_icall_R2D_LabelSetText(intptr_t node, MonoString *text) {
+	if (node == 0) return;
+	Object *obj = (Object *)node;
+	if (!_r2d_alive(obj)) return;
+	Label *lbl = Object::cast_to<Label>(obj);
+	if (!lbl) return;
+	char *utf8 = text ? mono_string_to_utf8(text) : nullptr;
+	lbl->set_text(utf8 ? utf8 : "");
+	if (utf8) mono_free(utf8);
+}
+
+// Set Label alignment (halign/valign: 0=begin, 1=center, 2=end).
+static void godot_icall_R2D_LabelSetAlign(intptr_t node, int32_t halign, int32_t valign) {
+	if (node == 0) return;
+	Object *obj = (Object *)node;
+	if (!_r2d_alive(obj)) return;
+	Label *lbl = Object::cast_to<Label>(obj);
+	if (!lbl) return;
+	lbl->set_horizontal_alignment((HorizontalAlignment)halign);
+	lbl->set_vertical_alignment((VerticalAlignment)valign);
+}
+
+// Set Label font size.
+static void godot_icall_R2D_LabelSetFontSize(intptr_t node, int32_t size) {
+	if (node == 0) return;
+	Object *obj = (Object *)node;
+	if (!_r2d_alive(obj)) return;
+	Label *lbl = Object::cast_to<Label>(obj);
+	if (!lbl) return;
+	lbl->add_theme_font_size_override("font_size", size);
+}
+
+// Set Label font color (r,g,b,a 0-255).
+static void godot_icall_R2D_LabelSetFontColor(intptr_t node, int32_t r, int32_t g, int32_t b, int32_t a) {
+	if (node == 0) return;
+	Object *obj = (Object *)node;
+	if (!_r2d_alive(obj)) return;
+	Label *lbl = Object::cast_to<Label>(obj);
+	if (!lbl) return;
+	lbl->add_theme_color_override("font_color",
+		Color(r / 255.0f, g / 255.0f, b / 255.0f, a / 255.0f));
+}
+
+// Set ColorRect color (r,g,b,a 0-255).
+static void godot_icall_R2D_ColorRectSetColor(intptr_t node, int32_t r, int32_t g, int32_t b, int32_t a) {
+	if (node == 0) return;
+	Object *obj = (Object *)node;
+	if (!_r2d_alive(obj)) return;
+	ColorRect *cr = Object::cast_to<ColorRect>(obj);
+	if (!cr) return;
+	cr->set_color(Color(r / 255.0f, g / 255.0f, b / 255.0f, a / 255.0f));
+}
+
+// Get SceneTree root Window (the main viewport).
+static intptr_t godot_icall_R2D_GetTreeRoot() {
+	SceneTree *tree = Object::cast_to<SceneTree>(OS::get_singleton()->get_main_loop());
+	if (!tree) return 0;
+	Window *root = tree->get_root();
+	if (!root) return 0;
+	return (intptr_t)root;
+}
+
+// Create a CanvasLayer and add it to a parent Node. Returns IntPtr.
+static intptr_t godot_icall_R2D_CreateCanvasLayer(intptr_t parent) {
+	if (parent == 0) return 0;
+	Object *pobj = (Object *)parent;
+	if (!_r2d_alive(pobj)) return 0;
+	Node *p = Object::cast_to<Node>(pobj);
+	if (!p) return 0;
+	CanvasLayer *layer = memnew(CanvasLayer);
+	layer->set_layer(100);
+	p->add_child(layer);
+	return (intptr_t)layer;
+}
+
+// Get mouse X (WASM-safe: int return, no Vector2 object).
+static int32_t godot_icall_R2D_GetMouseX() {
+	Input *input = Input::get_singleton();
+	if (!input) return 0;
+	return (int32_t)input->get_mouse_position().x;
+}
+
+// Get mouse Y.
+static int32_t godot_icall_R2D_GetMouseY() {
+	Input *input = Input::get_singleton();
+	if (!input) return 0;
+	return (int32_t)input->get_mouse_position().y;
+}
+
+// ============================================================
 // Debug UI icalls: Global pointer model (WASM-safe).
 // C++ side creates and manages a single debug Label; C# never
 // touches pointers, never does string/int ops. All text building
@@ -2271,6 +2472,24 @@ void godot_register_icalls() {
 	mono_add_internal_call("Godot.Bridge::godot_icall_Label_SetPrefixedInt", (const void *)godot_icall_Label_SetPrefixedInt);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Label_AppendLog", (const void *)godot_icall_Label_AppendLog);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Control_SetPosition", (const void *)godot_icall_Control_SetPosition);
+
+	// Runtime2D icalls (WASM-safe general-purpose node manipulation, IntPtr-based)
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_NodeCreate", (const void *)godot_icall_R2D_NodeCreate);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_NodeFree", (const void *)godot_icall_R2D_NodeFree);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_AddChild", (const void *)godot_icall_R2D_AddChild);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_SetName", (const void *)godot_icall_R2D_SetName);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_SetPosition", (const void *)godot_icall_R2D_SetPosition);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_SetSize", (const void *)godot_icall_R2D_SetSize);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_SetAnchorsPreset", (const void *)godot_icall_R2D_SetAnchorsPreset);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_LabelSetText", (const void *)godot_icall_R2D_LabelSetText);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_LabelSetAlign", (const void *)godot_icall_R2D_LabelSetAlign);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_LabelSetFontSize", (const void *)godot_icall_R2D_LabelSetFontSize);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_LabelSetFontColor", (const void *)godot_icall_R2D_LabelSetFontColor);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_ColorRectSetColor", (const void *)godot_icall_R2D_ColorRectSetColor);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_GetTreeRoot", (const void *)godot_icall_R2D_GetTreeRoot);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_CreateCanvasLayer", (const void *)godot_icall_R2D_CreateCanvasLayer);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_GetMouseX", (const void *)godot_icall_R2D_GetMouseX);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_GetMouseY", (const void *)godot_icall_R2D_GetMouseY);
 
 	// WebSocket icalls (global pointer model - no pointer passing through icall boundary)
 	mono_add_internal_call("Godot.Bridge::godot_icall_WebSocket_Init", (const void *)godot_icall_WebSocket_Init);

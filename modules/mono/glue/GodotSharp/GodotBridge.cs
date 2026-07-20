@@ -157,6 +157,9 @@ namespace Godot {
         internal static extern void godot_icall_R2D_LabelSetText(IntPtr node, string text);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_R2D_LabelSetPrefixedInt(IntPtr node, string prefix, int value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern void godot_icall_R2D_LabelSetAlign(IntPtr node, int halign, int valign);
 
         [MethodImpl(MethodImplOptions.InternalCall)]

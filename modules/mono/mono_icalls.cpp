@@ -798,6 +798,21 @@ static void godot_icall_R2D_LabelSetText(intptr_t node, MonoString *text) {
 	if (utf8) mono_free(utf8);
 }
 
+// Set label text to prefix + int (e.g. "Score: 42"). Avoids C# int.ToString()
+// which triggers Mono WASM interpreter signature mismatch.
+static void godot_icall_R2D_LabelSetPrefixedInt(intptr_t node, MonoString *prefix, int32_t value) {
+	if (node == 0) return;
+	Object *obj = (Object *)node;
+	if (!_r2d_alive(obj)) return;
+	Label *lbl = Object::cast_to<Label>(obj);
+	if (!lbl) return;
+	char *utf8 = prefix ? mono_string_to_utf8(prefix) : nullptr;
+	char buf[64];
+	snprintf(buf, sizeof(buf), "%s%d", utf8 ? utf8 : "", value);
+	lbl->set_text(buf);
+	if (utf8) mono_free(utf8);
+}
+
 // Set Label alignment (halign/valign: 0=begin, 1=center, 2=end).
 static void godot_icall_R2D_LabelSetAlign(intptr_t node, int32_t halign, int32_t valign) {
 	if (node == 0) return;
@@ -2482,6 +2497,7 @@ void godot_register_icalls() {
 	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_SetSize", (const void *)godot_icall_R2D_SetSize);
 	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_SetAnchorsPreset", (const void *)godot_icall_R2D_SetAnchorsPreset);
 	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_LabelSetText", (const void *)godot_icall_R2D_LabelSetText);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_LabelSetPrefixedInt", (const void *)godot_icall_R2D_LabelSetPrefixedInt);
 	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_LabelSetAlign", (const void *)godot_icall_R2D_LabelSetAlign);
 	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_LabelSetFontSize", (const void *)godot_icall_R2D_LabelSetFontSize);
 	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_LabelSetFontColor", (const void *)godot_icall_R2D_LabelSetFontColor);

@@ -196,6 +196,11 @@ namespace Godot {
             Bridge.godot_icall_R2D_LabelSetText(node, text);
         }
 
+        // Set Label text to prefix + int (avoids C# int.ToString() WASM mismatch).
+        public static void R2DLabelSetPrefixedInt(IntPtr node, string prefix, int value) {
+            Bridge.godot_icall_R2D_LabelSetPrefixedInt(node, prefix, value);
+        }
+
         // Set Label alignment (halign/valign: AlignBegin/AlignCenter/AlignEnd).
         public static void R2DLabelSetAlign(IntPtr node, int halign, int valign) {
             Bridge.godot_icall_R2D_LabelSetAlign(node, halign, valign);

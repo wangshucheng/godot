@@ -161,9 +161,11 @@ elif mono_static:
             "-s", "EXPORTED_RUNTIME_METHODS=['ccall','cwrap','stringToUTF8','UTF8ToString','FS']",
             "-s", "ERROR_ON_UNDEFINED_SYMBOLS=0",
             "-s", "WARN_ON_UNDEFINED_SYMBOLS=0",
-            "-O0",
-            "--profiling-funcs",
         ])
+        # 注意：链接不要压 -O0——emscripten 在 -O0 下跳过 wasm-opt，
+        # 新版 LLVM 输出的 reference-types 形式 call_indirect 会原样出厂，
+        # 微信小游戏 WASM 校验器只认 MVP 形式（CompileError: expected table index 0）。
+        # 默认 -O3 链接会触发 wasm-opt 重写为 MVP 编码（微信兼容）。
         # Provide JS implementations of Mono WASM runtime functions
         # that Mono expects from the JavaScript environment.
         _wasm_runtime_js = os.path.join(env.Dir("#modules/mono_new/platform").abspath, "mono_wasm_runtime.js").replace("\\", "/")

@@ -522,6 +522,17 @@
   function getMainCanvas() {
     if (!_mainCanvas) {
       _mainCanvas = wx.createCanvas();
+      // 引擎用 `#${canvas.id}` 作为选择器找 canvas（_godot_js_config_canvas_id_get），
+      // 不设置 id 会变成 #undefined → querySelector 返回 null → WebGL2 误判为不支持
+      _mainCanvas.id = 'canvas';
+      // 尽早探测并锁定 webgl2：微信 canvas 上下文类型粘滞（一旦被 getContext('2d'/'webgl')
+      // 拿走，webgl2 永远返回 null）。在引擎探测前先把主 canvas 锁到 webgl2。
+      try {
+        var _g2 = _mainCanvas.getContext('webgl2');
+        console.log('[WeChat Diag] main canvas webgl2 probe: ' + (_g2 ? 'OK (locked)' : 'null'));
+      } catch (e) {
+        console.warn('[WeChat Diag] main canvas webgl2 probe THREW: ' + e);
+      }
       _mainCanvas.style = _mainCanvas.style || {};
       _mainCanvas.width = _mainCanvas.width || wx.getSystemInfoSync().windowWidth;
       _mainCanvas.height = _mainCanvas.height || wx.getSystemInfoSync().windowHeight;
@@ -554,6 +565,24 @@
         }
       };
       _mainCanvas.focus = function () {};
+      // 诊断：记录每次 getContext 的类型与成败（微信 canvas 对 webgl2 的支持情况不明，
+      // 让事实说话——返回 null 还是方法缺失/抛错）
+      if (_mainCanvas.getContext) {
+        var _origGetContext = _mainCanvas.getContext;
+        _mainCanvas.getContext = function (type, attrs) {
+          var ctx = null;
+          try {
+            ctx = _origGetContext.call(this, type, attrs);
+          } catch (e) {
+            console.warn('[WeChat Adapter] getContext(' + type + ') THREW: ' + e);
+            throw e;
+          }
+          console.log('[WeChat Adapter] getContext(' + type + ') -> ' + (ctx ? 'OK' : 'null'));
+          return ctx;
+        };
+      } else {
+        console.warn('[WeChat Adapter] main canvas has NO getContext method!');
+      }
     }
     return _mainCanvas;
   }
@@ -563,6 +592,11 @@
   wx.createCanvas = function () {
     var canvas = _origCreateCanvas.apply(wx, arguments);
     if (!(canvas instanceof HTMLCanvasElement)) {
+      // 保留原原型链：getContext 等原生方法可能挂在 wx canvas 的原型上，
+      // 直接 setPrototypeOf 替换会让这些方法丢失（表现为 getContext undefined →
+      // WebGL2 探测失败/GL 上下文创建失败）。链接为
+      // canvas → HTMLCanvasElement.prototype → wx 原生 canvas 原型。
+      Object.setPrototypeOf(HTMLCanvasElement.prototype, Object.getPrototypeOf(canvas));
       Object.setPrototypeOf(canvas, HTMLCanvasElement.prototype);
     }
     return canvas;
@@ -574,6 +608,10 @@
   HTMLCanvasElement.prototype.removeEventListener = function () {};
   HTMLCanvasElement.prototype.focus = function () {};
   safeDefineGlobal('HTMLCanvasElement', HTMLCanvasElement);
+  // 暴露给 game.js：引擎配置 canvas 必须用这个带完整增强（style/事件/dispatchEvent）
+  // 的主 canvas，而不是 wx.createCanvas() 返回的裸对象（无 .style，会在
+  // _godot_js_display_setup_canvas 里报 "Cannot set property 'position' of undefined"）
+  safeDefineGlobal('__godotGetMainCanvas', getMainCanvas);
 
   // ============================================================
   // 模块 2: Image polyfill
@@ -1372,6 +1410,37 @@
   // 模块 17: window polyfill
   // ============================================================
   safeDefineGlobal('window', globalThis.window || globalThis);
+  // 新版开发者工具基础库自带受限 window/document 桩：safeDefineGlobal 可能覆盖不进去。
+  // 退而求其次：缺什么补什么，直接给原生对象增量化。
+  (function () {
+    var _win = globalThis.window;
+    if (!_win || typeof _win !== 'object') return;
+    try {
+      if (typeof _win.addEventListener !== 'function') _win.addEventListener = function () {};
+      if (typeof _win.removeEventListener !== 'function') _win.removeEventListener = function () {};
+      var _info = wx.getSystemInfoSync ? wx.getSystemInfoSync() : {};
+      if (typeof _win.innerWidth !== 'number') _win.innerWidth = _info.windowWidth || 375;
+      if (typeof _win.innerHeight !== 'number') _win.innerHeight = _info.windowHeight || 667;
+      if (typeof _win.devicePixelRatio !== 'number') _win.devicePixelRatio = _info.pixelRatio || 1;
+    } catch (e) {
+      console.warn('[WeChat Adapter] window augment failed: ' + e);
+    }
+  })();
+
+  // ============================================================
+  // 模块 17b: alert/prompt/confirm 对话框桩
+  // 微信无对话框 API，Godot 的 display_alert、'WebGL context lost' 提示等会调
+  // window.alert / 裸 alert()。定义为全局绑定供 convert 把 window.alert 重定向过来。
+  // ============================================================
+  if (typeof globalThis.alert !== 'function') {
+    safeDefineGlobal('alert', function (msg) { console.warn('[alert]', msg); });
+  }
+  if (typeof globalThis.prompt !== 'function') {
+    safeDefineGlobal('prompt', function (msg) { console.warn('[prompt suppressed]', msg); return ''; });
+  }
+  if (typeof globalThis.confirm !== 'function') {
+    safeDefineGlobal('confirm', function (msg) { console.warn('[confirm suppressed]', msg); return false; });
+  }
 
   // ============================================================
   // 模块 18: document polyfill
@@ -1418,6 +1487,41 @@
     title: '',
   };
   safeDefineGlobal('document', _document);
+  // 暴露完整 polyfill 对象本身：新版基础库的 document 是冻结对象（不可替换不可扩展），
+  // convert_to_wechat.py 会把 index.js 里的 document.querySelector 重定向到这里。
+  safeDefineGlobal('__wechatDocument', _document);
+  // 新版开发者工具基础库自带只读 document 桩，且可能是非 globalThis 的魔法绑定：
+  // safeDefineGlobal 与 globalThis 增量化都可能无效。双路径增量化
+  // （bare document 引用 + globalThis.document），逐成员 try/catch，
+  // 最后实测 querySelector 是否可用（该日志同时标记适配层是否跑到了模块 18）。
+  (function () {
+    var targets = [];
+    try {
+      if (typeof document !== 'undefined' && document && document !== _document) targets.push(document);
+    } catch (e) {}
+    if (globalThis.document && globalThis.document !== _document && targets.indexOf(globalThis.document) < 0) {
+      targets.push(globalThis.document);
+    }
+    var keys = Object.keys(_document);
+    for (var t = 0; t < targets.length; t++) {
+      var doc = targets[t];
+      if (typeof doc !== 'object') continue;
+      for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        if (typeof doc[k] === 'undefined') {
+          try { doc[k] = _document[k]; } catch (e) {}
+        }
+      }
+      console.warn('[WeChat Adapter] native document augmented (' + keys.length + ' members checked)');
+    }
+    try {
+      console.log('[WeChat Adapter] document ready: querySelector=' + (typeof document.querySelector) +
+        ', getElementsByTagName=' + (typeof document.getElementsByTagName) +
+        ', createElement=' + (typeof document.createElement));
+    } catch (e) {
+      console.warn('[WeChat Adapter] document check failed: ' + e);
+    }
+  })();
 
   // ============================================================
   // 模块 19: requestAnimationFrame
@@ -1436,6 +1540,26 @@
       safeDefineGlobal('cancelAnimationFrame', function (id) { clearTimeout(id); });
     }
   }
+
+  // ============================================================
+  // 模块 19b: rAF 帧计数诊断（判断主循环是否在跑、canvas 尺寸）
+  // ============================================================
+  (function () {
+    var _raf = globalThis.requestAnimationFrame;
+    if (typeof _raf !== 'function') {
+      console.warn('[WeChat Diag] NO requestAnimationFrame available!');
+      return;
+    }
+    var _ticks = 0;
+    globalThis.requestAnimationFrame = function (cb) {
+      _ticks++;
+      if (_ticks === 1 || _ticks % 300 === 0) {
+        var c = getMainCanvas();
+        console.log('[WeChat Diag] rAF ticks=' + _ticks + ', canvas=' + c.width + 'x' + c.height);
+      }
+      return _raf(cb);
+    };
+  })();
 
   // ============================================================
   // 模块 20: 其他必要 polyfill

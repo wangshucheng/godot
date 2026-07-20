@@ -25,6 +25,11 @@ var GODOT_CONFIG = {
   executable: executableName,
   mainPack: pckFileName,
   args: [],
+  // 直接使用适配层增强过的主 canvas（带 .style/事件/dispatchEvent + HTMLCanvasElement
+  // 原型补丁）。不要用 wx.createCanvas() 裸对象（无 .style 会在 display_setup 崩溃），
+  // 也避免引擎 getGodotConfig 回退去调 document.getElementsByTagName('canvas')——
+  // 新版开发者工具基础库自带只读 document 桩，适配层 document polyfill 无法覆盖。
+  canvas: (typeof globalThis.__godotGetMainCanvas === 'function') ? globalThis.__godotGetMainCanvas() : wx.createCanvas(),
   canvasResizePolicy: 2,
   experimentalVK: false,
   focusCanvas: true,

@@ -246,6 +246,43 @@ def patch_index_js(content: str, cdn_url: str, wasm_file: str, data_file: str, p
     # 2. 修补 getModuleConfig.instantiateWasm（强制 arrayBuffer 路径）
     content = patch_instantiate_wasm(content)
 
+    # 2.5 修补 document.querySelector（新版开发者工具基础库的 document 是冻结对象，
+    # 没有 querySelector → emscripten findEventTarget 在创建 WebGL 上下文时崩溃。
+    # 重定向到适配层暴露的完整 polyfill 对象 __wechatDocument）
+    content = patch_document_queryselector(content)
+
+    # 2.6 修补 window.alert/prompt（微信无对话框 API，window 是冻结对象没有这些方法；
+    # 重定向到适配层定义的全局桩 alert()/prompt()）
+    content = patch_window_dialogs(content)
+
+    # 2.7 修补 WebGL2 探测（godot_js_display_has_webgl 用 document.createElement 新建
+    # 离屏 canvas 探测 webgl2；微信里新建 canvas 不支持 webgl2（只有主 canvas 支持），
+    # 改走适配层 polyfill 的 createElement（返回主 canvas），否则引擎误报
+    # "browser seems not to support WebGL 2" 并退到 RasterizerDummy 不渲染）
+    content = patch_webgl_probe(content)
+
+    # 2.8 禁用 IME 初始化（微信无真实 DOM，GodotIME.init 往 document.body.appendChild
+    # 必崩；参考项目 inject_wechat_extensions.py 同样直接禁用 _godot_js_set_ime_cb）
+    content = patch_ime_init(content)
+
+    # 2.9 禁用 AudioWorklet（微信音频上下文无 ctx.audioWorklet，addModule 必崩；
+    # 让 _godot_audio_has_worklet 返回 0，引擎退回 ScriptProcessor 路径——
+    # 参考项目 inject_wechat_extensions.py 同款处理）
+    content = patch_audio_worklet(content)
+
+    # 2.10 包裹 audioWorklet.addModule（JS 侧 GodotAudio.init 无条件调 addModule，
+    # ctx.audioWorklet 为 undefined 必抛；守卫后返回永不 resolve 的 Promise，
+    # worklet 永不启动，配合 2.9 走 ScriptProcessor 路径）
+    content = patch_audio_worklet_module(content)
+
+    # 2.11 禁用窗口图标设置（微信无 document.getElementById/head/Blob/createObjectURL；
+    # 参考项目 inject_wechat_extensions.py 同款禁用）
+    content = patch_window_icon(content)
+
+    # 2.12 minified 类字段降级（emcc 压缩输出的 class X{f=v;...} 无换行无缩进，
+    # 老的按行匹配抓不到 → 预览通道旧 JS 引擎报 SyntaxError: Unexpected token =）
+    content = patch_minified_class_fields(content)
+
     # 3. ES2020+ 语法降级: ?. ?? ??= ||= &&= 类字段
     content = patch_optional_chaining(content)
 
@@ -257,6 +294,159 @@ def patch_index_js(content: str, cdn_url: str, wasm_file: str, data_file: str, p
         raise RuntimeError("[S6] CDN URL 未正确写入产物 index.js: " + cdn_url)
 
     return content
+
+
+# ============================================================
+# 修补点 2.5: document.querySelector 重定向
+# 新版微信开发者工具基础库的 document 是冻结对象（无 querySelector），
+# 且不可替换/不可扩展 → emscripten findEventTarget 创建 WebGL 上下文时崩溃。
+# 适配层暴露了完整 polyfill 对象 globalThis.__wechatDocument，重定向过去。
+# ============================================================
+
+def patch_document_queryselector(content: str) -> str:
+    old = "document.querySelector"
+    count = content.count(old)
+    if count == 0:
+        # 锚点缺失必须响（S6 教训：静默失效比失败更糟）
+        print("[Patch 2.5] WARNING: document.querySelector NOT FOUND in index.js (engine glue changed?)")
+        return content
+    content = content.replace(old, "(globalThis.__wechatDocument||document).querySelector")
+    print(f"[Patch 2.5] document.querySelector -> __wechatDocument ({count} occurrence(s))")
+    return content
+
+
+# ============================================================
+# 修补点 2.6: window.alert/prompt 重定向
+# 微信无对话框 API，window 是冻结对象（window.alert is not a function 崩溃）。
+# 适配层已定义全局桩 alert()/prompt()，把 window.* 引用改指过去。
+# ============================================================
+
+def patch_window_dialogs(content: str) -> str:
+    for old, new in [("window.alert", "globalThis.alert"), ("window.prompt", "globalThis.prompt")]:
+        count = content.count(old)
+        if count == 0:
+            print(f"[Patch 2.6] NOTE: {old} not found (0 occurrences, skip)")
+            continue
+        content = content.replace(old, new)
+        print(f"[Patch 2.6] {old} -> {new} ({count} occurrence(s))")
+    return content
+
+
+# ============================================================
+# 修补点 2.7: WebGL2 探测改走主 canvas
+# ============================================================
+
+def patch_webgl_probe(content: str) -> str:
+    old = "document.createElement('canvas').getContext("
+    count = content.count(old)
+    if count == 0:
+        print("[Patch 2.7] WARNING: webgl probe anchor NOT FOUND (engine glue changed?)")
+        return content
+    content = content.replace(old, "(globalThis.__wechatDocument||document).createElement('canvas').getContext(")
+    print(f"[Patch 2.7] webgl probe -> __wechatDocument.createElement (main canvas) ({count} occurrence(s))")
+    return content
+
+
+# ============================================================
+# 修补点 2.8: 禁用 IME 初始化
+# ============================================================
+
+def patch_ime_init(content: str) -> str:
+    old = "GodotIME.init(ime_cb,key_cb,code,key)"
+    count = content.count(old)
+    if count == 0:
+        print("[Patch 2.8] WARNING: GodotIME.init anchor NOT FOUND (engine glue changed?)")
+        return content
+    content = content.replace(old, "0")
+    print(f"[Patch 2.8] GodotIME.init disabled ({count} occurrence(s))")
+    return content
+
+
+# ============================================================
+# 修补点 2.9: 禁用 AudioWorklet（has_worklet 返回 0）
+# ============================================================
+
+def patch_audio_worklet(content: str) -> str:
+    old = "function _godot_audio_has_worklet(){return GodotAudio.ctx&&GodotAudio.ctx.audioWorklet?1:0}"
+    count = content.count(old)
+    if count == 0:
+        print("[Patch 2.9] WARNING: _godot_audio_has_worklet anchor NOT FOUND (engine glue changed?)")
+        return content
+    content = content.replace(old, "function _godot_audio_has_worklet(){return 0}")
+    print(f"[Patch 2.9] _godot_audio_has_worklet -> 0 (ScriptProcessor fallback) ({count} occurrence(s))")
+    return content
+
+
+# ============================================================
+# 修补点 2.10: audioWorklet.addModule 守卫
+# ============================================================
+
+def patch_audio_worklet_module(content: str) -> str:
+    # 注意顺序：先长串（主 worklet），再带等号的短串（position worklet），
+    # 避免短串命中长串子串造成 GodotAudio.(...) 语法破坏。
+    pairs = [
+        ("GodotAudio.ctx.audioWorklet.addModule(path)",
+         "(GodotAudio.ctx.audioWorklet?GodotAudio.ctx.audioWorklet.addModule(path):new Promise(function(){}))"),
+        ("=ctx.audioWorklet.addModule(path);",
+         "=(ctx.audioWorklet?ctx.audioWorklet.addModule(path):new Promise(function(){}));"),
+    ]
+    for old, new in pairs:
+        count = content.count(old)
+        if count == 0:
+            print(f"[Patch 2.10] NOTE: '{old[:40]}' not found (skip)")
+            continue
+        content = content.replace(old, new)
+        print(f"[Patch 2.10] guarded '{old[:40]}' ({count} occurrence(s))")
+    return content
+
+
+# ============================================================
+# 修补点 2.11: 禁用窗口图标设置
+# ============================================================
+
+def patch_window_icon(content: str) -> str:
+    old = "function _godot_js_display_window_icon_set(p_ptr,p_len){"
+    count = content.count(old)
+    if count == 0:
+        print("[Patch 2.11] WARNING: window_icon_set anchor NOT FOUND (engine glue changed?)")
+        return content
+    content = content.replace(old, "function _godot_js_display_window_icon_set(p_ptr,p_len){return;")
+    print(f"[Patch 2.11] _godot_js_display_window_icon_set disabled ({count} occurrence(s))")
+    return content
+
+
+# ============================================================
+# 修补点 2.12: minified 类字段降级
+# emcc 压缩输出的类字段（class ExitStatus{name="ExitStatus";constructor...）
+# 紧跟在 { 后、无换行无缩进，老的按行匹配（patch_class_fields）抓不到。
+# 这里处理 minified 形态：抽出字段值，移入 constructor（无 constructor 且无
+# extends 时合成一个；extends 类不动，避免缺 super() 调用）。
+# ============================================================
+
+def patch_minified_class_fields(content: str) -> str:
+    import re
+    # 只匹配无 extends 的类（合成 constructor 需要 super() 的情况安全起见不处理）
+    pat = re.compile(r'(class\s*\w*\s*)\{((?:(?:\w+)=(?:\{\}|\[\]|[^;{}()]+);)+)')
+    out = []
+    last = 0
+    total = 0
+    for m in pat.finditer(content):
+        head, fields_src = m.group(1), m.group(2)
+        fields = re.findall(r'(\w+)=(\{\}|\[\]|[^;{}()]+);', fields_src)
+        assigns = ''.join('this.%s=%s;' % (f, v) for f, v in fields)
+        rest = content[m.end():]
+        ctor = re.match(r'constructor(\([^)]*\))\{', rest)
+        out.append(content[last:m.start()])
+        if ctor:
+            out.append(head + '{constructor' + ctor.group(1) + '{' + assigns)
+            last = m.end() + ctor.end()
+        else:
+            out.append(head + '{constructor(){' + assigns + '}')
+            last = m.end()
+        total += len(fields)
+    out.append(content[last:])
+    print(f"[Patch 2.12] minified class fields: moved {total} field(s) into constructor")
+    return ''.join(out)
 
 
 def patch_optional_chaining(content: str) -> str:
@@ -918,6 +1108,24 @@ def convert(source_dir: str, output_dir: str, cdn_url: str) -> str:
     wasm_br_file = wasm_file.with_suffix(".wasm.br")
     wasm_br_in_subpkg = False
     wasm_subpkg_name = ""
+
+    # 防陈旧缓存：.br 缺失或比 .wasm 旧时现场重生成。
+    # （参考项目踩过的坑："原始文件更新但 .br 未重生成 → 微信加载旧版二进制"。
+    #  此处若静默复用旧 .br，会把过期 wasm 打进分包——曾因此微信端报
+    #  CompileError: expected table index 0，实为旧 -O0 构建的 reference-types 版本。）
+    import time
+    need_regen_br = (not wasm_br_file.exists()) or (wasm_br_file.stat().st_mtime < wasm_file.stat().st_mtime)
+    if need_regen_br:
+        try:
+            import brotli
+        except ImportError:
+            raise RuntimeError("[BR] .wasm.br 缺失或已陈旧，且 python brotli 模块不可用，无法现场重生成: " + str(wasm_br_file))
+        print(f"[Subpkg] regenerating {wasm_br_file.name} from {wasm_file.name} (stale or missing)...")
+        _t0 = time.time()
+        wasm_br_file.write_bytes(brotli.compress(wasm_file.read_bytes(), quality=11))
+        print(f"[Subpkg] regenerated in {time.time() - _t0:.1f}s ({wasm_br_file.stat().st_size / (1024 * 1024):.2f} MB)")
+    else:
+        print(f"[Subpkg] reuse fresh {wasm_br_file.name} (mtime >= {wasm_file.name})")
 
     if wasm_br_file.exists():
         br_size = wasm_br_file.stat().st_size

@@ -214,7 +214,10 @@
       if (typeof wx !== 'undefined' && typeof wx.loadSubpackage === 'function') {
         wx.loadSubpackage({
           name: subpkgName,
-          success: function () { console.log('[WeChat] Subpackage loaded: ' + subpkgName); resolve(); },
+          success: function (res) {
+            console.log('[WeChat] Subpackage loaded: ' + subpkgName + ', res=' + JSON.stringify(res || {}));
+            resolve(res);
+          },
           fail: function (err) { console.warn('[WeChat] Subpackage load failed: ' + subpkgName + ': ' + (err.errMsg || 'unknown')); reject(new Error('Subpackage ' + subpkgName + ' load failed')); },
         });
       } else {
@@ -1229,6 +1232,106 @@
 
     var urlStr = String(url);
 
+    // === F5: .data 文件从 base64 .js 模块读取（避免 devtool permission denied）===
+    // 微信 devtool 对 .data 扩展名的 readFileSync 返回 "permission denied"，
+    // 但 .js 文件可以通过 require() 加载。所以把 .data base64 编码后放进 .js 模块，
+    // 拆成 2 个分包（data_pkg_1 + data_pkg_2），各 ~13MB base64。
+    var _dataFileName = globalThis._dataFileName || '';
+    var _dataInSubpkg = globalThis._dataInSubpkg === true;
+    if (_dataFileName && _dataInSubpkg && urlStr.indexOf(_dataFileName) !== -1) {
+      console.log('[WeChat fetch F5] .data file detected, loading from base64 subpackages');
+
+      // F5 诊断
+      function _f5diag(msg) {
+        try {
+          var fs2 = wx.getFileSystemManager();
+          var p2 = wx.env.USER_DATA_PATH + '/game_diag.log';
+          var prev = '';
+          try { prev = fs2.readFileSync(p2, 'utf8') + '\n'; } catch (e) {}
+          fs2.writeFileSync(p2, prev + '[' + new Date().toISOString() + '] [F5] ' + msg + '\n', 'utf8');
+          console.log('[F5] ' + msg);
+        } catch (e) {}
+      }
+      _f5diag('F5 triggered for url: ' + urlStr);
+
+      // 加载两个分包（data_pkg_1 + data_pkg_2）
+      _f5diag('loading data_pkg_1 and data_pkg_2...');
+      return Promise.all([
+        _ensureSubpkgLoaded('data_pkg_1'),
+        _ensureSubpkgLoaded('data_pkg_2'),
+      ]).then(function () {
+        _f5diag('both subpackages loaded, checking chunks...');
+
+        // 检查 globalThis._dataChunk1 和 _dataChunk2 是否已由分包 game.js 设置
+        var chunk1 = globalThis._dataChunk1;
+        var chunk2 = globalThis._dataChunk2;
+
+        if (!chunk1 || !chunk1.buffer) {
+          // 分包 game.js 可能没执行，尝试直接 require
+          _f5diag('chunk1 not in globalThis, trying require...');
+          try {
+            chunk1 = require('data_pkg_1/data_part1.js');
+            _f5diag('require data_pkg_1/data_part1.js OK, size=' + (chunk1 ? chunk1.size : 'null'));
+          } catch (e) {
+            _f5diag('require data_part1.js failed: ' + e.message);
+            try {
+              chunk1 = require('./data_pkg_1/data_part1.js');
+              _f5diag('require ./data_pkg_1/data_part1.js OK, size=' + (chunk1 ? chunk1.size : 'null'));
+            } catch (e2) {
+              _f5diag('require ./data_pkg_1/data_part1.js failed: ' + e2.message);
+              throw new Error('Cannot load data chunk 1: ' + e2.message);
+            }
+          }
+        }
+
+        if (!chunk2 || !chunk2.buffer) {
+          _f5diag('chunk2 not in globalThis, trying require...');
+          try {
+            chunk2 = require('data_pkg_2/data_part2.js');
+            _f5diag('require data_pkg_2/data_part2.js OK, size=' + (chunk2 ? chunk2.size : 'null'));
+          } catch (e) {
+            _f5diag('require data_part2.js failed: ' + e.message);
+            try {
+              chunk2 = require('./data_pkg_2/data_part2.js');
+              _f5diag('require ./data_pkg_2/data_part2.js OK, size=' + (chunk2 ? chunk2.size : 'null'));
+            } catch (e2) {
+              _f5diag('require ./data_pkg_2/data_part2.js failed: ' + e2.message);
+              throw new Error('Cannot load data chunk 2: ' + e2.message);
+            }
+          }
+        }
+
+        _f5diag('chunk1: size=' + chunk1.size + ' offset=' + chunk1.offset + ' bufferType=' + Object.prototype.toString.call(chunk1.buffer));
+        _f5diag('chunk2: size=' + chunk2.size + ' offset=' + chunk2.offset + ' bufferType=' + Object.prototype.toString.call(chunk2.buffer));
+
+        // 拼接两个 ArrayBuffer
+        var totalSize = chunk1.size + chunk2.size;
+        var combined = new ArrayBuffer(totalSize);
+        var view = new Uint8Array(combined);
+        var view1 = new Uint8Array(chunk1.buffer);
+        var view2 = new Uint8Array(chunk2.buffer);
+        view.set(view1, 0);
+        view.set(view2, chunk1.size);
+
+        _f5diag('.data assembled: ' + (totalSize / 1024 / 1024).toFixed(2) + ' MB (' + chunk1.size + ' + ' + chunk2.size + ')');
+        console.log('[WeChat fetch F5] .data assembled from 2 chunks: ' + (totalSize / 1024 / 1024).toFixed(2) + ' MB');
+
+        return new Response(combined, {
+          status: 200,
+          headers: { 'Content-Length': String(totalSize) },
+        });
+      }).catch(function (f5err) {
+        _f5diag('F5 FINAL FAIL: ' + f5err.message);
+        if (f5err.stack) _f5diag('stack: ' + f5err.stack);
+        console.error('[WeChat fetch F5] FAILED: ' + f5err.message);
+        throw f5err;
+      });
+    }
+
+    // 非 .data 文件，走原始流程
+    return _fetchContinue(urlStr);
+
+    function _fetchContinue(urlStr) {
     // 绝对 URL (http/https)
     if (urlStr.indexOf('http://') === 0 || urlStr.indexOf('https://') === 0) {
       return downloadCdnFile(urlStr).then(function (ab) {
@@ -1305,6 +1408,7 @@
         reject(new Error('File not found: ' + filename + ' (no CDN fallback available)'));
       }
     });
+    } // end _fetchContinue
   });
 
   // ============================================================
@@ -1412,16 +1516,86 @@
   safeDefineGlobal('window', globalThis.window || globalThis);
   // 新版开发者工具基础库自带受限 window/document 桩：safeDefineGlobal 可能覆盖不进去。
   // 退而求其次：缺什么补什么，直接给原生对象增量化。
+  //
+  // 关键修复: innerWidth/innerHeight/devicePixelRatio 必须是 getter（动态读 wx 系统信息），
+  // 不能是静态赋值。原因: Godot 引擎在 canvasResizePolicy=2 (FullWindow) 下会调用
+  //   width = Math.floor(window.innerWidth * scale)
+  //   height = Math.floor(window.innerHeight * scale)
+  // 如果 window.innerWidth 是 undefined 或 0、scale=3，canvas 会被缩成 3x3。
+  // 同时引擎在 _godot_js_display_screen_get 监听 resize 事件时也会读 window.screen，
+  // 所以 screen.width/height 也需要补全。
   (function () {
     var _win = globalThis.window;
     if (!_win || typeof _win !== 'object') return;
     try {
       if (typeof _win.addEventListener !== 'function') _win.addEventListener = function () {};
       if (typeof _win.removeEventListener !== 'function') _win.removeEventListener = function () {};
-      var _info = wx.getSystemInfoSync ? wx.getSystemInfoSync() : {};
-      if (typeof _win.innerWidth !== 'number') _win.innerWidth = _info.windowWidth || 375;
-      if (typeof _win.innerHeight !== 'number') _win.innerHeight = _info.windowHeight || 667;
-      if (typeof _win.devicePixelRatio !== 'number') _win.devicePixelRatio = _info.pixelRatio || 1;
+
+      // 缓存一份系统信息（wx.getSystemInfoSync 较慢，每帧调用会拖垮性能）
+      var _cachedInfo = null;
+      function getSysInfo() {
+        if (!_cachedInfo) {
+          try { _cachedInfo = wx.getSystemInfoSync(); } catch (e) { _cachedInfo = {}; }
+        }
+        return _cachedInfo;
+      }
+
+      // 用 getter 动态返回（防止引擎覆盖）
+      // 关键: 微信 devtool 自带的 window 桩会把 innerWidth/innerHeight 设成 1（占位值），
+      // 不能用 "> 0" 判断已设置——1 > 0 会跳过赋值，引擎拿到 1 * devicePixelRatio=3 → canvas=3x3。
+      // 阈值改成 100（真实屏幕尺寸一定 > 100），低于此值视为无效占位，强制覆盖。
+      function defineWindowProp(name, fallback, minValid) {
+        var cur = _win[name];
+        if (typeof cur === 'number' && cur >= (minValid || 100)) {
+          console.log('[WeChat Adapter] window.' + name + ' already valid: ' + cur);
+          return;
+        }
+        console.log('[WeChat Adapter] window.' + name + ' invalid (' + cur + '), overriding with getter');
+        try {
+          Object.defineProperty(_win, name, {
+            get: function () {
+              var info = getSysInfo();
+              var key = name === 'devicePixelRatio' ? 'pixelRatio' :
+                        name === 'innerWidth' ? 'windowWidth' :
+                        name === 'innerHeight' ? 'windowHeight' : '';
+              var v = info[key];
+              if (typeof v !== 'number' || v <= 0) v = fallback;
+              return v;
+            },
+            configurable: true,
+          });
+          console.log('[WeChat Adapter] window.' + name + ' getter installed');
+        } catch (e) {
+          // defineProperty 失败（冻结对象），降级为静态赋值
+          try { _win[name] = fallback; } catch (e2) {}
+        }
+      }
+      defineWindowProp('innerWidth', 375, 100);
+      defineWindowProp('innerHeight', 667, 100);
+      // devicePixelRatio 永远 > 0，但 devtool 设的 3 是正确的，直接信任
+      defineWindowProp('devicePixelRatio', 1, 1);
+
+      // screen 对象（引擎 _godot_js_display_screen_get 会读 window.screen.width/height）
+      if (!_win.screen || typeof _win.screen !== 'object') {
+        _win.screen = {};
+      }
+      var _scr = _win.screen;
+      ['width', 'height', 'availWidth', 'availHeight'].forEach(function (k) {
+        if (typeof _scr[k] !== 'number' || _scr[k] <= 0) {
+          try {
+            Object.defineProperty(_scr, k, {
+              get: function () {
+                var info = getSysInfo();
+                if (k === 'width' || k === 'availWidth') return info.windowWidth || 375;
+                return info.windowHeight || 667;
+              },
+              configurable: true,
+            });
+          } catch (e) {
+            try { _scr[k] = 375; } catch (e2) {}
+          }
+        }
+      });
     } catch (e) {
       console.warn('[WeChat Adapter] window augment failed: ' + e);
     }

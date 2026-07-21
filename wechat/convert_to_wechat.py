@@ -177,6 +177,8 @@ globalThis._fileSizes = {file_sizes};
 globalThis._pckEmbedded = {pck_embedded};
 globalThis._wasmSubpkg = "{wasm_subpkg}";      // F4: 承载 .wasm.br 的分包名（空字符串表示无分包）
 globalThis._wasmBrInSubpkg = {wasm_br_in_subpkg};  // F4: 分包内是否有 .wasm.br
+globalThis._dataSubpkg = "{data_subpkg}";      // F5: 承载 .data 的分包名（空字符串表示无分包）
+globalThis._dataInSubpkg = {data_in_subpkg};   // F5: 分包内是否有 .data
 // === End WeChat Variables ==='''.strip()
 
 
@@ -200,6 +202,11 @@ GAME_JSON_TEMPLATE = {
 WASM_SUBPACKAGE_NAME = "wasm_pkg"
 WASM_SUBPACKAGE_ROOT = "wasm_pkg/"
 
+# F5 修复: .data 走分包方案（避免依赖外部 CDN server，让小游戏完全自包含）
+# .data 通常 19MB 左右，分包限 20MB，刚好能放下
+DATA_SUBPACKAGE_NAME = "data_pkg"
+DATA_SUBPACKAGE_ROOT = "data_pkg/"
+
 
 # project.config.json - 微信开发者工具配置
 # 注意: 不包含 miniprogramRoot 字段（该字段名含 "miniprogram" 可能干扰项目类型识别）
@@ -208,7 +215,7 @@ PROJECT_CONFIG_TEMPLATE = {
     "description": "2048 WeChat MiniGame",
     "compileType": "game",
     "libVersion": "3.17.0",
-    "appid": "wxc07c26935264a5e5",
+    "appid": "touristappid",
     "projectname": "2048-minigame",
     "setting": {
         "urlCheck": False,
@@ -225,7 +232,7 @@ PROJECT_CONFIG_TEMPLATE = {
 }
 
 
-def patch_index_js(content: str, cdn_url: str, wasm_file: str, data_file: str, pck_file: str, file_sizes: dict, executable: str, pck_embedded: bool, wasm_subpkg: str = "", wasm_br_in_subpkg: bool = False) -> str:
+def patch_index_js(content: str, cdn_url: str, wasm_file: str, data_file: str, pck_file: str, file_sizes: dict, executable: str, pck_embedded: bool, wasm_subpkg: str = "", wasm_br_in_subpkg: bool = False, data_subpkg: str = "", data_in_subpkg: bool = False) -> str:
     """对 Godot index.js 应用核心修补点"""
     # 1. 在文件开头注入变量
     vars_block = WECHAT_VARS_TEMPLATE.format(
@@ -240,6 +247,8 @@ def patch_index_js(content: str, cdn_url: str, wasm_file: str, data_file: str, p
         pck_embedded="true" if pck_embedded else "false",
         wasm_subpkg=wasm_subpkg,
         wasm_br_in_subpkg="true" if wasm_br_in_subpkg else "false",
+        data_subpkg=data_subpkg,
+        data_in_subpkg="true" if data_in_subpkg else "false",
     )
     content = vars_block + "\n\n" + content
 
@@ -1193,8 +1202,14 @@ def convert(source_dir: str, output_dir: str, cdn_url: str) -> str:
         else:
             print(f"[CDN]  {pck_file.name} ({pck_size_mb:.2f} MB) -> CDN")
 
-    # 5. 处理 .data 文件（通常很大，走 CDN）
+    # 5. 处理 .data 文件
+    # F5 修复: 优先走 data_pkg 分包（避免依赖外部 CDN server）
+    #   - 小 .data (≤3.8MB) 放主包
+    #   - 大 .data (≤19MB) 放 data_pkg 分包（让小游戏完全自包含）
+    #   - 超大 .data (>19MB) 走 CDN
     data_output_name = ""
+    data_in_subpkg = False
+    data_subpkg_name = ""
     if data_file:
         data_size = data_file.stat().st_size
         data_size_mb = data_size / (1024 * 1024)
@@ -1203,8 +1218,24 @@ def convert(source_dir: str, output_dir: str, cdn_url: str) -> str:
         if data_size_mb <= 3.8:
             shutil.copy(data_file, output / data_output_name)
             print(f"[Copy] {data_file.name} ({data_size_mb:.2f} MB, in main package)")
+        elif data_size_mb <= 19.9:
+            # F5: 放入 data_pkg 分包（微信分包限 20MB，留 0.1MB 余量给 game.js 入口）
+            data_subpkg_dir = output / DATA_SUBPACKAGE_ROOT.rstrip("/")
+            data_subpkg_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy(data_file, data_subpkg_dir / data_output_name)
+            # 分包硬性要求：root 下必须有 game.js 入口
+            (data_subpkg_dir / "game.js").write_text(
+                f"// {DATA_SUBPACKAGE_NAME} subpackage entry (auto-generated)\n"
+                f"// 本分包仅用于承载 {data_output_name}，无需任何 JS 逻辑\n"
+                f"console.log('[{DATA_SUBPACKAGE_NAME}] subpackage entry loaded');\n",
+                encoding="utf-8"
+            )
+            data_in_subpkg = True
+            data_subpkg_name = DATA_SUBPACKAGE_NAME
+            print(f"[Subpkg] {data_file.name} -> {DATA_SUBPACKAGE_ROOT}{data_output_name} ({data_size_mb:.2f} MB, in subpackage)")
+            print(f"[Subpkg] Wrote {DATA_SUBPACKAGE_ROOT}game.js (subpackage entry stub)")
         else:
-            print(f"[CDN]  {data_file.name} ({data_size_mb:.2f} MB) -> CDN")
+            print(f"[CDN]  {data_file.name} ({data_size_mb:.2f} MB) -> CDN (exceeds 20MB subpackage limit)")
 
     # 6. 复制音频 worklet 文件（主包，因为很小）
     for f in worklet_js_files:
@@ -1226,18 +1257,29 @@ def convert(source_dir: str, output_dir: str, cdn_url: str) -> str:
         pck_embedded=pck_embedded,
         wasm_subpkg=wasm_subpkg_name,
         wasm_br_in_subpkg=wasm_br_in_subpkg,
+        data_subpkg=data_subpkg_name,
+        data_in_subpkg=data_in_subpkg,
     )
     (output / "index.js").write_text(patched_content, encoding='utf-8')
     print(f"[Write] index.js (patched, {len(patched_content)} chars)")
 
-    # 8. 生成 game.json（动态追加 .wasm.br 分包）
+    # 8. 生成 game.json（动态追加 .wasm.br / .data 分包）
     game_json = dict(GAME_JSON_TEMPLATE)
+    subpackages_list = []
     if wasm_br_in_subpkg:
-        game_json["subpackages"] = [{
+        subpackages_list.append({
             "name": WASM_SUBPACKAGE_NAME,
             "root": WASM_SUBPACKAGE_ROOT,
-        }]
-        print(f"[Write] game.json (with subpackage: {WASM_SUBPACKAGE_NAME})")
+        })
+        print(f"[Write] game.json: subpackage {WASM_SUBPACKAGE_NAME} (WASM)")
+    if data_in_subpkg:
+        subpackages_list.append({
+            "name": DATA_SUBPACKAGE_NAME,
+            "root": DATA_SUBPACKAGE_ROOT,
+        })
+        print(f"[Write] game.json: subpackage {DATA_SUBPACKAGE_NAME} (data)")
+    if subpackages_list:
+        game_json["subpackages"] = subpackages_list
     else:
         print(f"[Write] game.json (no subpackage)")
     with open(output / "game.json", "w", encoding="utf-8") as f:

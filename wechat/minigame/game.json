@@ -1,5 +1,5 @@
 {
-  "deviceOrientation": "landscape",
+  "deviceOrientation": "portrait",
   "showStatusBar": false,
   "networkTimeout": {
     "request": 30000,
@@ -11,6 +11,14 @@
     {
       "name": "wasm_pkg",
       "root": "wasm_pkg/"
+    },
+    {
+      "name": "data_pkg_1",
+      "root": "data_pkg_1/"
+    },
+    {
+      "name": "data_pkg_2",
+      "root": "data_pkg_2/"
     }
   ]
 }

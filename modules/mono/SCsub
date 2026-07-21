@@ -32,6 +32,71 @@ mono_sources = [
 ]
 
 
+def _get_bcl_wasm_dir():
+    """Resolve BCL directory for WASM embedding (env var > project-local fallback)."""
+    import os
+    bcl_dir = os.environ.get("BCL_WASM_DIR", "")
+    if bcl_dir and os.path.isdir(bcl_dir):
+        return bcl_dir
+    # Fallback: project-local mono BCL (prepared by setup_mono_windows.ps1)
+    local_bcl = os.path.join(str(Dir("#").abspath), "mono", "lib", "mono", "4.5")
+    if os.path.isdir(local_bcl):
+        return local_bcl
+    return bcl_dir  # Return whatever was set (may be empty/invalid)
+
+
+def _embed_bcl_assemblies(env):
+    """Embed BCL assemblies into WASM MEMFS via emcc --embed-file."""
+    import os
+    from glob import glob
+    bcl_wasm_dir = _get_bcl_wasm_dir()
+    if bcl_wasm_dir and os.path.isdir(bcl_wasm_dir):
+        bcl_dlls = sorted(glob(os.path.join(bcl_wasm_dir, "*.dll")))
+        for dll in bcl_dlls:
+            dll_name = os.path.basename(dll)
+            env.Append(LINKFLAGS=[
+                "--embed-file", dll + "@/lib/mono/4.5/" + dll_name,
+            ])
+        print("[Mono] WASM: BCL assemblies embedded from %s (%d DLLs, %.1f MB)"
+              % (bcl_wasm_dir, len(bcl_dlls),
+                 sum(os.path.getsize(d) for d in bcl_dlls) / (1024*1024)))
+    else:
+        print("[Mono] WASM: WARNING - BCL directory not found: '%s'. "
+              "Set BCL_WASM_DIR env var or run setup_mono_windows.ps1." % bcl_wasm_dir)
+
+
+def _apply_wasm_common_linkflags(env, env_mono):
+    """Apply WASM link flags shared by both AOT and Interpreter modes."""
+    wasm_threads = env.get("wasm_threads", False)
+    if wasm_threads:
+        env_mono.Append(CPPDEFINES=[("MONO_WASM_THREADS", 1)])
+        env.Append(LINKFLAGS=[
+            "-s", "PROXY_TO_PTHREAD=1",
+            "-s", "PTHREAD_POOL_SIZE=4",
+            "-s", "SHARED_MEMORY=1",
+        ])
+    else:
+        env.Append(LINKFLAGS=[
+            "-s", "PROXY_TO_PTHREAD=0",
+            "-s", "PTHREAD_POOL_SIZE=0",
+        ])
+
+    wasm_memory = env.get("wasm_memory_size", 256)
+    env.Append(LINKFLAGS=[
+        "-s", "ALLOW_MEMORY_GROWTH=1",
+        "-s", ("TOTAL_MEMORY=%dMB" % wasm_memory),
+    ])
+
+    # Mono WASM libraries reference JS-side functions; don't error on them.
+    env.Append(LINKFLAGS=["-sERROR_ON_UNDEFINED_SYMBOLS=0"])
+    # C++ exception support required by Mono runtime.
+    env.Append(LINKFLAGS=["-sDISABLE_EXCEPTION_THROWING=0"])
+    env.Append(LINKFLAGS=["-sDISABLE_EXCEPTION_CATCHING=0"])
+    env.Append(LINKFLAGS=["-sSUPPORT_LONGJMP=emscripten"])
+
+    return wasm_threads, wasm_memory
+
+
 def _run_aot_workflow(env, env_mono, mono_sources_list):
     """Full AOT workflow: compile DLLs, AOT compile, generate registration code, link."""
     import os
@@ -57,10 +122,10 @@ def _run_aot_workflow(env, env_mono, mono_sources_list):
             " WASM backend (see docs/superpowers/specs/2026-07-14-mono-full-aot-workflow-design.md)."
             " Expected at /opt/mono-aot-cross-wasm/bin/mono-aot-cross or /opt/mono-aot-cross/bin/mono-aot-cross.")
 
-    # 2. Determine DLL paths
-    bcl_dir = os.environ.get("BCL_WASM_DIR",
-        r"E:\workspace\godot\mono-wasm-output\bcl\lib\mono\4.5")
-    if not os.path.isdir(bcl_dir):
+    # 2. Determine DLL paths (BCL dir resolved via shared helper)
+    bcl_dir = _get_bcl_wasm_dir()
+    if not bcl_dir or not os.path.isdir(bcl_dir):
+        # AOT-specific fallback: WSL path
         bcl_dir = "/e/workspace/godot/mono-wasm-output/bcl/lib/mono/4.5"
 
     godotsharp_dll = os.path.join(project_root, "build_godotsharp", "GodotSharp.dll")
@@ -322,59 +387,16 @@ elif env["platform"] == "web":
                 env.Prepend(LIBS=aot_objects)
                 print("[Mono] AOT: Linked %d AOT object files" % len(aot_objects))
 
-        # Common WASM link flags (shared by both modes)
-        wasm_threads = env.get("wasm_threads", False)
-        if wasm_threads:
-            env_mono.Append(CPPDEFINES=[("MONO_WASM_THREADS", 1)])
-            env.Append(LINKFLAGS=[
-                "-s", "PROXY_TO_PTHREAD=1",
-                "-s", "PTHREAD_POOL_SIZE=4",
-                "-s", "SHARED_MEMORY=1",
-            ])
-        else:
-            env.Append(LINKFLAGS=[
-                "-s", "PROXY_TO_PTHREAD=0",
-                "-s", "PTHREAD_POOL_SIZE=0",
-            ])
-
-        wasm_memory = env.get("wasm_memory_size", 256)
-        env.Append(LINKFLAGS=[
-            "-s", "ALLOW_MEMORY_GROWTH=1",
-            "-s", ("TOTAL_MEMORY=%dMB" % wasm_memory),
-        ])
-
+        # Common WASM link flags (shared helper)
+        wasm_threads, wasm_memory = _apply_wasm_common_linkflags(env, env_mono)
         print("[Mono] WASM AOT: threads=%s, memory=%dMB"
               % ("yes" if wasm_threads else "no", wasm_memory))
-
-        env.Append(LINKFLAGS=["-sERROR_ON_UNDEFINED_SYMBOLS=0"])
-        env.Append(LINKFLAGS=["-sDISABLE_EXCEPTION_THROWING=0"])
-        env.Append(LINKFLAGS=["-sDISABLE_EXCEPTION_CATCHING=0"])
-        env.Append(LINKFLAGS=["-sSUPPORT_LONGJMP=emscripten"])
 
         wasm_glue = env_mono.Object(source="#modules/mono/mono_wasm_glue.cpp")
         env.Prepend(LIBS=[wasm_glue])
 
-        # Embed BCL assemblies into WASM MEMFS via emcc --embed-file.
-        # Only embed top-level .dll files (exclude AOT subdirectories, .so artifacts, etc.)
-        import os as _os_bcl
-        from glob import glob as _glob_bcl
-        bcl_wasm_dir = _os_bcl.environ.get("BCL_WASM_DIR", "")
-        if not bcl_wasm_dir:
-            bcl_wasm_dir = r"E:\workspace\godot\mono\external\illinker-test-assets\wasm\HelloWorld\bin\Release\netstandard2.0\dist\_framework\_bin"
-        if not _os_bcl.path.isdir(bcl_wasm_dir):
-            bcl_wasm_dir = _os_bcl.join(str(Dir("#").abspath), "mono", "lib", "mono", "4.5")
-        if _os_bcl.path.isdir(bcl_wasm_dir):
-            _bcl_dlls = sorted(_glob_bcl(_os_bcl.path.join(bcl_wasm_dir, "*.dll")))
-            for _dll in _bcl_dlls:
-                _dll_name = _os_bcl.path.basename(_dll)
-                env.Append(LINKFLAGS=[
-                    "--embed-file", _dll + "@/lib/mono/4.5/" + _dll_name,
-                ])
-            print("[Mono] WASM: BCL assemblies embedded from %s (%d DLLs, %.1f MB)"
-                  % (bcl_wasm_dir, len(_bcl_dlls),
-                     sum(_os_bcl.path.getsize(d) for d in _bcl_dlls) / (1024*1024)))
-        else:
-            print("[Mono] WASM: WARNING - BCL directory not found at %s" % bcl_wasm_dir)
+        # Embed BCL assemblies into WASM MEMFS
+        _embed_bcl_assemblies(env)
 
     else:
         # ========================================
@@ -399,67 +421,18 @@ elif env["platform"] == "web":
             "mono-profiler-aot",
         ])
 
-        wasm_threads = env.get("wasm_threads", False)
-        if wasm_threads:
-            env_mono.Append(CPPDEFINES=[("MONO_WASM_THREADS", 1)])
-            env.Append(LINKFLAGS=[
-                "-s", "PROXY_TO_PTHREAD=1",
-                "-s", "PTHREAD_POOL_SIZE=4",
-                "-s", "SHARED_MEMORY=1",
-            ])
-        else:
-            env.Append(LINKFLAGS=[
-                "-s", "PROXY_TO_PTHREAD=0",
-                "-s", "PTHREAD_POOL_SIZE=0",
-            ])
-
-        wasm_memory = env.get("wasm_memory_size", 256)
-        env.Append(LINKFLAGS=[
-            "-s", "ALLOW_MEMORY_GROWTH=1",
-            "-s", ("TOTAL_MEMORY=%dMB" % wasm_memory),
-        ])
-
+        # Common WASM link flags (shared helper)
+        wasm_threads, wasm_memory = _apply_wasm_common_linkflags(env, env_mono)
         print("[Mono] WASM platform: Interpreter mode configured (threads=%s, memory=%dMB)"
               % ("yes" if wasm_threads else "no", wasm_memory))
-
-        # Don't error on undefined symbols - the Mono WASM libraries reference
-        # JavaScript-side functions (mono_wasm_*, mono_set_timeout) that are
-        # normally provided by the Mono WASM driver. We don't need them since
-        # we use interpreter mode, and they'll be resolved as JS imports at runtime.
-        env.Append(LINKFLAGS=["-sERROR_ON_UNDEFINED_SYMBOLS=0"])
-
-        # Enable C++ exception support - the Mono runtime libraries require it.
-        # Must use SUPPORT_LONGJMP=emscripten (not 'wasm') with exceptions enabled.
-        env.Append(LINKFLAGS=["-sDISABLE_EXCEPTION_THROWING=0"])
-        env.Append(LINKFLAGS=["-sDISABLE_EXCEPTION_CATCHING=0"])
-        env.Append(LINKFLAGS=["-sSUPPORT_LONGJMP=emscripten"])
 
         # Provide mono_wasm_enable_gc stub (required by SGEN GC, not handled by
         # --import-undefined because it's referenced from within a library).
         wasm_glue = env_mono.Object(source="#modules/mono/mono_wasm_glue.cpp")
         env.Prepend(LIBS=[wasm_glue])
 
-        # Embed BCL assemblies into WASM MEMFS via emcc --embed-file.
-        # Only embed top-level .dll files (exclude AOT subdirectories, .so artifacts, etc.)
-        import os as _os_bcl
-        from glob import glob as _glob_bcl
-        bcl_wasm_dir = _os_bcl.environ.get("BCL_WASM_DIR", "")
-        if not bcl_wasm_dir:
-            bcl_wasm_dir = r"E:\workspace\godot\mono\external\illinker-test-assets\wasm\HelloWorld\bin\Release\netstandard2.0\dist\_framework\_bin"
-        if not _os_bcl.path.isdir(bcl_wasm_dir):
-            bcl_wasm_dir = _os_bcl.join(str(Dir("#").abspath), "mono", "lib", "mono", "4.5")
-        if _os_bcl.path.isdir(bcl_wasm_dir):
-            _bcl_dlls = sorted(_glob_bcl(_os_bcl.path.join(bcl_wasm_dir, "*.dll")))
-            for _dll in _bcl_dlls:
-                _dll_name = _os_bcl.path.basename(_dll)
-                env.Append(LINKFLAGS=[
-                    "--embed-file", _dll + "@/lib/mono/4.5/" + _dll_name,
-                ])
-            print("[Mono] WASM: BCL assemblies embedded from %s (%d DLLs, %.1f MB)"
-                  % (bcl_wasm_dir, len(_bcl_dlls),
-                     sum(_os_bcl.path.getsize(d) for d in _bcl_dlls) / (1024*1024)))
-        else:
-            print("[Mono] WASM: WARNING - BCL directory not found at %s" % bcl_wasm_dir)
+        # Embed BCL assemblies into WASM MEMFS
+        _embed_bcl_assemblies(env)
 
 env_mono.add_source_files(env.modules_sources, mono_sources)
 

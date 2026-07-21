@@ -242,6 +242,124 @@ namespace Godot {
         }
 
         // =============================================
+        // R2D Tile/Score/Status: 彻底消除 C# BCL 操作。
+        //
+        // 解决问题（Mono WASM 解释器 function signature mismatch）：
+        //   1. "Score: " + _score → R2DSetScore (C++ snprintf)
+        //   2. value.ToString()  → R2DLabelSetInt (C++ snprintf)
+        //   3. tileTexts[] + TileColorRgb → R2DSetTileValue (C++ 查表)
+        //   4. 状态字符串拼接 → R2DSetStatusText (C++ 预定义文本)
+        // =============================================
+
+        // 一个 icall 完成 2048 瓦片渲染：设置文字+背景色+字体色+字号。
+        // bg = ColorRect IntPtr, label = Label IntPtr, value = 瓦片值 (0=空)。
+        // 替代 C# 侧 tileTexts[] 查表 + TileColorRgb() + int.ToString()。
+        public static void R2DSetTileValue(IntPtr bg, IntPtr label, int value) {
+            Bridge.godot_icall_R2D_SetTileValue(bg, label, value);
+        }
+
+        // 设置 "Score: N" 文本。替代 "Score: " + score 字符串拼接。
+        public static void R2DSetScore(IntPtr label, int score) {
+            Bridge.godot_icall_R2D_SetScore(label, score);
+        }
+
+        // 设置 Label 文本为纯整数。替代 value.ToString()。
+        public static void R2DLabelSetInt(IntPtr label, int value) {
+            Bridge.godot_icall_R2D_LabelSetInt(label, value);
+        }
+
+        // 设置状态文本（预定义）。
+        // state: 0=默认提示, 1=胜利, 2=失败, 3=新游戏
+        public static void R2DSetStatusText(IntPtr label, int state) {
+            Bridge.godot_icall_R2D_SetStatusText(label, state);
+        }
+
+        // =============================================
+        // R2D Grid: C++ 侧全局 int 数组，替代 C# new int[]。
+        //
+        // 解决问题：Mono WASM 解释器在方法内 new int[]{...}
+        // 触发 function signature mismatch。
+        // 将数组分配/操作全部移到 C++，C# 用 idx = row*dim+col 索引。
+        // =============================================
+
+        // 创建/重置 NxN 网格（全部置 0）。
+        public static void R2DGridCreate(int dim) {
+            Bridge.godot_icall_R2D_GridCreate(dim);
+        }
+
+        // 设置网格单元。idx = row * dim + col。
+        public static void R2DGridSet(int idx, int val) {
+            Bridge.godot_icall_R2D_GridSet(idx, val);
+        }
+
+        // 获取网格单元。
+        public static int R2DGridGet(int idx) {
+            return Bridge.godot_icall_R2D_GridGet(idx);
+        }
+
+        // 全部填充为指定值。
+        public static void R2DGridFill(int val) {
+            Bridge.godot_icall_R2D_GridFill(val);
+        }
+
+        // 保存网格到备份缓冲区（undo 用）。
+        public static void R2DGridSave() {
+            Bridge.godot_icall_R2D_GridSave();
+        }
+
+        // 从备份恢复网格。
+        public static void R2DGridRestore() {
+            Bridge.godot_icall_R2D_GridRestore();
+        }
+
+        // 保存分数到备份（undo 用）。
+        public static void R2DGridSaveScore(int score) {
+            Bridge.godot_icall_R2D_GridSaveScore(score);
+        }
+
+        // 获取备份分数。
+        public static int R2DGridGetSavedScore() {
+            return Bridge.godot_icall_R2D_GridGetSavedScore();
+        }
+
+        // 检查是否有相邻相等元素（还能移动）。返回 1=是, 0=否。
+        public static int R2DGridHasAdjacentEqual() {
+            return Bridge.godot_icall_R2D_GridHasAdjacentEqual();
+        }
+
+        // 检查是否有空单元。返回 1=有, 0=无。
+        public static int R2DGridHasZero() {
+            return Bridge.godot_icall_R2D_GridHasZero();
+        }
+
+        // 获取空单元数量。
+        public static int R2DGridCountZero() {
+            return Bridge.godot_icall_R2D_GridCountZero();
+        }
+
+        // 获取第一个空单元 idx（无空返回 -1）。
+        public static int R2DGridFirstZero() {
+            return Bridge.godot_icall_R2D_GridFirstZero();
+        }
+
+        // 获取随机空单元 idx（无空返回 -1）。C++ LCG 随机。
+        public static int R2DGridRandomZero() {
+            return Bridge.godot_icall_R2D_GridRandomZero();
+        }
+
+        // 执行一行/列压缩+合并（2048 核心逻辑）。
+        // lineIdx: 行/列索引, direction: 0=左/上, 1=右/下, isRow: 1=行, 0=列。
+        // 返回合并产生的分数增量。
+        public static int R2DGridSlideLine(int lineIdx, int direction, int isRow) {
+            return Bridge.godot_icall_R2D_GridSlideLine(lineIdx, direction, isRow);
+        }
+
+        // 检查网格是否发生变化（与备份比较）。返回 1=有变化, 0=无。
+        public static int R2DGridChanged() {
+            return Bridge.godot_icall_R2D_GridChanged();
+        }
+
+        // =============================================
         // Test support helpers: global pointer model (WASM-safe).
         // All operations use string/int only - no IntPtr.
         // =============================================

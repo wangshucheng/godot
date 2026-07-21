@@ -183,6 +183,67 @@ namespace Godot {
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern int godot_icall_R2D_GetMouseY();
 
+        // R2D Tile/Score/Status icalls: 彻底消除 C# 侧 BCL string/int 操作。
+        // C# 只传 IntPtr/int，所有 string 构建/查表/颜色映射在 C++ 完成。
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_R2D_SetTileValue(IntPtr bg, IntPtr label, int value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_R2D_SetScore(IntPtr label, int score);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_R2D_LabelSetInt(IntPtr label, int value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_R2D_SetStatusText(IntPtr label, int state);
+
+        // R2D Grid icalls: C++ 侧全局 int 数组，替代 C# new int[] 分配。
+        // idx = row * dim + col。所有数组操作在 C++ 完成，零 BCL 调用。
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_R2D_GridCreate(int dim);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_R2D_GridSet(int idx, int val);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_R2D_GridGet(int idx);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_R2D_GridFill(int val);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_R2D_GridSave();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_R2D_GridRestore();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_R2D_GridSaveScore(int score);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_R2D_GridGetSavedScore();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_R2D_GridHasAdjacentEqual();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_R2D_GridHasZero();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_R2D_GridCountZero();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_R2D_GridFirstZero();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_R2D_GridRandomZero();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_R2D_GridSlideLine(int lineIdx, int direction, int isRow);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_R2D_GridChanged();
+
         // WebSocket icalls - global pointer model (NO STRING RETURNS to C#)
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern int godot_icall_WebSocket_Init(string url);

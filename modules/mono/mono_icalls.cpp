@@ -1,3 +1,23 @@
+// ============================================================
+// mono_icalls.cpp — 100+ InternalCall 实现（单文件，段落式组织）
+//
+// 目录（搜索 "// ====" 分隔线跳转）：
+//   1. Core Object/Node icalls   — GD_Print, Object_*, Node_*, Callable_*,
+//                                  ResourceLoader, PackedScene, Platform, Input
+//   2. WASM-safe utility icalls  — Int_ToString, String_ConcatInt, Label_*
+//   3. Runtime2D icalls          — R2D_* 节点操作 + Tile/Score/Grid
+//   4. Debug UI icalls           — DebugUi_* 全局调试 Label
+//   5. Game UI icalls            — GameUI_* 2048 游戏 UI
+//   6. WebSocket icalls          — WebSocket_* 全局连接模型
+//   7. Test support icalls       — Test_* 系统测试套件
+//   8. Extended test icalls      — Test_* 文件/物理/音频/动画/BCL/GC
+//   9. Sync context              — RegisterSyncContext
+//  10. Reflection icalls         — ClassDB_* 元数据暴露
+//  11. Collections icalls        — Array_*, Dict_*
+//  12. WXAudio icalls            — WXAudio_* 微信音频适配
+//  13. godot_register_icalls()   — 统一注册入口
+// ============================================================
+
 #include "mono_icalls.h"
 #include "mono_host.h"
 #include "mono_variant.h"
@@ -889,6 +909,332 @@ static int32_t godot_icall_R2D_GetMouseY() {
 	Input *input = Input::get_singleton();
 	if (!input) return 0;
 	return (int32_t)input->get_mouse_position().y;
+}
+
+// ============================================================
+// R2D Tile/Score/Grid icalls: 彻底消除 C# 侧 BCL 操作。
+//
+// 解决问题（Mono WASM 解释器 function signature mismatch）：
+//   1. "Score: " + _score → R2D_SetScore (C++ snprintf)
+//   2. _score.ToString()  → R2D_LabelSetInt (C++ snprintf)
+//   3. tileTexts[] + TileColorRgb → R2D_SetTileValue (C++ 查表)
+//   4. new int[]{...} 数组分配 → R2D_Grid* (C++ 全局缓冲区)
+//
+// C# 侧只需传 int/IntPtr 参数，零 BCL 调用。
+// ============================================================
+
+// 2048 tile value → text (C++ 查表，替代 C# tileTexts[] 数组)
+static const char *_tile_value_text(int value) {
+	switch (value) {
+		case 0: return "";
+		case 2: return "2";
+		case 4: return "4";
+		case 8: return "8";
+		case 16: return "16";
+		case 32: return "32";
+		case 64: return "64";
+		case 128: return "128";
+		case 256: return "256";
+		case 512: return "512";
+		case 1024: return "1024";
+		case 2048: return "2048";
+		case 4096: return "4096";
+		case 8192: return "8192";
+		default: return "?";
+	}
+}
+
+// 2048 tile value → background color (classic scheme, 0-255 RGB)
+static void _tile_bg_color(int value, int &r, int &g, int &b) {
+	switch (value) {
+		case 0:    r = 205; g = 192; b = 180; break; // #CDC0B4 empty
+		case 2:    r = 238; g = 228; b = 218; break; // #EEE4DA
+		case 4:    r = 237; g = 224; b = 200; break; // #EDE0C8
+		case 8:    r = 242; g = 177; b = 121; break; // #F2B179
+		case 16:   r = 245; g = 149; b = 99;  break; // #F59563
+		case 32:   r = 246; g = 124; b = 95;  break; // #F67C5F
+		case 64:   r = 246; g = 94;  b = 59;  break; // #F65E3B
+		case 128:  r = 237; g = 207; b = 114; break; // #EDCF72
+		case 256:  r = 237; g = 204; b = 97;  break; // #EDCC61
+		case 512:  r = 237; g = 200; b = 80;  break; // #EDC850
+		case 1024: r = 237; g = 197; b = 63;  break; // #EDC53F
+		case 2048: r = 237; g = 194; b = 46;  break; // #EDC22E
+		default:   r = 60;  g = 58;  b = 50;  break; // #3C3A32 (>2048)
+	}
+}
+
+// 2048 tile value → font color (dark for small, white for large)
+static void _tile_font_color(int value, int &r, int &g, int &b) {
+	if (value <= 4) { r = 119; g = 110; b = 101; } // #776E65 dark
+	else { r = 249; g = 246; b = 242; }            // #F9F6F2 white
+}
+
+// 2048 tile value → font size (smaller for more digits)
+static int _tile_font_size(int value) {
+	if (value < 100) return 42;
+	if (value < 1000) return 36;
+	if (value < 10000) return 28;
+	return 22;
+}
+
+// R2D_SetTileValue: 一个 icall 完成整个 2048 瓦片渲染。
+// 替代 C# 侧的 tileTexts[] 查表 + TileColorRgb() + int.ToString()。
+// bg = ColorRect IntPtr, label = Label IntPtr, value = 瓦片值 (0=空)
+static void godot_icall_R2D_SetTileValue(intptr_t bg, intptr_t label, int32_t value) {
+	// Set background color
+	if (bg != 0) {
+		Object *bg_obj = (Object *)bg;
+		if (_r2d_alive(bg_obj)) {
+			ColorRect *cr = Object::cast_to<ColorRect>(bg_obj);
+			if (cr) {
+				int r, g, b;
+				_tile_bg_color(value, r, g, b);
+				cr->set_color(Color(r / 255.0f, g / 255.0f, b / 255.0f, 1.0f));
+			}
+		}
+	}
+	// Set label text + font color + font size
+	if (label != 0) {
+		Object *lbl_obj = (Object *)label;
+		if (_r2d_alive(lbl_obj)) {
+			Label *lbl = Object::cast_to<Label>(lbl_obj);
+			if (lbl) {
+				lbl->set_text(_tile_value_text(value));
+				int fr, fg, fb;
+				_tile_font_color(value, fr, fg, fb);
+				lbl->add_theme_color_override("font_color",
+					Color(fr / 255.0f, fg / 255.0f, fb / 255.0f, 1.0f));
+				lbl->add_theme_font_size_override("font_size", _tile_font_size(value));
+			}
+		}
+	}
+}
+
+// R2D_SetScore: 设置 "Score: N" 文本。
+// 替代 C# 侧 "Score: " + _score 字符串拼接。
+static void godot_icall_R2D_SetScore(intptr_t label, int32_t score) {
+	if (label == 0) return;
+	Object *obj = (Object *)label;
+	if (!_r2d_alive(obj)) return;
+	Label *lbl = Object::cast_to<Label>(obj);
+	if (!lbl) return;
+	char buf[32];
+	snprintf(buf, sizeof(buf), "Score: %d", score);
+	lbl->set_text(buf);
+}
+
+// R2D_LabelSetInt: 设置 Label 文本为纯整数。
+// 替代 C# 侧 value.ToString()。
+static void godot_icall_R2D_LabelSetInt(intptr_t label, int32_t value) {
+	if (label == 0) return;
+	Object *obj = (Object *)label;
+	if (!_r2d_alive(obj)) return;
+	Label *lbl = Object::cast_to<Label>(obj);
+	if (!lbl) return;
+	char buf[16];
+	snprintf(buf, sizeof(buf), "%d", value);
+	lbl->set_text(buf);
+}
+
+// R2D_SetStatusText: 从预定义状态文本集选择。
+// 替代 C# 侧状态字符串拼接/选择。
+// state: 0=默认提示, 1=胜利, 2=失败, 3=新游戏
+static void godot_icall_R2D_SetStatusText(intptr_t label, int32_t state) {
+	if (label == 0) return;
+	Object *obj = (Object *)label;
+	if (!_r2d_alive(obj)) return;
+	Label *lbl = Object::cast_to<Label>(obj);
+	if (!lbl) return;
+	const char *text;
+	switch (state) {
+		case 1:  text = "YOU WIN! Press C to continue, R to restart"; break;
+		case 2:  text = "GAME OVER! Press R to restart"; break;
+		case 3:  text = "New game started!"; break;
+		default: text = "Arrow keys / swipe to move"; break;
+	}
+	lbl->set_text(text);
+}
+
+// ============================================================
+// R2D Grid icalls: C++ 侧全局 int 数组，替代 C# new int[]。
+//
+// 解决问题：Mono WASM 解释器在方法内 new int[]{...} 触发
+// function signature mismatch。将数组分配/操作全部移到 C++。
+// C# 侧通过 idx = row * size + col 索引。
+// ============================================================
+
+#define R2D_GRID_MAX 64
+static int32_t _r2d_grid[R2D_GRID_MAX];
+static int32_t _r2d_grid_size = 0; // total cells (size*size for square grid)
+static int32_t _r2d_grid_dim = 0;  // dimension (e.g. 4 for 4x4)
+
+// 创建/重置 NxN 网格（全部置 0）。dim: 维度（如 4）。
+static void godot_icall_R2D_GridCreate(int32_t dim) {
+	if (dim < 1 || dim > 8) return; // 最大 8x8
+	_r2d_grid_dim = dim;
+	_r2d_grid_size = dim * dim;
+	memset(_r2d_grid, 0, sizeof(int32_t) * _r2d_grid_size);
+}
+
+// 设置网格单元。idx = row * dim + col。
+static void godot_icall_R2D_GridSet(int32_t idx, int32_t val) {
+	if (idx < 0 || idx >= _r2d_grid_size) return;
+	_r2d_grid[idx] = val;
+}
+
+// 获取网格单元。
+static int32_t godot_icall_R2D_GridGet(int32_t idx) {
+	if (idx < 0 || idx >= _r2d_grid_size) return 0;
+	return _r2d_grid[idx];
+}
+
+// 全部填充为指定值。
+static void godot_icall_R2D_GridFill(int32_t val) {
+	for (int i = 0; i < _r2d_grid_size; i++) {
+		_r2d_grid[i] = val;
+	}
+}
+
+// 复制网格到备份缓冲区（undo 用）。返回备份后的值数量。
+static int32_t _r2d_grid_backup[R2D_GRID_MAX];
+static int32_t _r2d_grid_backup_score = 0;
+
+static void godot_icall_R2D_GridSave() {
+	memcpy(_r2d_grid_backup, _r2d_grid, sizeof(int32_t) * _r2d_grid_size);
+}
+
+// 从备份恢复网格。
+static void godot_icall_R2D_GridRestore() {
+	memcpy(_r2d_grid, _r2d_grid_backup, sizeof(int32_t) * _r2d_grid_size);
+}
+
+// 设置/获取备份分数（undo 用）。
+static void godot_icall_R2D_GridSaveScore(int32_t score) {
+	_r2d_grid_backup_score = score;
+}
+
+static int32_t godot_icall_R2D_GridGetSavedScore() {
+	return _r2d_grid_backup_score;
+}
+
+// 检查是否有相邻相等元素（用于判断是否还能移动）。
+// 返回 1=有相邻相等（还能移动），0=没有（游戏结束）。
+static int32_t godot_icall_R2D_GridHasAdjacentEqual() {
+	int dim = _r2d_grid_dim;
+	for (int r = 0; r < dim; r++) {
+		for (int c = 0; c < dim; c++) {
+			int v = _r2d_grid[r * dim + c];
+			if (c + 1 < dim && _r2d_grid[r * dim + c + 1] == v) return 1;
+			if (r + 1 < dim && _r2d_grid[(r + 1) * dim + c] == v) return 1;
+		}
+	}
+	return 0;
+}
+
+// 检查是否有空单元（值为 0）。
+static int32_t godot_icall_R2D_GridHasZero() {
+	for (int i = 0; i < _r2d_grid_size; i++) {
+		if (_r2d_grid[i] == 0) return 1;
+	}
+	return 0;
+}
+
+// 获取空单元数量。
+static int32_t godot_icall_R2D_GridCountZero() {
+	int count = 0;
+	for (int i = 0; i < _r2d_grid_size; i++) {
+		if (_r2d_grid[i] == 0) count++;
+	}
+	return count;
+}
+
+// 获取第一个空单元的 idx（无空返回 -1）。
+static int32_t godot_icall_R2D_GridFirstZero() {
+	for (int i = 0; i < _r2d_grid_size; i++) {
+		if (_r2d_grid[i] == 0) return i;
+	}
+	return -1;
+}
+
+// 获取随机空单元的 idx（无空返回 -1）。使用简单 LCG 避免 C# System.Random。
+static uint32_t _r2d_grid_rng = 12345;
+static int32_t godot_icall_R2D_GridRandomZero() {
+	// Count zeros first
+	int zeros[R2D_GRID_MAX];
+	int count = 0;
+	for (int i = 0; i < _r2d_grid_size; i++) {
+		if (_r2d_grid[i] == 0) zeros[count++] = i;
+	}
+	if (count == 0) return -1;
+	// LCG random
+	_r2d_grid_rng = _r2d_grid_rng * 1103515245 + 12345;
+	int pick = (int)((_r2d_grid_rng >> 16) % (uint32_t)count);
+	return zeros[pick];
+}
+
+// 执行一行压缩+合并（2048 核心逻辑）。
+// line_idx: 行/列索引 (0..dim-1)
+// direction: 0=左/上（正向），1=右/下（反向）
+// is_row: 1=行操作，0=列操作
+// 返回：合并产生的分数增量。
+static int32_t godot_icall_R2D_GridSlideLine(int32_t line_idx, int32_t direction, int32_t is_row) {
+	int dim = _r2d_grid_dim;
+	int32_t line[8]; // max dim=8
+	// Extract line
+	for (int i = 0; i < dim; i++) {
+		int idx = is_row ? (line_idx * dim + i) : (i * dim + line_idx);
+		line[i] = _r2d_grid[idx];
+	}
+	// Reverse if needed (slide towards index 0)
+	if (direction == 1) {
+		for (int i = 0; i < dim / 2; i++) {
+			int tmp = line[i]; line[i] = line[dim - 1 - i]; line[dim - 1 - i] = tmp;
+		}
+	}
+	// Compact (remove zeros)
+	int32_t compact[8];
+	int cn = 0;
+	for (int i = 0; i < dim; i++) {
+		if (line[i] != 0) compact[cn++] = line[i];
+	}
+	// Merge adjacent equal
+	int32_t merged[8];
+	int mn = 0;
+	int32_t score_gain = 0;
+	int i = 0;
+	while (i < cn) {
+		if (i + 1 < cn && compact[i] == compact[i + 1]) {
+			merged[mn++] = compact[i] * 2;
+			score_gain += compact[i] * 2;
+			i += 2;
+		} else {
+			merged[mn++] = compact[i];
+			i++;
+		}
+	}
+	// Pad with zeros
+	for (int j = mn; j < dim; j++) merged[j] = 0;
+	// Reverse back if needed
+	if (direction == 1) {
+		for (int j = 0; j < dim / 2; j++) {
+			int tmp = merged[j]; merged[j] = merged[dim - 1 - j]; merged[dim - 1 - j] = tmp;
+		}
+	}
+	// Write back
+	for (int j = 0; j < dim; j++) {
+		int idx = is_row ? (line_idx * dim + j) : (j * dim + line_idx);
+		_r2d_grid[idx] = merged[j];
+	}
+	return score_gain;
+}
+
+// 检查网格是否发生变化（与备份比较）。
+// 返回 1=有变化，0=无变化。
+static int32_t godot_icall_R2D_GridChanged() {
+	for (int i = 0; i < _r2d_grid_size; i++) {
+		if (_r2d_grid[i] != _r2d_grid_backup[i]) return 1;
+	}
+	return 0;
 }
 
 // ============================================================
@@ -2506,6 +2852,29 @@ void godot_register_icalls() {
 	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_CreateCanvasLayer", (const void *)godot_icall_R2D_CreateCanvasLayer);
 	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_GetMouseX", (const void *)godot_icall_R2D_GetMouseX);
 	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_GetMouseY", (const void *)godot_icall_R2D_GetMouseY);
+
+	// R2D Tile/Score/Status icalls (eliminate C# BCL string/int ops)
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_SetTileValue", (const void *)godot_icall_R2D_SetTileValue);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_SetScore", (const void *)godot_icall_R2D_SetScore);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_LabelSetInt", (const void *)godot_icall_R2D_LabelSetInt);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_SetStatusText", (const void *)godot_icall_R2D_SetStatusText);
+
+	// R2D Grid icalls (eliminate C# new int[] array allocation)
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_GridCreate", (const void *)godot_icall_R2D_GridCreate);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_GridSet", (const void *)godot_icall_R2D_GridSet);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_GridGet", (const void *)godot_icall_R2D_GridGet);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_GridFill", (const void *)godot_icall_R2D_GridFill);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_GridSave", (const void *)godot_icall_R2D_GridSave);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_GridRestore", (const void *)godot_icall_R2D_GridRestore);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_GridSaveScore", (const void *)godot_icall_R2D_GridSaveScore);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_GridGetSavedScore", (const void *)godot_icall_R2D_GridGetSavedScore);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_GridHasAdjacentEqual", (const void *)godot_icall_R2D_GridHasAdjacentEqual);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_GridHasZero", (const void *)godot_icall_R2D_GridHasZero);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_GridCountZero", (const void *)godot_icall_R2D_GridCountZero);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_GridFirstZero", (const void *)godot_icall_R2D_GridFirstZero);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_GridRandomZero", (const void *)godot_icall_R2D_GridRandomZero);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_GridSlideLine", (const void *)godot_icall_R2D_GridSlideLine);
+	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_GridChanged", (const void *)godot_icall_R2D_GridChanged);
 
 	// WebSocket icalls (global pointer model - no pointer passing through icall boundary)
 	mono_add_internal_call("Godot.Bridge::godot_icall_WebSocket_Init", (const void *)godot_icall_WebSocket_Init);

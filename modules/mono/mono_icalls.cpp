@@ -51,8 +51,10 @@
 #include "scene/resources/animation.h"
 #include "scene/resources/animation_library.h"
 #include "scene/audio/audio_stream_player.h"
+#ifndef _3D_DISABLED
 #include "scene/resources/3d/world_3d.h"
 #include "servers/physics_3d/physics_server_3d.h"
+#endif
 #include <mono/metadata/image.h>
 #include <mono/metadata/blob.h>
 #include <cstdio>
@@ -2134,6 +2136,7 @@ static int32_t godot_icall_Test_FileDelete(MonoString *path) {
 }
 
 // Perform a 3D raycast from (0,10,0) to (0,-10,0). Returns 1 if hit.
+#ifndef _3D_DISABLED
 static int32_t godot_icall_Test_Raycast3D() {
 	SceneTree *tree = Object::cast_to<SceneTree>(OS::get_singleton()->get_main_loop());
 	if (!tree) return 0;
@@ -2152,6 +2155,7 @@ static int32_t godot_icall_Test_Raycast3D() {
 	printf("[Test] Raycast3D: hit=%d\n", hit ? 1 : 0);
 	return hit ? 1 : 0;
 }
+#endif // _3D_DISABLED
 
 // Set audio volume on the global test object (must be AudioStreamPlayer). Returns 1/0.
 static int32_t godot_icall_Test_SetAudioVolume(int32_t volume_db_x10) {
@@ -2937,7 +2941,9 @@ void godot_register_icalls() {
 	mono_add_internal_call("Godot.Bridge::godot_icall_Test_FileRead", (const void *)godot_icall_Test_FileRead);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Test_FileExists", (const void *)godot_icall_Test_FileExists);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Test_FileDelete", (const void *)godot_icall_Test_FileDelete);
+#ifndef _3D_DISABLED
 	mono_add_internal_call("Godot.Bridge::godot_icall_Test_Raycast3D", (const void *)godot_icall_Test_Raycast3D);
+#endif
 	mono_add_internal_call("Godot.Bridge::godot_icall_Test_SetAudioVolume", (const void *)godot_icall_Test_SetAudioVolume);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Test_GetAudioVolume", (const void *)godot_icall_Test_GetAudioVolume);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Test_AddAnimation", (const void *)godot_icall_Test_AddAnimation);

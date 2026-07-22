@@ -283,6 +283,9 @@
   // 必须加超时保护，否则 _resolveWasmPath 永远卡住。
   function _ensureSubpkgLoaded(subpkgName) {
     if (!subpkgName) return Promise.resolve();
+    if (globalThis.__updateBootStatus) {
+      globalThis.__updateBootStatus('Loading subpackage: ' + subpkgName + '...', 0.55);
+    }
     return new Promise(function (resolve, reject) {
       var settled = false;
       if (typeof wx !== 'undefined' && typeof wx.loadSubpackage === 'function') {
@@ -301,13 +304,13 @@
             reject(new Error('Subpackage ' + subpkgName + ' load failed'));
           },
         });
-        // 超时保护：3 秒内无回调则假设已加载（编辑器模式下分包通常已自动可用）
+        // 超时保护：30秒内无回调则假设已加载（真机下载分包可能较慢）
         setTimeout(function () {
           if (settled) return;
           settled = true;
-          console.warn('[WeChat] Subpackage load timeout (3s), assuming loaded: ' + subpkgName);
+          console.warn('[WeChat] Subpackage load timeout (30s), assuming loaded: ' + subpkgName);
           resolve({ timeout: true });
-        }, 3000);
+        }, 30000);
       } else {
         resolve();
       }
@@ -396,19 +399,30 @@
 
     function downloadOne(fileName) {
       var cdnUrl = cdnBaseUrl + '/' + fileName;
-      console.log('[WeChat] Downloading: ' + cdnUrl);
+      console.log('[WeChat] Downloading WASM from CDN: ' + cdnUrl);
       return new Promise(function (resolve, reject) {
+        var settled = false;
+        var dlTimeout = setTimeout(function () {
+          if (settled) return;
+          settled = true;
+          reject(new Error('Download ' + fileName + ' TIMEOUT (60s) - check LAN connectivity'));
+        }, 60000);
         wx.downloadFile({
           url: cdnUrl,
+          timeout: 60000,
           success: function (res) {
+            if (settled) return;
+            clearTimeout(dlTimeout);
             if (res.statusCode !== 200 || !res.tempFilePath) {
+              settled = true;
               reject(new Error('Download ' + fileName + ' HTTP ' + res.statusCode));
               return;
             }
             var tempFilePath = res.tempFilePath;
-            console.log('[WeChat] Downloaded: ' + fileName + ' -> ' + tempFilePath);
+            console.log('[WeChat] Downloaded WASM: ' + fileName + ' -> ' + tempFilePath);
 
             if (!USER_DATA_PATH) {
+              settled = true;
               reject(new Error('USER_DATA_PATH unavailable'));
               return;
             }
@@ -432,22 +446,28 @@
               }
             }
             if (!saved) {
+              settled = true;
               reject(new Error('Failed to save ' + fileName));
               return;
             }
             try {
               var st = fileSystemManager.statSync(savedPath);
               if (!st || st.size <= 0) {
+                settled = true;
                 reject(new Error('Saved ' + fileName + ' is empty'));
                 return;
               }
-              console.log('[WeChat] Saved: ' + savedPath + ' (' + (st.size / 1048576).toFixed(2) + ' MB)');
+              console.log('[WeChat] Saved WASM: ' + savedPath + ' (' + (st.size / 1048576).toFixed(2) + ' MB)');
             } catch (e) {
               console.warn('[WeChat] statSync failed: ' + e.message);
             }
+            settled = true;
             resolve(savedPath);
           },
           fail: function (err) {
+            if (settled) return;
+            clearTimeout(dlTimeout);
+            settled = true;
             reject(new Error('Download ' + fileName + ' failed: ' + (err.errMsg || 'unknown')));
           },
         });
@@ -504,19 +524,27 @@
   // ============================================================
   safeDefineGlobal('_instantiateWasmSmart', function (imports) {
     console.log('[WeChat] _instantiateWasmSmart called, imports keys: ' + (imports ? Object.keys(imports).join(',') : 'none'));
+    if (globalThis.__updateBootStatus) {
+      globalThis.__updateBootStatus('Instantiating WASM...', 0.65);
+    }
 
     return _resolveWasmPath().then(function (wasmPath) {
       var isBr = wasmPath && wasmPath.length > 3 && wasmPath.substring(wasmPath.length - 3) === '.br';
       console.log('[WeChat] Resolved WASM path: ' + wasmPath + ' (isBr=' + isBr + ')');
 
       if (isBr) {
-        // .wasm.br: 只能用 WXWebAssembly.instantiate(path) 自动解压
+        if (globalThis.__updateBootStatus) {
+          globalThis.__updateBootStatus('Compiling WASM (brotli)...', 0.70);
+        }
         if (!_WXWA || typeof _WXWA.instantiate !== 'function') {
           return Promise.reject(new Error('.wasm.br requires WXWebAssembly.instantiate(path) for auto-decompression, but WXWebAssembly is unavailable'));
         }
         console.log('[WeChat] Strategy A: WXWebAssembly.instantiate(.wasm.br path) - auto-decompress');
         return _WXWA.instantiate(wasmPath, imports).then(function (result) {
           console.log('[WeChat] WXWebAssembly.instantiate(.wasm.br) succeeded');
+          if (globalThis.__updateBootStatus) {
+            globalThis.__updateBootStatus('WASM compiled OK', 0.75);
+          }
           if (result && result.instance && result.module) return result;
           return { instance: result.instance || result, module: result.module || null };
         });
@@ -1414,7 +1442,7 @@
       var fileName = '';
       var parts = url.split('/');
       fileName = parts[parts.length - 1].split('?')[0];
-      var skipCache = fileName.indexOf('.data') >= 0;
+      var skipCache = false;
       if (!skipCache && USER_DATA_PATH && fileName) {
         var cachedPath = USER_DATA_PATH + '/' + fileName;
         try {
@@ -1435,9 +1463,19 @@
       // Fix: wx.request arraybuffer corrupts large binaries in devtool (UTF-8 reencoding)
       // Use wx.downloadFile + async readFile instead.
       console.log('[WeChat] Downloading (wx.downloadFile): ' + url);
+      if (globalThis.__updateBootStatus) {
+        globalThis.__updateBootStatus('Downloading: ' + fileName + '...', 0.75);
+      }
+      var dlTimeout = setTimeout(function () {
+        console.error('[WeChat] downloadFile TIMEOUT (60s): ' + url);
+        console.log('[WeChat] Trying fallback request after timeout...');
+        _fallbackRequest(url, fileName, resolve, reject);
+      }, 60000);
       wx.downloadFile({
         url: url,
+        timeout: 60000,
         success: function (dlRes) {
+          clearTimeout(dlTimeout);
           if (dlRes.statusCode >= 200 && dlRes.statusCode < 300 && dlRes.tempFilePath) {
             var tempPath = dlRes.tempFilePath;
             console.log('[WeChat] Downloaded to temp: ' + fileName + ' -> ' + tempPath);
@@ -1445,6 +1483,7 @@
               filePath: tempPath,
               success: function (r) {
                 var ab = r.data instanceof ArrayBuffer ? r.data : (r.data.buffer ? r.data.buffer.slice(r.data.byteOffset, r.data.byteOffset + r.data.byteLength) : new ArrayBuffer(0));
+                clearTimeout(dlTimeout);
                 console.log('[WeChat] Read OK: ' + fileName + ' (' + ab.byteLength + ' bytes)');
                 if (USER_DATA_PATH && fileName && ab.byteLength > 0) {
                   try {
@@ -1460,6 +1499,7 @@
                 resolve(ab);
               },
               fail: function (e) {
+                clearTimeout(dlTimeout);
                 console.error('[WeChat] readFile failed: ' + (e.errMsg || e.message || e) + ', fallback to wx.request');
                 _fallbackRequest(url, fileName, resolve, reject);
               },
@@ -1470,6 +1510,7 @@
           }
         },
         fail: function (err) {
+          clearTimeout(dlTimeout);
           console.error('[WeChat] downloadFile failed: ' + (err.errMsg || 'unknown') + ', fallback to wx.request');
           _fallbackRequest(url, fileName, resolve, reject);
         },
@@ -1480,11 +1521,17 @@
   // Fallback: wx.request + arraybuffer (used if wx.downloadFile fails)
   function _fallbackRequest(url, fileName, resolve, reject) {
     console.log('[WeChat] Fallback to wx.request: ' + url);
+    var fbTimeout = setTimeout(function () {
+      console.error('[WeChat] Fallback request TIMEOUT (60s): ' + url);
+      reject(new Error('Download timeout (60s): ' + url + ' - check CDN/LAN connectivity'));
+    }, 60000);
     wx.request({
       url: url,
       method: 'GET',
       responseType: 'arraybuffer',
+      timeout: 60000,
       success: function (res) {
+        clearTimeout(fbTimeout);
         if (res.statusCode >= 200 && res.statusCode < 300 && res.data) {
           var ab = res.data instanceof ArrayBuffer ? res.data : (res.data.buffer ? res.data.buffer.slice(res.data.byteOffset, res.data.byteOffset + res.data.byteLength) : new ArrayBuffer(0));
           console.log('[WeChat] Fallback download OK: ' + fileName + ' (' + ab.byteLength + ' bytes)');
@@ -1494,6 +1541,7 @@
         }
       },
       fail: function (err) {
+        clearTimeout(fbTimeout);
         reject(new Error(err.errMsg || 'Download failed'));
       },
     });

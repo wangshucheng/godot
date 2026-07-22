@@ -1,6 +1,6 @@
 // === WeChat MiniGame Bootstrap Variables ===
 // 使用 globalThis 而非 var，确保跨模块（index.js -> game.js）可访问
-globalThis._cdnBaseUrl = "http://localhost:8000";
+globalThis._cdnBaseUrl = "http://192.168.31.119:8000";
 globalThis._wasmFileName = "Game2048.wasm";
 globalThis._dataFileName = "godot.web.template_release.wasm32.nothreads.data";
 globalThis._pckFileName = "Game2048.pck";
@@ -581,8 +581,13 @@ const InternalConfig = function (initConfig) { // eslint-disable-line no-unused-
 					console.log('[WeChat] WASM instantiated OK, calling onSuccess');
 					onSuccess(result['instance'], result['module']);
 				}, function (err) {
-					console.error('[WeChat] WASM instantiation failed:', err);
+					console.error('[WeChat] WASM instantiation FAILED:', err);
 					if (err && err.stack) console.error(err.stack);
+					// CRITICAL FIX: Do NOT let Emscripten hang waiting for onSuccess.
+					// Throw async error so the init promise rejects and game.js catches it.
+					setTimeout(function () {
+						throw new Error('WASM instantiation failed: ' + (err && err.message ? err.message : String(err)));
+					}, 0);
 				});
 				// 返回空对象表示异步实例化（Emscripten 会等待 onSuccess 被调用）
 				return {};

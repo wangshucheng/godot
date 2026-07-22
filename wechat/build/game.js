@@ -12,7 +12,6 @@ function _diag(msg) {
     var path = wx.env.USER_DATA_PATH + '/game_diag.log';
     fs.writeFileSync(path, _diagLog.join('\n') + '\n', 'utf8');
   } catch (e) {
-    // 文件写入失败不影响游戏运行
   }
 }
 
@@ -20,25 +19,90 @@ _diag('[WeChat Boot] game.js executing');
 _diag('[WeChat Boot] typeof wx = ' + typeof wx);
 _diag('[WeChat Boot] typeof require = ' + typeof require);
 
+// ★ 关键修复：使用微信原生 showLoading 显示加载状态，
+//   绝不可以在 adapter 加载前调用 wx.createCanvas()，否则会抢占主画布，
+//   导致 adapter 的 getMainCanvas() 只能拿到离屏 canvas（WebGL 渲染不可见）。
+var _loadingVisible = false;
+function _showLoading(title) {
+  _diag('[Boot Status] ' + title);
+  try {
+    if (typeof wx !== 'undefined' && wx.showLoading) {
+      wx.showLoading({ title: title || '加载中...', mask: true });
+      _loadingVisible = true;
+    }
+  } catch (e) {
+    console.warn('[WeChat] showLoading failed: ' + e.message);
+  }
+}
+function _hideLoading() {
+  try {
+    if (_loadingVisible && typeof wx !== 'undefined' && wx.hideLoading) {
+      wx.hideLoading();
+      _loadingVisible = false;
+    }
+  } catch (e) {}
+}
+globalThis.__updateBootStatus = _showLoading;
+
+_showLoading('加载适配器...');
+
+// 错误显示：启动失败时用原生弹窗 + 尝试canvas显示
+function _showBootError(title, details) {
+  _hideLoading();
+  var fullMsg = title + (details ? '\n\n' + details.substring(0, 300) : '');
+  console.error('[WeChat BOOT ERROR] ' + fullMsg);
+  _diag('[WeChat Boot] FATAL ERROR: ' + title);
+  try {
+    wx.showModal({
+      title: '启动失败',
+      content: title.length > 80 ? title.substring(0, 77) + '...' : title,
+      showCancel: false,
+      confirmText: '确定',
+    });
+  } catch (e) {}
+  try {
+    var c = (typeof globalThis.__godotGetMainCanvas === 'function') ? globalThis.__godotGetMainCanvas() : null;
+    if (c) {
+      var ctx = c.getContext('2d');
+      if (ctx) {
+        var w = c.width || 375, h = c.height || 667;
+        ctx.fillStyle = '#1a1a2e';
+        ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = '#ff6b6b';
+        ctx.font = 'bold 20px sans-serif';
+        ctx.fillText('BOOT ERROR', 20, 60);
+        ctx.fillStyle = '#e0e0e0';
+        ctx.font = '14px sans-serif';
+        ctx.fillText(title || 'Unknown error', 20, 100);
+      }
+    }
+  } catch(e) {
+    console.error('[WeChat] Failed to render error on canvas:', e);
+  }
+}
+
 try {
   _diag('[WeChat Boot] requiring wechat_adapter.js...');
   require('./adapter/wechat_adapter.js');
   _diag('[WeChat Boot] wechat_adapter.js loaded OK');
+  _showLoading('加载引擎...');
 } catch (e) {
   _diag('[WeChat Boot] adapter load FAILED: ' + e.message);
   if (e.stack) _diag('[WeChat Boot] stack: ' + e.stack);
+  _showBootError('Adapter load failed: ' + e.message, e.stack || '');
 }
 
 try {
   _diag('[WeChat Boot] requiring index.js...');
   require('./index.js');
   _diag('[WeChat Boot] index.js loaded OK');
+  _showLoading('初始化中...');
 } catch (e) {
   _diag('[WeChat Boot] index.js load FAILED: ' + e.message);
   if (e.stack) _diag('[WeChat Boot] stack: ' + e.stack);
+  _showBootError('Engine load failed: ' + e.message, e.stack || '');
 }
 
-// 设置 CDN 基础 URL
 var cdnBaseUrl = globalThis._cdnBaseUrl || '';
 if (cdnBaseUrl && typeof _setCdnBase === 'function') {
   _setCdnBase(cdnBaseUrl);
@@ -49,7 +113,6 @@ if (cdnBaseUrl && typeof _setCdnBase === 'function') {
   _diag('[WeChat Boot] No CDN base set (local-only mode)');
 }
 
-// 诊断 F5 分包配置
 _diag('[WeChat Boot] _dataSubpkg = ' + (globalThis._dataSubpkg || '(none)'));
 _diag('[WeChat Boot] _dataInSubpkg = ' + globalThis._dataInSubpkg);
 _diag('[WeChat Boot] _wasmSubpkg = ' + (globalThis._wasmSubpkg || '(none)'));
@@ -57,6 +120,7 @@ _diag('[WeChat Boot] _wasmBrInSubpkg = ' + globalThis._wasmBrInSubpkg);
 
 console.log('[WeChat] Starting Godot 4.7 Engine...');
 _diag('[WeChat Boot] Starting Godot 4.7 Engine...');
+_showLoading('创建引擎实例...');
 
 var executableName = globalThis._executableName || 'Game2048';
 var fileSizesMap = globalThis._fileSizes || {};
@@ -70,10 +134,6 @@ var GODOT_CONFIG = {
   executable: executableName,
   mainPack: pckFileName,
   args: [],
-  // 直接使用适配层增强过的主 canvas（带 .style/事件/dispatchEvent + HTMLCanvasElement
-  // 原型补丁）。不要用 wx.createCanvas() 裸对象（无 .style 会在 display_setup 崩溃），
-  // 也避免引擎 getGodotConfig 回退去调 document.getElementsByTagName('canvas')——
-  // 新版开发者工具基础库自带只读 document 桩，适配层 document polyfill 无法覆盖。
   canvas: (typeof globalThis.__godotGetMainCanvas === 'function') ? globalThis.__godotGetMainCanvas() : wx.createCanvas(),
   canvasResizePolicy: 2,
   experimentalVK: false,
@@ -86,9 +146,6 @@ var GODOT_CONFIG = {
   },
   onPrintError: function () {
     var msg = Array.prototype.join.call(arguments, ' ');
-    // 过滤 WASM/微信环境下已知的非致命引擎警告
-    // - mbedTLS PSA crypto: WASM 无持久化存储，PSA crypto 无法初始化，不影响游戏功能
-    // - 音频驱动失败: 微信 AudioContext 是桩，已在 project.godot 中预设 Dummy driver
     if (msg.indexOf('psa crypto') !== -1 ||
         msg.indexOf('initialize_mbedtls_module') !== -1 ||
         msg.indexOf('All audio drivers failed') !== -1 ||
@@ -106,8 +163,8 @@ try {
 
   var engine = new Engine(GODOT_CONFIG);
   _diag('[WeChat Boot] Engine instance created OK');
+  _showLoading('加载游戏数据...');
 
-  // 心跳：每 3s 写一行，用于判断 JS 事件循环是否还活着
   var _hbCount = 0;
   var _hbTimer = setInterval(function () {
     _hbCount++;
@@ -124,19 +181,16 @@ try {
     var pckModule = require('./pck_data.js');
     _diag('[WeChat Boot] PCK data loaded: ' + pckModule.buffer.byteLength + ' bytes');
     console.log('[WeChat] PCK data loaded: ' + pckModule.buffer.byteLength + ' bytes');
-    // preloadFile(ArrayBuffer, path) 直接将 buffer 注册到 preloader.preloadedFiles
     initPromise = engine.preloadFile(pckModule.buffer, pckModule.name).then(function () {
       _diag('[WeChat Boot] PCK preloaded, starting engine...');
       console.log('[WeChat] PCK preloaded, starting engine...');
-      // 手动执行 startGame 逻辑，但跳过 preloadFile(pack, pack) 避免重复 fetch
-      // startGame 内部: config.update() + args加 --main-pack + init(exe) + start()
       var exe = engine.config.executable;
       var pack = engine.config.mainPack || (exe + '.pck');
       engine.config.args = ['--main-pack', pack].concat(engine.config.args);
       return engine.init(exe).then(function () {
         _diag('[WeChat Boot] engine.init() resolved, calling start()...');
         console.log('[WeChat] Engine init OK, starting...');
-        // 用 try-catch 包裹 start()，捕获同步异常
+        _showLoading('启动游戏...');
         try {
           var startRet = engine.start();
           _diag('[WeChat Boot] engine.start() returned: ' + (typeof startRet));
@@ -155,20 +209,24 @@ try {
 
   initPromise.then(function () {
     clearInterval(_hbTimer);
+    _hideLoading();
     _diag('[WeChat Boot] Game started successfully!');
     console.log('[WeChat] Game started successfully!');
   }, function (err) {
     clearInterval(_hbTimer);
-    _diag('[WeChat Boot] Game failed to start: ' + err);
+    var errMsg = err && err.message ? err.message : String(err);
+    _diag('[WeChat Boot] Game failed to start: ' + errMsg);
     console.error('[WeChat] Game failed to start:', err);
     if (err && err.stack) {
       _diag('[WeChat Boot] stack: ' + err.stack);
       console.error(err.stack);
     }
+    _showBootError('启动失败: ' + errMsg, err && err.stack ? err.stack : '');
   });
 } catch (e) {
   _diag('[WeChat Boot] Engine start error: ' + e.message);
   if (e.stack) _diag('[WeChat Boot] stack: ' + e.stack);
   console.error('[WeChat] Engine start error:', e);
   if (e && e.stack) console.error(e.stack);
+  _showBootError('引擎启动错误: ' + (e.message || e), e.stack || '');
 }

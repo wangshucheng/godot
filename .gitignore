@@ -424,7 +424,3 @@ emsdk/
 
 # Mono BCL deployment (build output, not source)
 bin/mono/
-
-# WeChat build outputs (all variants)
-wechat/build*/
-wechat/minigame/

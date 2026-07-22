@@ -28,15 +28,17 @@ static void ensure_stack_bounds() {
 		web_stack_base = ems_base;
 		web_stack_end = ems_end;
 	} else {
-		web_stack_base = current_sp + (1 * 1024 * 1024);
-		web_stack_end = current_sp - (4 * 1024 * 1024);
+		// H5 修复: 栈边界获取失败时使用保守估计并记录警告，
+		// 而非无声地猜测。WASM 线性内存栈通常从高地址向低地址增长，
+		// emscripten 默认栈大小 64KB~5MB。使用 2MB 保守范围。
+		EM_ASM({
+			console.warn('[Mono-Web] WARNING: emscripten_stack_get_base/end returned invalid values (' + $0 + '/' + $1 + '), using conservative stack bounds. GC may be unreliable.');
+		}, ems_base, ems_end);
+		web_stack_base = current_sp + (512 * 1024);  // 向上 512KB
+		web_stack_end = current_sp - (2 * 1024 * 1024);  // 向下 2MB
 	}
 
 	stack_bounds_inited = 1;
-
-	EM_ASM({
-		console.log('[Mono-Web] Stack bounds: base(high)=' + $0 + ' end(low)=' + $1 + ' size=' + $2 + ' current_sp=' + $3);
-	}, web_stack_base, web_stack_end, (size_t)(web_stack_base - web_stack_end), current_sp);
 }
 
 typedef unsigned char guint8;

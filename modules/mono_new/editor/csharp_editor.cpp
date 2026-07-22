@@ -300,6 +300,13 @@ static Vector<String> nuget_restore(const String &p_project_dir) {
 }
 
 static String find_csharp_compiler() {
+	// M8 修复: 缓存编译器探测结果，避免每次保存脚本都启动子进程探测。
+	// 编译器在编辑器会话内不会变化，一次探测即可。
+	static String cached_compiler;
+	if (!cached_compiler.is_empty()) {
+		return cached_compiler;
+	}
+
 	// 1. Try mcs from Mono installation
 	Vector<String> candidates;
 
@@ -329,17 +336,20 @@ static String find_csharp_compiler() {
 			int exit_code = -1;
 			Error err = OS::get_singleton()->execute(candidate, List<String>(), &output, &exit_code);
 			if (err == OK) {
-				return candidate;
+				cached_compiler = candidate;
+				return cached_compiler;
 			}
 		} else {
 			if (FileAccess::exists(candidate)) {
-				return candidate;
+				cached_compiler = candidate;
+				return cached_compiler;
 			}
 		}
 	}
 
 	// Fallback: try mcs on PATH
-	return "mcs";
+	cached_compiler = "mcs";
+	return cached_compiler;
 }
 
 static bool compile_with_mcs(const String &p_compiler, const String &p_project_dir,

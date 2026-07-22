@@ -1147,6 +1147,7 @@ static mono_bool icall_FileAccess_FileExists(MonoString *p_path) {
 	// M3 修复: 补空检查
 	if (!p_path) return false;
 	char *path = mono_string_to_utf8(p_path);
+	if (!path) return false;
 	String s = String::utf8(path);
 	mono_free(path);
 	return FileAccess::exists(s);
@@ -1155,6 +1156,7 @@ static mono_bool icall_FileAccess_FileExists(MonoString *p_path) {
 static MonoString *icall_FileAccess_GetFileAsString(MonoString *p_path) {
 	if (!p_path) return mono_string_new(mono_domain_get(), "");
 	char *path = mono_string_to_utf8(p_path);
+	if (!path) return mono_string_new(mono_domain_get(), "");
 	String s = String::utf8(path);
 	mono_free(path);
 	String content = FileAccess::get_file_as_string(s);
@@ -1164,6 +1166,7 @@ static MonoString *icall_FileAccess_GetFileAsString(MonoString *p_path) {
 static MonoArray *icall_FileAccess_GetFileAsBytes(MonoString *p_path) {
 	if (!p_path) return mono_array_new(mono_domain_get(), mono_get_byte_class(), 0);
 	char *path = mono_string_to_utf8(p_path);
+	if (!path) return mono_array_new(mono_domain_get(), mono_get_byte_class(), 0);
 	String s = String::utf8(path);
 	mono_free(path);
 	Ref<FileAccess> f = FileAccess::open(s, FileAccess::READ);
@@ -1178,6 +1181,7 @@ static MonoArray *icall_FileAccess_GetFileAsBytes(MonoString *p_path) {
 static int icall_FileAccess_WriteFile(MonoString *p_path, MonoArray *p_data) {
 	if (!p_path || !p_data) return (int)Error::ERR_INVALID_PARAMETER;
 	char *path = mono_string_to_utf8(p_path);
+	if (!path) return (int)Error::ERR_INVALID_PARAMETER;
 	String s = String::utf8(path);
 	mono_free(path);
 	int len = mono_array_length(p_data);
@@ -1194,6 +1198,7 @@ static int icall_FileAccess_WriteFile(MonoString *p_path, MonoArray *p_data) {
 static int icall_FileAccess_MakeDirRecursive(MonoString *p_path) {
 	if (!p_path) return (int)Error::ERR_INVALID_PARAMETER;
 	char *path = mono_string_to_utf8(p_path);
+	if (!path) return (int)Error::ERR_INVALID_PARAMETER;
 	String s = String::utf8(path);
 	mono_free(path);
 	Error err = DirAccess::make_dir_recursive_absolute(s);
@@ -1203,6 +1208,7 @@ static int icall_FileAccess_MakeDirRecursive(MonoString *p_path) {
 static mono_bool icall_FileAccess_DirExists(MonoString *p_path) {
 	if (!p_path) return false;
 	char *path = mono_string_to_utf8(p_path);
+	if (!path) return false;
 	String s = String::utf8(path);
 	mono_free(path);
 	return DirAccess::dir_exists_absolute(s);
@@ -1211,6 +1217,7 @@ static mono_bool icall_FileAccess_DirExists(MonoString *p_path) {
 static int icall_FileAccess_Remove(MonoString *p_path) {
 	if (!p_path) return (int)Error::ERR_INVALID_PARAMETER;
 	char *path = mono_string_to_utf8(p_path);
+	if (!path) return (int)Error::ERR_INVALID_PARAMETER;
 	String s = String::utf8(path);
 	mono_free(path);
 	Error err = DirAccess::remove_absolute(s);
@@ -1246,6 +1253,7 @@ static void icall_Node_SetName(int64_t p_node, MonoString *p_name) {
 	if (!p_node || !p_name) return;
 	Node *n = (Node *)(intptr_t)p_node;
 	char *name = mono_string_to_utf8(p_name);
+	if (!name) return;
 	n->set_name(String::utf8(name));
 	mono_free(name);
 }
@@ -1273,6 +1281,7 @@ static int64_t icall_Node_GetNode(int64_t p_node, MonoString *p_path) {
 	if (!p_node || !p_path) return 0;
 	Node *n = (Node *)(intptr_t)p_node;
 	char *path = mono_string_to_utf8(p_path);
+	if (!path) return 0;
 	Node *child = n->get_node(NodePath(String::utf8(path)));
 	mono_free(path);
 	return (int64_t)(intptr_t)child;
@@ -1286,8 +1295,10 @@ static MonoString *icall_Node_GetClassName(int64_t p_node) {
 
 // --- SceneTree icalls ---
 static int icall_SceneTree_ChangeSceneToFile(int64_t p_tree, MonoString *p_path) {
+	if (!p_tree || !p_path) return (int)ERR_INVALID_PARAMETER;
 	SceneTree *tree = (SceneTree *)(intptr_t)p_tree;
 	char *path = mono_string_to_utf8(p_path);
+	if (!path) return (int)ERR_INVALID_PARAMETER;
 	String path_str = String::utf8(path);
 	mono_free(path);
 	// 延迟到当前帧末尾执行：在 _Ready 中直接调 change_scene_to_file 会触发
@@ -1298,13 +1309,16 @@ static int icall_SceneTree_ChangeSceneToFile(int64_t p_tree, MonoString *p_path)
 }
 
 static int64_t icall_SceneTree_GetCurrentScene(int64_t p_tree) {
+	if (!p_tree) return 0;
 	SceneTree *tree = (SceneTree *)(intptr_t)p_tree;
 	return (int64_t)(intptr_t)tree->get_current_scene();
 }
 
 // --- ResourceLoader icall ---
 static int64_t icall_ResourceLoader_Load(MonoString *p_path) {
+	if (!p_path) return 0;
 	char *path = mono_string_to_utf8(p_path);
+	if (!path) return 0;
 	String s = String::utf8(path);
 	mono_free(path);
 	Ref<Resource> res = ResourceLoader::load(s);
@@ -1327,6 +1341,16 @@ static MonoString *icall_GD_DoubleToString(int64_t p_val_bits) {
     double p_val;
     memcpy(&p_val, &p_val_bits, sizeof(double));
     char buf[64];
+    // M5 修复: 处理 NaN/Infinity 特殊值，避免 (int64_t)p_val 未定义行为
+    if (p_val != p_val) { // NaN check (NaN != NaN)
+        return mono_string_new(mono_domain_get(), "NaN");
+    }
+    if (p_val == (double)INFINITY || p_val > 1.7976931348623157e+308) {
+        return mono_string_new(mono_domain_get(), "Infinity");
+    }
+    if (p_val == (double)(-INFINITY) || p_val < -1.7976931348623157e+308) {
+        return mono_string_new(mono_domain_get(), "-Infinity");
+    }
     // Simple formatting: show up to 6 decimal places, strip trailing zeros.
     // P2-7 修复: 原代码 (int)p_val 会把 int64 截断为 int32，导致大整数
     // (例如 5_000_000_000) 被错误地截断显示。改用 %lld + (long long)。

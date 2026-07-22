@@ -186,7 +186,7 @@ globalThis._dataInSubpkg = {data_in_subpkg};   // F5: 分包内是否有 .data
 # subpackages 在 convert() 中动态追加（用于承载超 4MB 的 .wasm.br）
 # 注意: 必须有 game.json (而非 app.json) 才会被识别为小游戏
 GAME_JSON_TEMPLATE = {
-    "deviceOrientation": "landscape",
+    "deviceOrientation": "portrait",
     "showStatusBar": False,
     "networkTimeout": {
         "request": 30000,

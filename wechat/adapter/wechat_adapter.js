@@ -188,12 +188,16 @@
       }
       return Promise.reject(new Error('instantiateStreaming not supported'));
     },
-    Memory: _WXWA ? _WXWA.Memory : function () {},
-    Table: _WXWA ? _WXWA.Table : function () {},
-    Global: _WXWA ? _WXWA.Global : function () {},
-    RuntimeError: Error,
-    CompileError: Error,
-    LinkError: Error,
+    // H6 修复: 保留原始 WebAssembly.Memory/Table/Global 构造器。
+    // Emscripten 运行时会用 new WebAssembly.Memory(...) 创建线性内存，
+    // 空函数会产生无 buffer 的空对象导致崩溃。
+    // 优先用原生 V8 构造器，其次 WXWebAssembly 的，最后才回退空函数。
+    Memory: (_nativeWA && _nativeWA.Memory) ? _nativeWA.Memory : (_WXWA && _WXWA.Memory) ? _WXWA.Memory : function () {},
+    Table: (_nativeWA && _nativeWA.Table) ? _nativeWA.Table : (_WXWA && _WXWA.Table) ? _WXWA.Table : function () {},
+    Global: (_nativeWA && _nativeWA.Global) ? _nativeWA.Global : (_WXWA && _WXWA.Global) ? _WXWA.Global : function () {},
+    RuntimeError: (_nativeWA && _nativeWA.RuntimeError) ? _nativeWA.RuntimeError : Error,
+    CompileError: (_nativeWA && _nativeWA.CompileError) ? _nativeWA.CompileError : Error,
+    LinkError: (_nativeWA && _nativeWA.LinkError) ? _nativeWA.LinkError : Error,
   };
   safeDefineGlobal('WebAssembly', WAPolyfill);
   console.log('[WeChat Adapter] WebAssembly polyfill installed (path + buffer support)');
@@ -537,8 +541,16 @@
         console.warn('[WeChat Diag] main canvas webgl2 probe THREW: ' + e);
       }
       _mainCanvas.style = _mainCanvas.style || {};
-      _mainCanvas.width = _mainCanvas.width || wx.getSystemInfoSync().windowWidth;
-      _mainCanvas.height = _mainCanvas.height || wx.getSystemInfoSync().windowHeight;
+      var sysInfo = wx.getSystemInfoSync();
+      var dpr = sysInfo.pixelRatio || 1;
+      var winW = sysInfo.windowWidth || 375;
+      var winH = sysInfo.windowHeight || 667;
+      _mainCanvas.width = Math.floor(winW * dpr);
+      _mainCanvas.height = Math.floor(winH * dpr);
+      _mainCanvas.style.width = winW + 'px';
+      _mainCanvas.style.height = winH + 'px';
+      _mainCanvas.style.display = 'block';
+      console.log('[WeChat Adapter] canvas init: ' + _mainCanvas.width + 'x' + _mainCanvas.height + ' (dpr=' + dpr + ', win=' + winW + 'x' + winH + ')');
       _mainCanvas.tabIndex = 0;
       _mainCanvas.getBoundingClientRect = function () {
         return {
@@ -656,8 +668,36 @@
   // ============================================================
 
   // ============================================================
-  // 模块 5: TouchEvents polyfill
+  // 模块 5: TouchEvents polyfill + swipe-to-keyboard
   // ============================================================
+  var _touchStartX = 0, _touchStartY = 0, _touchActive = false;
+  var SWIPE_THRESHOLD = 30;
+
+  function dispatchKeyEvent(type, keyName, keyCode) {
+    var canvas = getMainCanvas();
+    try {
+      var event;
+      if (typeof KeyboardEvent === 'function') {
+        event = new KeyboardEvent(type, {
+          key: keyName,
+          code: keyName,
+          keyCode: keyCode,
+          which: keyCode,
+          bubbles: true,
+          cancelable: true,
+        });
+      } else {
+        event = { type: type, key: keyName, code: keyName, keyCode: keyCode, which: keyCode, bubbles: true, cancelable: true };
+      }
+      canvas.dispatchEvent(event);
+      if (globalThis.window && globalThis.window !== globalThis) {
+        try { globalThis.window.dispatchEvent(event); } catch (e) {}
+      }
+    } catch (e) {
+      console.warn('[WeChat Adapter] dispatchKeyEvent failed: ' + e);
+    }
+  }
+
   function dispatchTouch(type, touches) {
     var canvas = getMainCanvas();
     var event = {
@@ -675,7 +715,42 @@
       timeStamp: Date.now(),
     };
     canvas.dispatchEvent(event);
+
+    if (touches.length > 0) {
+      var t = touches[0];
+      if (type === 'touchstart') {
+        _touchStartX = t.clientX;
+        _touchStartY = t.clientY;
+        _touchActive = true;
+      } else if (type === 'touchend' && _touchActive) {
+        _touchActive = false;
+        var dx = t.clientX - _touchStartX;
+        var dy = t.clientY - _touchStartY;
+        var absDx = dx > 0 ? dx : -dx;
+        var absDy = dy > 0 ? dy : -dy;
+        if (absDx < SWIPE_THRESHOLD && absDy < SWIPE_THRESHOLD) {
+          if (gameOverDetected && gameOverDetected()) {
+            dispatchKeyEvent('keydown', 'Enter', 13);
+            setTimeout(function () { dispatchKeyEvent('keyup', 'Enter', 13); }, 50);
+          }
+          return;
+        }
+        var keyName, keyCode;
+        if (absDx > absDy) {
+          keyName = dx > 0 ? 'ArrowRight' : 'ArrowLeft';
+          keyCode = dx > 0 ? 39 : 37;
+        } else {
+          keyName = dy > 0 ? 'ArrowDown' : 'ArrowUp';
+          keyCode = dy > 0 ? 40 : 38;
+        }
+        console.log('[WeChat Swipe] dx=' + dx + ' dy=' + dy + ' -> ' + keyName);
+        dispatchKeyEvent('keydown', keyName, keyCode);
+        setTimeout(function () { dispatchKeyEvent('keyup', keyName, keyCode); }, 50);
+      }
+    }
   }
+
+  function gameOverDetected() { return true; }
 
   if (wx.onTouchStart) {
     wx.onTouchStart(function (e) { dispatchTouch('touchstart', e.touches); });

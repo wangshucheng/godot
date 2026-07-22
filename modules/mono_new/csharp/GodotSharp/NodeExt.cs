@@ -533,8 +533,12 @@ namespace Godot
         {
             long ptr = godot_icall_ResourceLoader_Load(path);
             if (ptr == 0) return null;
+            // H4 修复: C++ 侧 icall_ResourceLoader_Load 调用了 res->reference()，
+            // 因此 C# 侧必须设置 ownsNative=true，这样 Dispose/终结器会调用
+            // godot_icall_Object_Free 来 unreference，避免引用计数泄漏。
             PackedScene ps = new PackedScene();
             ps.nativeInstance = ptr;
+            ps.ownsNative = true;
             return ps;
         }
     }

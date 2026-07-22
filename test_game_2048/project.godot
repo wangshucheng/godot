@@ -11,15 +11,16 @@ config_version=5
 [application]
 
 config/name="2048"
-config/description="2048 小游戏 - 微信小游戏工作流验证"
+config/description="2048 mini game"
 run/main_scene="res://Main.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 
 [display]
 
 window/size/viewport_width=400
-window/size/viewport_height=600
+window/size/viewport_height=700
 window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
 
 [input]
 
@@ -48,3 +49,8 @@ ui_down={
 
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
+environment/defaults/default_clear_color=Color(0.73, 0.68, 0.63, 1)
+
+[audio]
+
+driver="Dummy"

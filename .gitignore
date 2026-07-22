@@ -399,3 +399,32 @@ $RECYCLE.BIN/
 
 exports/*
 wechat/build*
+
+#################################
+### Project-specific excludes ###
+#################################
+
+# Large binary archives (build artifacts, not source)
+wasm-binaries.zip
+*.wasm.zip
+
+# Accidental files (Windows NUL redirect, screenshots, symlinks)
+nul
+SOLO
+TRAE
+
+# Linker temporary files
+link_args.rsp
+
+# Audit/temporary analysis files
+_audit_tmp/
+
+# Emscripten SDK residuals inside engine tree
+emsdk/
+
+# Mono BCL deployment (build output, not source)
+bin/mono/
+
+# WeChat build outputs (all variants)
+wechat/build*/
+wechat/minigame/

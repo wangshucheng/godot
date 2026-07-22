@@ -22,6 +22,7 @@
 #include <mono/mono-publib.h>
 #include <cstring>
 #include <cstdlib>
+#include <algorithm>
 
 #define MONO_AOT_MODE_INTERP 5
 #define MONO_EE_MODE_INTERP 1000
@@ -475,6 +476,44 @@ bool GDMono::initialize() {
 
 		MonoLogger::log(vformat("Found %d candidate user assemblies", user_dll_paths.size()));
 
+		// M3 修复: 对版本化 DLL（形如 Name_<timestamp>.dll）按时间戳升序排序，
+		// 确保最新版本最后加载，配合 get_class/find_class 的反向遍历优先命中新版。
+		{
+			struct DllSortEntry {
+				String path;
+				int64_t timestamp; // -1 = 无时间戳（非版本化），排在最前
+			};
+			Vector<DllSortEntry> sorted_entries;
+			for (const String &p : user_dll_paths) {
+				DllSortEntry e;
+				e.path = p;
+				e.timestamp = -1;
+				// 提取文件名中最后一个 '_' 后的数字时间戳
+				String base = p.get_file().get_basename(); // 去掉 .dll
+				int underscore_pos = base.rfind("_");
+				if (underscore_pos >= 0 && underscore_pos < base.length() - 1) {
+					String suffix = base.substr(underscore_pos + 1);
+					bool all_digits = !suffix.is_empty();
+					for (int ci = 0; ci < suffix.length(); ci++) {
+						if (suffix[ci] < '0' || suffix[ci] > '9') { all_digits = false; break; }
+					}
+					if (all_digits) {
+						e.timestamp = suffix.to_int64();
+					}
+				}
+				sorted_entries.push_back(e);
+			}
+			// 升序排序：无时间戳(-1)在前，有时间戳按值升序（最新在最后）
+			std::stable_sort(sorted_entries.ptrw(), sorted_entries.ptrw() + sorted_entries.size(),
+					[](const DllSortEntry &a, const DllSortEntry &b) {
+						return a.timestamp < b.timestamp;
+					});
+			user_dll_paths.clear();
+			for (const DllSortEntry &e : sorted_entries) {
+				user_dll_paths.push_back(e.path);
+			}
+		}
+
 		for (const String &path : user_dll_paths) {
 			MonoLogger::log(vformat("Loading user assembly from: %s", path));
 			MonoAssembly *assy = nullptr;
@@ -789,7 +828,10 @@ MonoClass *GDMono::get_class(const String &p_namespace, const String &p_class_na
 	CharString ns_utf8 = p_namespace.utf8();
 	CharString class_utf8 = p_class_name.utf8();
 
-	for (const UserAssembly &ua : user_assemblies) {
+	// M3 修复: 反向遍历 user_assemblies，最新加载的程序集优先命中，
+	// 避免版本化 DLL 并存时找到旧版类。
+	for (int i = user_assemblies.size() - 1; i >= 0; i--) {
+		const UserAssembly &ua = user_assemblies[i];
 		if (ua.image) {
 			klass = mono_class_from_name(ua.image,
 					ns_utf8.get_data(),
@@ -868,7 +910,9 @@ MonoClass *GDMono::find_class(const String &p_class_name) {
 	}
 
 	// Last resort: search all user assemblies by iterating images
-	for (const UserAssembly &ua : user_assemblies) {
+	// M3 修复: 反向遍历，最新版本优先
+	for (int idx = user_assemblies.size() - 1; idx >= 0; idx--) {
+		const UserAssembly &ua = user_assemblies[idx];
 		if (!ua.image) continue;
 		const void *table = mono_image_get_table_info(ua.image, MONO_TABLE_TYPEDEF);
 		if (!table) continue;

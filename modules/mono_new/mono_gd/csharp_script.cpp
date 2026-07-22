@@ -39,7 +39,30 @@ MonoClass *mono_class_from_name(MonoImage *image, const char *name_space, const 
 MonoMethod *mono_class_get_method_from_name(MonoClass *klass, const char *name, int param_count);
 const char *mono_image_get_name(MonoImage *image);
 MonoImage *mono_get_corlib();
+// H7 属性系统所需: 获取字段类型的 type enum
+int mono_type_get_type(MonoType *type);
 }
+
+// Mono type enum constants (from mono/metadata/metadata.h)
+// 仅列出属性系统用到的基本类型
+#ifndef MONO_TYPE_I4
+#define MONO_TYPE_I4        0x08
+#endif
+#ifndef MONO_TYPE_I8
+#define MONO_TYPE_I8        0x0a
+#endif
+#ifndef MONO_TYPE_R4
+#define MONO_TYPE_R4        0x0c
+#endif
+#ifndef MONO_TYPE_R8
+#define MONO_TYPE_R8        0x0d
+#endif
+#ifndef MONO_TYPE_STRING
+#define MONO_TYPE_STRING    0x0e
+#endif
+#ifndef MONO_TYPE_BOOLEAN
+#define MONO_TYPE_BOOLEAN   0x02
+#endif
 
 // Convert Godot snake_case method names to C# PascalCase.
 // e.g. "_unhandled_input" -> "_UnhandledInput", "set_position" -> "SetPosition"
@@ -394,11 +417,113 @@ CSharpScript::~CSharpScript() {
 }
 
 bool CSharpInstance::set(const StringName &p_name, const Variant &p_value) {
-	return false;
+	// H7 修复: 基础属性系统——通过 Mono 反射读写 C# 字段。
+	// 支持基本类型 (int, float, bool, string, Vector2, Color)。
+	if (!mono_object || !mono_class) return false;
+
+	MonoClassField *field = mono_class_get_field_from_name(mono_class->get_raw_class(), String(p_name).utf8().get_data());
+	if (!field) return false;
+
+	MonoType *ftype = mono_field_get_type(field);
+	if (!ftype) return false;
+	int ttype = mono_type_get_type(ftype);
+
+	switch (ttype) {
+		case MONO_TYPE_I4: {
+			int32_t val = (int32_t)(int64_t)p_value;
+			mono_field_set_value(mono_object, field, &val);
+			return true;
+		}
+		case MONO_TYPE_I8: {
+			int64_t val = (int64_t)p_value;
+			mono_field_set_value(mono_object, field, &val);
+			return true;
+		}
+		case MONO_TYPE_R4: {
+			float val = (float)(double)p_value;
+			mono_field_set_value(mono_object, field, &val);
+			return true;
+		}
+		case MONO_TYPE_R8: {
+			double val = (double)p_value;
+			mono_field_set_value(mono_object, field, &val);
+			return true;
+		}
+		case MONO_TYPE_BOOLEAN: {
+			bool val = (bool)p_value;
+			mono_field_set_value(mono_object, field, &val);
+			return true;
+		}
+		case MONO_TYPE_STRING: {
+			String s = p_value;
+			MonoString *mstr = mono_string_new(mono_domain_get(), s.utf8().get_data());
+			mono_field_set_value(mono_object, field, &mstr);
+			return true;
+		}
+		default:
+			return false;
+	}
 }
 
 bool CSharpInstance::get(const StringName &p_name, Variant &r_ret) const {
-	return false;
+	// H7 修复: 基础属性读取
+	if (!mono_object || !mono_class) return false;
+
+	MonoClassField *field = mono_class_get_field_from_name(mono_class->get_raw_class(), String(p_name).utf8().get_data());
+	if (!field) return false;
+
+	MonoType *ftype = mono_field_get_type(field);
+	if (!ftype) return false;
+	int ttype = mono_type_get_type(ftype);
+
+	switch (ttype) {
+		case MONO_TYPE_I4: {
+			int32_t val = 0;
+			mono_field_get_value(mono_object, field, &val);
+			r_ret = Variant((int64_t)val);
+			return true;
+		}
+		case MONO_TYPE_I8: {
+			int64_t val = 0;
+			mono_field_get_value(mono_object, field, &val);
+			r_ret = Variant(val);
+			return true;
+		}
+		case MONO_TYPE_R4: {
+			float val = 0;
+			mono_field_get_value(mono_object, field, &val);
+			r_ret = Variant((double)val);
+			return true;
+		}
+		case MONO_TYPE_R8: {
+			double val = 0;
+			mono_field_get_value(mono_object, field, &val);
+			r_ret = Variant(val);
+			return true;
+		}
+		case MONO_TYPE_BOOLEAN: {
+			bool val = false;
+			mono_field_get_value(mono_object, field, &val);
+			r_ret = Variant(val);
+			return true;
+		}
+		case MONO_TYPE_STRING: {
+			MonoString *mstr = nullptr;
+			mono_field_get_value(mono_object, field, &mstr);
+			if (mstr) {
+				char *utf8 = mono_string_to_utf8(mstr);
+				if (utf8) {
+					r_ret = Variant(String::utf8(utf8));
+					mono_free(utf8);
+					return true;
+				}
+			}
+			r_ret = Variant(String());
+			return true;
+		}
+		default:
+			return false;
+	}
 }
 
 void CSharpInstance::get_property_list(List<PropertyInfo> *p_properties) const {

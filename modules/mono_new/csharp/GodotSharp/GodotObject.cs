@@ -53,13 +53,13 @@ namespace Godot
         {
             if (disposed)
                 return;
+            disposed = true;
 
             if (nativeInstance != 0 && ownsNative)
             {
                 godot_icall_Object_Free(nativeInstance);
                 nativeInstance = 0;
             }
-
         }
 
         [MethodImpl(MethodImplOptions.InternalCall)]

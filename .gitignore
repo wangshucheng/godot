@@ -397,9 +397,6 @@ $RECYCLE.BIN/
 *.lnk
 *.generated.props
 
-exports/*
-wechat/build*
-
 #################################
 ### Project-specific excludes ###
 #################################

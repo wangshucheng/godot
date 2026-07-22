@@ -1,0 +1,21 @@
+{
+  "description": "2048 WeChat MiniGame",
+  "compileType": "game",
+  "libVersion": "3.17.0",
+  "appid": "touristappid",
+  "projectname": "2048-minigame",
+  "setting": {
+    "urlCheck": false,
+    "es6": false,
+    "enhance": false,
+    "postcss": false,
+    "minified": false,
+    "babelSetting": {
+      "ignore": [
+        "index.js"
+      ],
+      "disablePlugins": [],
+      "outputPath": ""
+    }
+  }
+}

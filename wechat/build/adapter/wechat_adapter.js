@@ -33,6 +33,81 @@
   var fileSystemManager = wx.getFileSystemManager ? wx.getFileSystemManager() : null;
   var USER_DATA_PATH = (wx.env && wx.env.USER_DATA_PATH) ? wx.env.USER_DATA_PATH : '';
   console.log('[WeChat Adapter] USER_DATA_PATH = ' + USER_DATA_PATH);
+  // ============================================================
+  // TextDecoder/TextEncoder polyfill
+  // Emscripten UTF8ToString uses `new TextDecoder('utf-8').decode(bytes)`
+  // to decode strings (e.g. GLSL shader source in glShaderSource).
+  // WeChat Mini Game lacks TextDecoder natively -> engine crashes at
+  // first shader compilation with "Cannot read properties of undefined (reading 'decode')".
+  // ============================================================
+  if (typeof TextDecoder === 'undefined') {
+    function TextDecoderPolyfill(label) {
+      this.label = (label || 'utf-8').toLowerCase();
+    }
+    TextDecoderPolyfill.prototype.decode = function (bytes, options) {
+      if (!bytes) return '';
+      var u8;
+      if (bytes instanceof ArrayBuffer) {
+        u8 = new Uint8Array(bytes);
+      } else if (bytes && bytes.buffer instanceof ArrayBuffer) {
+        u8 = new Uint8Array(bytes.buffer, bytes.byteOffset || 0, bytes.byteLength);
+      } else if (bytes && typeof bytes.length === 'number') {
+        u8 = new Uint8Array(bytes);
+      } else {
+        return '';
+      }
+      var result = '';
+      var i = 0;
+      var len = u8.length;
+      while (i < len) {
+        var c = u8[i++];
+        if (c < 0x80) {
+          result += String.fromCharCode(c);
+        } else if (c < 0xE0) {
+          var c2 = u8[i++];
+          result += String.fromCharCode(((c & 0x1F) << 6) | (c2 & 0x3F));
+        } else if (c < 0xF0) {
+          var c2 = u8[i++], c3 = u8[i++];
+          result += String.fromCharCode(((c & 0x0F) << 12) | ((c2 & 0x3F) << 6) | (c3 & 0x3F));
+        } else {
+          var c2 = u8[i++], c3 = u8[i++], c4 = u8[i++];
+          var cp = ((c & 0x07) << 18) | ((c2 & 0x3F) << 12) | ((c3 & 0x3F) << 6) | (c4 & 0x3F);
+          cp -= 0x10000;
+          result += String.fromCharCode(0xD800 + (cp >> 10), 0xDC00 + (cp & 0x3FF));
+        }
+      }
+      return result;
+    };
+    safeDefineGlobal('TextDecoder', TextDecoderPolyfill);
+    console.log('[WeChat Adapter] TextDecoder polyfill installed');
+  }
+
+  if (typeof TextEncoder === 'undefined') {
+    function TextEncoderPolyfill() {}
+    TextEncoderPolyfill.prototype.encode = function (str) {
+      str = str || '';
+      var bytes = [];
+      for (var i = 0; i < str.length; i++) {
+        var c = str.charCodeAt(i);
+        if (c < 0x80) {
+          bytes.push(c);
+        } else if (c < 0x800) {
+          bytes.push(0xC0 | (c >> 6), 0x80 | (c & 0x3F));
+        } else if (c < 0xD800 || c >= 0xE000) {
+          bytes.push(0xE0 | (c >> 12), 0x80 | ((c >> 6) & 0x3F), 0x80 | (c & 0x3F));
+        } else {
+          i++;
+          var c2 = str.charCodeAt(i);
+          var cp = 0x10000 + (((c & 0x3FF) << 10) | (c2 & 0x3FF));
+          bytes.push(0xF0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3F), 0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F));
+        }
+      }
+      return new Uint8Array(bytes);
+    };
+    safeDefineGlobal('TextEncoder', TextEncoderPolyfill);
+    console.log('[WeChat Adapter] TextEncoder polyfill installed');
+  }
+
 
   // ============================================================
   // 模块 0a: zlib 解压（已删除 - F2 修复）
@@ -177,17 +252,10 @@
         return result;
       } catch (e) { return false; }
     },
-    instantiateStreaming: function (source, imports) {
-      // 不支持 streaming，回退到 instantiate
-      if (source && typeof source.then === 'function') {
-        return source.then(function (resp) {
-          return resp.arrayBuffer();
-        }).then(function (buf) {
-          return WAPolyfill.instantiate(buf, imports);
-        });
-      }
-      return Promise.reject(new Error('instantiateStreaming not supported'));
-    },
+    // === WeChat Patch: 不提供 instantiateStreaming ===
+    // Emscripten 检测到 WebAssembly.instantiateStreaming 存在时会优先用 streaming 模式，
+    // 这会绕过我们的 instantiateWasm 回调，导致用临时文件路径调用 WXWebAssembly.instantiate 失败。
+    // 不定义 instantiateStreaming，强制 Emscripten 走 instantiateWasm 回调路径。
     // H6 修复: 保留原始 WebAssembly.Memory/Table/Global 构造器。
     // Emscripten 运行时会用 new WebAssembly.Memory(...) 创建线性内存，
     // 空函数会产生无 buffer 的空对象导致崩溃。
@@ -211,21 +279,36 @@
   // ============================================================
 
   // 加载分包（如果已加载则立即 resolve）。返回 Promise。
+  // 关键: 编辑器模式下 wx.loadSubpackage 可能不回调（既不 success 也不 fail），
+  // 必须加超时保护，否则 _resolveWasmPath 永远卡住。
   function _ensureSubpkgLoaded(subpkgName) {
     if (!subpkgName) return Promise.resolve();
     return new Promise(function (resolve, reject) {
-      // 微信小游戏 wx.loadSubpackage 在已加载时会立即 success
+      var settled = false;
       if (typeof wx !== 'undefined' && typeof wx.loadSubpackage === 'function') {
         wx.loadSubpackage({
           name: subpkgName,
           success: function (res) {
+            if (settled) return;
+            settled = true;
             console.log('[WeChat] Subpackage loaded: ' + subpkgName + ', res=' + JSON.stringify(res || {}));
             resolve(res);
           },
-          fail: function (err) { console.warn('[WeChat] Subpackage load failed: ' + subpkgName + ': ' + (err.errMsg || 'unknown')); reject(new Error('Subpackage ' + subpkgName + ' load failed')); },
+          fail: function (err) {
+            if (settled) return;
+            settled = true;
+            console.warn('[WeChat] Subpackage load failed: ' + subpkgName + ': ' + (err.errMsg || 'unknown'));
+            reject(new Error('Subpackage ' + subpkgName + ' load failed'));
+          },
         });
+        // 超时保护：3 秒内无回调则假设已加载（编辑器模式下分包通常已自动可用）
+        setTimeout(function () {
+          if (settled) return;
+          settled = true;
+          console.warn('[WeChat] Subpackage load timeout (3s), assuming loaded: ' + subpkgName);
+          resolve({ timeout: true });
+        }, 3000);
       } else {
-        // 不支持 loadSubpackage（老版本），假设已可用
         resolve();
       }
     });
@@ -244,6 +327,15 @@
     // 1. 分包内 .wasm.br（F4 主路径 - 唯一在 devtool 和真机都可用的方案）
     if (wasmSubpkg && brInSubpkg) {
       var subpkgBrPath = wasmSubpkg + '/' + brFileName;
+      // 先尝试直接 accessSync：编辑器模式下分包文件可能已自动可用，
+      // 不需要 wx.loadSubpackage（该 API 在编辑器模式下可能不回调）。
+      try {
+        fileSystemManager.accessSync(subpkgBrPath);
+        console.log('[WeChat] WASM in subpackage (direct access): ' + subpkgBrPath);
+        return Promise.resolve(subpkgBrPath);
+      } catch (directErr) {
+        // 直接访问失败，走 loadSubpackage 流程
+      }
       return _ensureSubpkgLoaded(wasmSubpkg).then(function () {
         try {
           fileSystemManager.accessSync(subpkgBrPath);
@@ -774,10 +866,76 @@
   // PC 端预览没有 wx.onKeyDown，回退到 window.addEventListener
   function _handleKeyBind(type, e) {
     var keyName = e.key || _mapKeyCodeToName(e.keyCode);
-    if (type === 'keydown') {
-      console.log('[WeChat KeyDown] keyCode=' + e.keyCode + ' key=' + keyName);
+    // wx.onKeyDown 在 PC 编辑器下 e.keyCode 是 undefined，只有 e.key
+    // 必须从 e.key 反推 keyCode，否则 Godot 无法识别 action
+    var keyCode = e.keyCode;
+    if (keyCode === undefined || keyCode === null) {
+      keyCode = _mapKeyNameToCode(keyName);
     }
-    dispatchKeyEvent(type, keyName, e.keyCode);
+    if (type === 'keydown') {
+      console.log('[WeChat KeyDown] keyCode=' + keyCode + ' key=' + keyName);
+    }
+    dispatchKeyEvent(type, keyName, keyCode);
+  }
+
+  // 从 key name 反推 keyCode（标准 KeyboardEvent.key → keyCode 映射）
+  function _mapKeyNameToCode(keyName) {
+    if (!keyName) return 0;
+    var key = keyName.toLowerCase();
+    switch (key) {
+      case 'arrowup': return 38;
+      case 'arrowdown': return 40;
+      case 'arrowleft': return 37;
+      case 'arrowright': return 39;
+      case 'enter': return 13;
+      case 'escape': return 27;
+      case ' ': case 'space': return 32;
+      case 'tab': return 9;
+      case 'backspace': return 8;
+      case 'shift': return 16;
+      case 'control': return 17;
+      case 'alt': return 18;
+      case 'a': return 65;
+      case 'b': return 66;
+      case 'c': return 67;
+      case 'd': return 68;
+      case 'e': return 69;
+      case 'f': return 70;
+      case 'g': return 71;
+      case 'h': return 72;
+      case 'i': return 73;
+      case 'j': return 74;
+      case 'k': return 75;
+      case 'l': return 76;
+      case 'm': return 77;
+      case 'n': return 78;
+      case 'o': return 79;
+      case 'p': return 80;
+      case 'q': return 81;
+      case 'r': return 82;
+      case 's': return 83;
+      case 't': return 84;
+      case 'u': return 85;
+      case 'v': return 86;
+      case 'w': return 87;
+      case 'x': return 88;
+      case 'y': return 89;
+      case 'z': return 90;
+      case '0': return 48;
+      case '1': return 49;
+      case '2': return 50;
+      case '3': return 51;
+      case '4': return 52;
+      case '5': return 53;
+      case '6': return 54;
+      case '7': return 55;
+      case '8': return 56;
+      case '9': return 57;
+      default:
+        if (key.length === 1 && key >= 'a' && key <= 'z') return key.charCodeAt(0) - 32;
+        if (key.length === 1 && key >= '0' && key <= '9') return key.charCodeAt(0);
+        return 0;
+    }
   }
 
   if (wx.onKeyDown) {
@@ -1256,7 +1414,8 @@
       var fileName = '';
       var parts = url.split('/');
       fileName = parts[parts.length - 1].split('?')[0];
-      if (USER_DATA_PATH && fileName) {
+      var skipCache = fileName.indexOf('.data') >= 0;
+      if (!skipCache && USER_DATA_PATH && fileName) {
         var cachedPath = USER_DATA_PATH + '/' + fileName;
         try {
           fileSystemManager.accessSync(cachedPath);
@@ -1273,38 +1432,70 @@
         } catch (e) {}
       }
 
-      console.log('[WeChat] Downloading (wx.request arraybuffer): ' + url);
-      // 优先用 wx.request + arraybuffer 直接下载到内存（避免 wx.downloadFile
-      // 在 devtool 下 readFileSync(tempFilePath) 对大文件报 "not found" 的 bug）
-      wx.request({
+      // Fix: wx.request arraybuffer corrupts large binaries in devtool (UTF-8 reencoding)
+      // Use wx.downloadFile + async readFile instead.
+      console.log('[WeChat] Downloading (wx.downloadFile): ' + url);
+      wx.downloadFile({
         url: url,
-        method: 'GET',
-        responseType: 'arraybuffer',
-        success: function (res) {
-          if (res.statusCode >= 200 && res.statusCode < 300 && res.data) {
-            var ab = res.data instanceof ArrayBuffer ? res.data : (res.data.buffer ? res.data.buffer.slice(res.data.byteOffset, res.data.byteOffset + res.data.byteLength) : new ArrayBuffer(0));
-            // 缓存到 USER_DATA_PATH（下次命中可省去下载）
-            if (USER_DATA_PATH && fileName && ab.byteLength > 0) {
-              try {
-                fileSystemManager.writeFile({
-                  filePath: USER_DATA_PATH + '/' + fileName,
-                  data: ab,
-                  encoding: 'binary',
-                });
-              } catch (we) {
-                console.log('[WeChat] Cache write skipped: ' + (we.message || we));
-              }
-            }
-            console.log('[WeChat] Downloaded: ' + fileName + ' (' + (ab.byteLength / 1024 / 1024).toFixed(2) + ' MB)');
-            resolve(ab);
+        success: function (dlRes) {
+          if (dlRes.statusCode >= 200 && dlRes.statusCode < 300 && dlRes.tempFilePath) {
+            var tempPath = dlRes.tempFilePath;
+            console.log('[WeChat] Downloaded to temp: ' + fileName + ' -> ' + tempPath);
+            fileSystemManager.readFile({
+              filePath: tempPath,
+              success: function (r) {
+                var ab = r.data instanceof ArrayBuffer ? r.data : (r.data.buffer ? r.data.buffer.slice(r.data.byteOffset, r.data.byteOffset + r.data.byteLength) : new ArrayBuffer(0));
+                console.log('[WeChat] Read OK: ' + fileName + ' (' + ab.byteLength + ' bytes)');
+                if (USER_DATA_PATH && fileName && ab.byteLength > 0) {
+                  try {
+                    fileSystemManager.writeFile({
+                      filePath: USER_DATA_PATH + '/' + fileName,
+                      data: ab,
+                      encoding: 'binary',
+                    });
+                  } catch (we) {
+                    console.log('[WeChat] Cache write skipped: ' + (we.message || we));
+                  }
+                }
+                resolve(ab);
+              },
+              fail: function (e) {
+                console.error('[WeChat] readFile failed: ' + (e.errMsg || e.message || e) + ', fallback to wx.request');
+                _fallbackRequest(url, fileName, resolve, reject);
+              },
+            });
           } else {
-            reject(new Error('Download failed: HTTP ' + res.statusCode));
+            console.error('[WeChat] downloadFile bad status: ' + dlRes.statusCode + ', fallback to wx.request');
+            _fallbackRequest(url, fileName, resolve, reject);
           }
         },
         fail: function (err) {
-          reject(new Error(err.errMsg || 'Download failed'));
-        }
+          console.error('[WeChat] downloadFile failed: ' + (err.errMsg || 'unknown') + ', fallback to wx.request');
+          _fallbackRequest(url, fileName, resolve, reject);
+        },
       });
+    });
+  }
+
+  // Fallback: wx.request + arraybuffer (used if wx.downloadFile fails)
+  function _fallbackRequest(url, fileName, resolve, reject) {
+    console.log('[WeChat] Fallback to wx.request: ' + url);
+    wx.request({
+      url: url,
+      method: 'GET',
+      responseType: 'arraybuffer',
+      success: function (res) {
+        if (res.statusCode >= 200 && res.statusCode < 300 && res.data) {
+          var ab = res.data instanceof ArrayBuffer ? res.data : (res.data.buffer ? res.data.buffer.slice(res.data.byteOffset, res.data.byteOffset + res.data.byteLength) : new ArrayBuffer(0));
+          console.log('[WeChat] Fallback download OK: ' + fileName + ' (' + ab.byteLength + ' bytes)');
+          resolve(ab);
+        } else {
+          reject(new Error('Download failed: HTTP ' + res.statusCode));
+        }
+      },
+      fail: function (err) {
+        reject(new Error(err.errMsg || 'Download failed'));
+      },
     });
   }
 
@@ -1773,6 +1964,34 @@
     title: '',
   };
   safeDefineGlobal('document', _document);
+  // 全局 location（Emscripten loadPackage 访问 window.location.pathname）
+  // 关键: 新版基础库自带的 location 是只读/冻结对象，safeDefineGlobal 无法覆盖。
+  // 改为增量化补全缺失属性（pathname 等）到现有 location 对象上。
+  var _locationDefaults = { href: '', pathname: '/', origin: '', search: '', hash: '', host: '', hostname: '', port: '', protocol: 'http:' };
+  function _augmentLocation(loc) {
+    if (!loc || typeof loc !== 'object') return;
+    Object.keys(_locationDefaults).forEach(function (k) {
+      if (loc[k] === undefined || loc[k] === null) {
+        try { loc[k] = _locationDefaults[k]; return; } catch (e) {}
+        try { Object.defineProperty(loc, k, { value: _locationDefaults[k], writable: true, configurable: true }); } catch (e2) {}
+      }
+    });
+  }
+  _augmentLocation(globalThis.location);
+  // 同时补全 window.location（可能与 globalThis.location 是不同对象）
+  (function () {
+    var w = globalThis.window;
+    if (!w || typeof w !== 'object') return;
+    if (!w.location) {
+      try { w.location = globalThis.location || _locationDefaults; } catch (e) {
+        try { Object.defineProperty(w, 'location', { value: globalThis.location || _locationDefaults, writable: true, configurable: true }); } catch (e2) {}
+      }
+    }
+    _augmentLocation(w.location);
+    var lp = (globalThis.location && globalThis.location.pathname) || '(none)';
+    var wlp = (w.location && w.location.pathname) || '(none)';
+    console.log('[WeChat Adapter] location augmented: global.pathname=' + lp + ', window.location.pathname=' + wlp);
+  })();
   // 暴露完整 polyfill 对象本身：新版基础库的 document 是冻结对象（不可替换不可扩展），
   // convert_to_wechat.py 会把 index.js 里的 document.querySelector 重定向到这里。
   safeDefineGlobal('__wechatDocument', _document);

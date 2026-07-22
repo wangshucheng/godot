@@ -758,19 +758,32 @@ const Engine = (function () {
 							response.arrayBuffer().then(function (ab) {
 								console.log('[WeChat doInit] arrayBuffer OK, size=' + ab.byteLength);
 								const cloned = new Response(ab, { 'headers': [['content-type', 'application/wasm']] });
+								const cfg = me.config.getModuleConfig(loadPath, cloned);
+								console.log('[WeChat doInit] config keys: ' + Object.keys(cfg).join(','));
+								console.log('[WeChat doInit] instantiateWasm in config: ' + (typeof cfg.instantiateWasm));
 								console.log('[WeChat doInit] calling Godot(config)...');
-								Godot(me.config.getModuleConfig(loadPath, cloned)).then(function (module) {
-									console.log('[WeChat doInit] Godot() OK, initFS...');
-									const paths = me.config.persistentPaths;
-									module['initFS'](paths).then(function (err) {
-										console.log('[WeChat doInit] initFS done, rtenv ready');
-										me.rtenv = module;
-										if (me.config.unloadAfterInit) {
-											Engine.unload();
-										}
-										resolve();
+								try {
+									Godot(cfg).then(function (module) {
+										console.log('[WeChat doInit] Godot() OK, initFS...');
+										const paths = me.config.persistentPaths;
+										module['initFS'](paths).then(function (err) {
+											console.log('[WeChat doInit] initFS done, rtenv ready');
+											me.rtenv = module;
+											if (me.config.unloadAfterInit) {
+												Engine.unload();
+											}
+											resolve();
+										});
+									}).catch(function (err) {
+										console.error('[WeChat doInit] Godot() FAILED: ' + (err && err.message ? err.message : err));
+										if (err && err.stack) console.error(err.stack);
+										reject(err);
 									});
-								});
+								} catch (e) {
+									console.error('[WeChat doInit] Godot() threw: ' + e);
+									if (e && e.stack) console.error(e.stack);
+									reject(e);
+								}
 							}).catch(reject);
 						});
 					});

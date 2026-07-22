@@ -2,7 +2,7 @@
   "description": "2048 WeChat MiniGame",
   "compileType": "game",
   "libVersion": "3.17.0",
-  "appid": "touristappid",
+  "appid": "wxc07c26935264a5e5",
   "projectname": "2048-minigame",
   "setting": {
     "urlCheck": false,

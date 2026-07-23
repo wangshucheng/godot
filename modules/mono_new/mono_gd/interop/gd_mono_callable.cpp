@@ -357,20 +357,28 @@ static void icall_Signal_Emit(int64_t p_owner_ptr, MonoString *p_signal, MonoArr
 }
 
 // S5 修复(b): C# ~Callable() 终结器跑在 GC 终结器线程，引擎 API 非主线程不安全。
-// 借鉴参考项目 H8 方案：非主线程仅入队，由主线程在下一次 callable 相关 icall 时排空。
-static Mutex g_callable_free_mutex;
+// 借鉴参考项目 H8 方案：非主线程仅入队，由主线程在下一次 callable/signal 相关 icall 时排空。
+static Mutex g_native_free_mutex;
 static Vector<int64_t> g_deferred_callable_free_queue;
+static Vector<int64_t> g_deferred_signal_free_queue;
 
-static void flush_deferred_callable_free() {
-	Vector<int64_t> pending;
+static void flush_deferred_native_free() {
+	Vector<int64_t> pending_callables;
+	Vector<int64_t> pending_signals;
 	{
-		MutexLock lock(g_callable_free_mutex);
-		pending = g_deferred_callable_free_queue;
+		MutexLock lock(g_native_free_mutex);
+		pending_callables = g_deferred_callable_free_queue;
 		g_deferred_callable_free_queue.clear();
+		pending_signals = g_deferred_signal_free_queue;
+		g_deferred_signal_free_queue.clear();
 	}
-	for (int i = 0; i < pending.size(); i++) {
-		Callable *callable = (Callable *)(intptr_t)pending[i];
+	for (int i = 0; i < pending_callables.size(); i++) {
+		Callable *callable = (Callable *)(intptr_t)pending_callables[i];
 		memdelete(callable);
+	}
+	for (int i = 0; i < pending_signals.size(); i++) {
+		::Signal *signal = (::Signal *)(intptr_t)pending_signals[i];
+		memdelete(signal);
 	}
 }
 
@@ -379,7 +387,7 @@ static void flush_deferred_callable_free() {
 static int64_t icall_Callable_CreateFromDelegatePtr(MonoObject *p_delegate) {
 	if (!p_delegate) return 0;
 	if (Thread::is_main_thread()) {
-		flush_deferred_callable_free();
+		flush_deferred_native_free();
 	}
 	Callable callable = GDMonoCallable::create_callable_from_mono_delegate(p_delegate);
 	if (!callable.is_valid()) return 0;
@@ -393,12 +401,23 @@ static void icall_Callable_Free(int64_t p_callable_ptr) {
 	if (Thread::is_main_thread()) {
 		Callable *callable = (Callable *)(intptr_t)p_callable_ptr;
 		memdelete(callable);
-		// 顺手排空终结器线程入队的延迟释放
-		flush_deferred_callable_free();
+		flush_deferred_native_free();
 	} else {
-		// GC 终结器线程：仅入队，等待主线程排空
-		MutexLock lock(g_callable_free_mutex);
+		MutexLock lock(g_native_free_mutex);
 		g_deferred_callable_free_queue.push_back(p_callable_ptr);
+	}
+}
+
+// Free a native Signal pointer allocated by variant_to_mono_object (SIGNAL case).
+static void icall_Signal_Free(int64_t p_signal_ptr) {
+	if (!p_signal_ptr) return;
+	if (Thread::is_main_thread()) {
+		::Signal *signal = (::Signal *)(intptr_t)p_signal_ptr;
+		memdelete(signal);
+		flush_deferred_native_free();
+	} else {
+		MutexLock lock(g_native_free_mutex);
+		g_deferred_signal_free_queue.push_back(p_signal_ptr);
 	}
 }
 
@@ -414,7 +433,8 @@ void GDMonoCallable::register_icalls() {
 	mono_add_internal_call("Godot.Signal::godot_icall_Signal_Disconnect", (const void *)icall_Signal_Disconnect);
 	mono_add_internal_call("Godot.Signal::godot_icall_Signal_IsConnected", (const void *)icall_Signal_IsConnected);
 	mono_add_internal_call("Godot.Signal::godot_icall_Signal_Emit", (const void *)icall_Signal_Emit);
-	mono_add_internal_call("Godot.Signal::godot_icall_Callable_CreateFromDelegatePtr", (const void *)icall_Callable_CreateFromDelegatePtr);
+	mono_add_internal_call("Godot.Signal::godot_icall_Signal_Free", (const void *)icall_Signal_Free);
+	mono_add_internal_call("Godot.Callable::godot_icall_Callable_CreateFromDelegatePtr", (const void *)icall_Callable_CreateFromDelegatePtr);
 }
 
 Callable GDMonoCallable::create_callable_from_mono_delegate(MonoObject *p_delegate) {

@@ -421,7 +421,9 @@ bool CSharpInstance::set(const StringName &p_name, const Variant &p_value) {
 	// 支持基本类型 (int, float, bool, string, Vector2, Color)。
 	if (!mono_object || !mono_class) return false;
 
-	MonoClassField *field = mono_class_get_field_from_name(mono_class->get_raw_class(), String(p_name).utf8().get_data());
+	String name_str(p_name);
+	CharString name_utf8 = name_str.utf8();
+	MonoClassField *field = mono_class_get_field_from_name(mono_class->get_raw_class(), name_utf8.get_data());
 	if (!field) return false;
 
 	MonoType *ftype = mono_field_get_type(field);
@@ -456,7 +458,8 @@ bool CSharpInstance::set(const StringName &p_name, const Variant &p_value) {
 		}
 		case MONO_TYPE_STRING: {
 			String s = p_value;
-			MonoString *mstr = mono_string_new(mono_domain_get(), s.utf8().get_data());
+			CharString s_utf8 = s.utf8();
+			MonoString *mstr = mono_string_new(mono_domain_get(), s_utf8.get_data());
 			mono_field_set_value(mono_object, field, &mstr);
 			return true;
 		}
@@ -469,7 +472,9 @@ bool CSharpInstance::get(const StringName &p_name, Variant &r_ret) const {
 	// H7 修复: 基础属性读取
 	if (!mono_object || !mono_class) return false;
 
-	MonoClassField *field = mono_class_get_field_from_name(mono_class->get_raw_class(), String(p_name).utf8().get_data());
+	String name_str(p_name);
+	CharString name_utf8 = name_str.utf8();
+	MonoClassField *field = mono_class_get_field_from_name(mono_class->get_raw_class(), name_utf8.get_data());
 	if (!field) return false;
 
 	MonoType *ftype = mono_field_get_type(field);
@@ -789,18 +794,7 @@ bool CSharpInstance::initialize(Object *p_owner) {
 		}
 	}
 
-	// [WASM WORKAROUND] In WEB_ENABLED mode, skip the constructor call entirely.
-	// The Mono WASM interpreter crashes with "function signature mismatch" when
-	// calling mono_runtime_object_init on user types. Since nativeInstance is
-	// already set above, and mono_object_new zeroes all fields (so ownsNative=false,
-	// disposed=false by default), skipping the constructor is safe for scene-loaded
-	// nodes. User-created objects (new Node2D()) won't get their native object
-	// created, but that's a separate issue to address later.
-#ifdef WEB_ENABLED
-	// Skip constructor in WASM mode - nativeInstance is already set.
-#else
 	mono_runtime_object_init(mono_object);
-#endif
 
 	return true;
 }

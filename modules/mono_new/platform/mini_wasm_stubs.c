@@ -47,30 +47,16 @@ return fd;
  * Returns MonoFileMap* (actually int fd as pointer) on success, NULL on failure.
  */
 MonoFileMap *mono_file_map_open(const char *path) {
-if (!path) {
-		printf("[DIAG] mono_file_map_open: NULL path\n"); fflush(stdout);
-return NULL;
+	if (!path) {
+		return NULL;
 	}
 
 	int fd = open(path, O_RDONLY);
-if (fd < 0) {
-		printf("[DIAG] mono_file_map_open: FAILED to open '%s' (errno=%d)\n", path, errno); fflush(stdout);
-return NULL;
+	if (fd < 0) {
+		return NULL;
 	}
 
-	/* Verify file is accessible by reading size */
-	struct stat st;
-	unsigned long long sz = 0;
-	if (fstat(fd, &st) == 0) {
-		sz = (unsigned long long)st.st_size;
-	}
-	/* Also check with lseek */
-	off_t old_pos = lseek(fd, 0, SEEK_CUR);
-	off_t end_pos = lseek(fd, 0, SEEK_END);
-	lseek(fd, old_pos, SEEK_SET);
-	printf("[DIAG] mono_file_map_open: opened '%s' fd=%d fstat_size=%llu lseek_size=%lld\n", path, fd, sz, (long long)end_pos); fflush(stdout);
-
-return (MonoFileMap *)(long)fd;
+	return (MonoFileMap *)(long)fd;
 }
 /* mono_file_map_size - return the file size.
  * Uses fstat first, then falls back to lseek if fstat returns 0
@@ -106,7 +92,6 @@ unsigned long long mono_file_map_size(MonoFileMap *fmap) {
 	} else if (end_pos > 0) {
 		result = (unsigned long long)end_pos;
 	}
-	printf("[DIAG] mono_file_map_size: fd=%d fstat=%llu lseek=%lld -> returning %llu\n", fd, fstat_sz, (long long)end_pos, result); fflush(stdout);
 
 	return result;
 }

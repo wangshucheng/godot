@@ -164,6 +164,45 @@ namespace Godot
 		[MethodImpl(MethodImplOptions.InternalCall)]
 		internal extern static bool godot_icall_Object_CallNoArgsBool(long obj, string method);
 
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static object godot_icall_Object_GetVariant(long obj, string prop);
+
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static void godot_icall_Object_SetVariant(long obj, string prop, object value);
+
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static object godot_icall_Object_CallVariant(long obj, string method, object[] args);
+
+        public T Get<T>(string property)
+        {
+            if (nativeInstance == 0)
+                throw new ObjectDisposedException(GetType().Name);
+            object result = godot_icall_Object_GetVariant(nativeInstance, property);
+            if (result == null) return default(T);
+            return (T)result;
+        }
+
+        public void Set(string property, object value)
+        {
+            if (nativeInstance == 0)
+                throw new ObjectDisposedException(GetType().Name);
+            godot_icall_Object_SetVariant(nativeInstance, property, value);
+        }
+
+        public object Call(string method, params object[] args)
+        {
+            if (nativeInstance == 0)
+                throw new ObjectDisposedException(GetType().Name);
+            return godot_icall_Object_CallVariant(nativeInstance, method, args);
+        }
+
+        public T Call<T>(string method, params object[] args)
+        {
+            object result = Call(method, args);
+            if (result == null) return default(T);
+            return (T)result;
+        }
+
         public void EmitSignal(StringName signal, params object[] args)
         {
             if (nativeInstance == 0)
@@ -282,7 +321,7 @@ namespace Godot
 
     public partial class SceneTree : Node
     {
-        public SceneTree() { }
+        internal SceneTree() { }
 
         public void Quit()
         {
@@ -322,11 +361,10 @@ namespace Godot
 
 		public SceneTree GetTree()
 		{
+			if (nativeInstance == 0) return null;
 			long tree = godot_icall_Object_CallNoArgsObject(nativeInstance, "get_tree");
 			if (tree == 0) return null;
-			SceneTree st = new SceneTree();
-			st.nativeInstance = tree;
-			return st;
+			return GodotObject.Attach<SceneTree>(tree);
 		}
     }
 

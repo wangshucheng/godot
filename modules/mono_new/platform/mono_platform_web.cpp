@@ -144,9 +144,6 @@ void mono_threads_platform_get_stack_bounds(guint8 **staddr, size_t *stsize) {
 	ensure_stack_bounds();
 	*staddr = web_stack_end;
 	*stsize = (size_t)(web_stack_base - web_stack_end);
-	EM_ASM({
-		console.log('[Mono-Web] get_stack_bounds: staddr=' + $0 + ' stsize=' + $1 + ' end=' + $2);
-	}, *staddr, *stsize, web_stack_base);
 }
 
 gboolean mono_thread_platform_create_thread(MonoThreadStart thread_fn, gpointer thread_data,

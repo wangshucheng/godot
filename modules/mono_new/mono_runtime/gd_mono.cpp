@@ -237,7 +237,8 @@ bool GDMono::initialize() {
 	// M5 修复: WASM 日志收口 - release 默认关闭，避免性能与隐私问题
 	// 通过环境变量 GDMONO_WASM_TRACE=1 可重新开启调试
 	{
-		const char *trace_env = OS::get_singleton()->get_environment("GDMONO_WASM_TRACE").utf8().get_data();
+		CharString trace_env_utf8 = OS::get_singleton()->get_environment("GDMONO_WASM_TRACE").utf8();
+		const char *trace_env = trace_env_utf8.get_data();
 		bool enable_trace = (trace_env && trace_env[0] == '1');
 		if (enable_trace) {
 			MonoLogger::log("Installing Mono trace log handlers for diagnostics...");
@@ -273,7 +274,8 @@ bool GDMono::initialize() {
 			mono_bcl_dir.path_join("mscorlib.dll"),
 		};
 		for (const String &p : test_paths) {
-			FILE *f = fopen(p.utf8().get_data(), "rb");
+			CharString p_utf8 = p.utf8();
+			FILE *f = fopen(p_utf8.get_data(), "rb");
 			if (f) {
 				fseek(f, 0, SEEK_END);
 				long sz = ftell(f);
@@ -392,8 +394,9 @@ bool GDMono::initialize() {
 					MonoImageOpenStatus status = MONO_IMAGE_OK;
 					MonoImage *gs_image = mono_image_open_from_data(
 						(char *)gs_data.ptrw(), (unsigned int)gs_data.size(), 1, &status);
+					CharString path_utf8 = path.utf8();
 					if (gs_image && status == 0) {
-						godotsharp_assembly = mono_assembly_load_from(gs_image, path.utf8().get_data(), &status);
+						godotsharp_assembly = mono_assembly_load_from(gs_image, path_utf8.get_data(), &status);
 						if (godotsharp_assembly) {
 							godotsharp_image = mono_assembly_get_image(godotsharp_assembly);
 							if (godotsharp_image) {
@@ -404,7 +407,7 @@ bool GDMono::initialize() {
 					}
 					if (!godotsharp_assembly) {
 						MonoLogger::log_error(vformat("mono_image_open_from_data/load_from failed (status=%d), falling back to mono_domain_assembly_open", status));
-						godotsharp_assembly = mono_domain_assembly_open(scripts_domain, path.utf8().get_data());
+						godotsharp_assembly = mono_domain_assembly_open(scripts_domain, path_utf8.get_data());
 						if (godotsharp_assembly) {
 							godotsharp_image = mono_assembly_get_image(godotsharp_assembly);
 							if (godotsharp_image) {
@@ -417,7 +420,8 @@ bool GDMono::initialize() {
 					MonoLogger::log_error(vformat("Failed to read GodotSharp.dll: %s", path));
 				}
 #else
-				godotsharp_assembly = mono_domain_assembly_open(scripts_domain, path.utf8().get_data());
+				CharString path_utf8 = path.utf8();
+				godotsharp_assembly = mono_domain_assembly_open(scripts_domain, path_utf8.get_data());
 				if (godotsharp_assembly) {
 					godotsharp_image = mono_assembly_get_image(godotsharp_assembly);
 					if (godotsharp_image) {
@@ -498,7 +502,7 @@ bool GDMono::initialize() {
 						if (suffix[ci] < '0' || suffix[ci] > '9') { all_digits = false; break; }
 					}
 					if (all_digits) {
-						e.timestamp = suffix.to_int64();
+						e.timestamp = suffix.to_int();
 					}
 				}
 				sorted_entries.push_back(e);
@@ -517,6 +521,7 @@ bool GDMono::initialize() {
 		for (const String &path : user_dll_paths) {
 			MonoLogger::log(vformat("Loading user assembly from: %s", path));
 			MonoAssembly *assy = nullptr;
+			CharString path_utf8 = path.utf8();
 #ifdef WEB_ENABLED
 			// In WASM, Mono's fopen can only access MEMFS, not PCK.
 			// If the path is res:// (PCK), copy the assembly to MEMFS first.
@@ -528,17 +533,18 @@ bool GDMono::initialize() {
 					MonoImage *img = mono_image_open_from_data(
 						(char *)data.ptrw(), (unsigned int)data.size(), 1, &status);
 					if (img && status == 0) {
-						assy = mono_assembly_load_from(img, path.utf8().get_data(), &status);
+						assy = mono_assembly_load_from(img, path_utf8.get_data(), &status);
 					}
 					if (!assy) {
 						MonoLogger::log_error(vformat("Buffer load failed (status=%d), trying MEMFS copy: %s", status, path));
 						// Fallback: copy to MEMFS and try mono_domain_assembly_open
 						String memfs_path = assemblies_path.path_join(path.get_file());
+						CharString memfs_path_utf8 = memfs_path.utf8();
 						Ref<FileAccess> f = FileAccess::open(memfs_path, FileAccess::WRITE);
 						if (f.is_valid()) {
 							f->store_buffer(data.ptr(), data.size());
 							f->close();
-							assy = mono_domain_assembly_open(scripts_domain, memfs_path.utf8().get_data());
+							assy = mono_domain_assembly_open(scripts_domain, memfs_path_utf8.get_data());
 						}
 					}
 				} else {
@@ -554,21 +560,21 @@ bool GDMono::initialize() {
 					MonoImage *img = mono_image_open_from_data(
 						(char *)data.ptrw(), (unsigned int)data.size(), 1, &status);
 					if (img && status == 0) {
-						assy = mono_assembly_load_from(img, path.utf8().get_data(), &status);
+						assy = mono_assembly_load_from(img, path_utf8.get_data(), &status);
 					}
 					if (!assy) {
 						MonoLogger::log_error(vformat("Buffer load failed (status=%d), falling back: %s", status, path));
-						assy = mono_domain_assembly_open(scripts_domain, path.utf8().get_data());
+						assy = mono_domain_assembly_open(scripts_domain, path_utf8.get_data());
 					}
 				} else {
-					assy = mono_domain_assembly_open(scripts_domain, path.utf8().get_data());
+					assy = mono_domain_assembly_open(scripts_domain, path_utf8.get_data());
 				}
 #else
-				assy = mono_domain_assembly_open(scripts_domain, path.utf8().get_data());
+				assy = mono_domain_assembly_open(scripts_domain, path_utf8.get_data());
 #endif
 			}
 #else
-			assy = mono_domain_assembly_open(scripts_domain, path.utf8().get_data());
+			assy = mono_domain_assembly_open(scripts_domain, path_utf8.get_data());
 #endif
 			if (assy) {
 				MonoImage *img = mono_assembly_get_image(assy);
@@ -648,6 +654,7 @@ bool GDMono::load_assembly(const String &p_path, bool p_is_proj_assembly) {
 	}
 
 	MonoAssembly *assembly = nullptr;
+	CharString p_path_utf8 = p_path.utf8();
 #ifdef WEB_ENABLED
 	{
 		PackedByteArray data = FileAccess::get_file_as_bytes(p_path);
@@ -656,15 +663,15 @@ bool GDMono::load_assembly(const String &p_path, bool p_is_proj_assembly) {
 			MonoImage *img = mono_image_open_from_data(
 				(char *)data.ptrw(), (unsigned int)data.size(), 1, &status);
 			if (img && status == 0) {
-				assembly = mono_assembly_load_from(img, p_path.utf8().get_data(), &status);
+				assembly = mono_assembly_load_from(img, p_path_utf8.get_data(), &status);
 			}
 		}
 		if (!assembly) {
-			assembly = mono_domain_assembly_open(scripts_domain, p_path.utf8().get_data());
+			assembly = mono_domain_assembly_open(scripts_domain, p_path_utf8.get_data());
 		}
 	}
 #else
-	assembly = mono_domain_assembly_open(scripts_domain, p_path.utf8().get_data());
+	assembly = mono_domain_assembly_open(scripts_domain, p_path_utf8.get_data());
 #endif
 	if (!assembly) {
 		MonoLogger::log_error(vformat("Failed to load assembly: %s", p_path));
@@ -747,7 +754,8 @@ bool GDMono::reload_domain() {
 		search_paths.push_back(assemblies_path.path_join("GodotSharp.dll"));
 		for (const String &path : search_paths) {
 			if (FileAccess::exists(path)) {
-				MonoAssembly *gs_assembly = mono_domain_assembly_open(scripts_domain, path.utf8().get_data());
+				CharString path_utf8 = path.utf8();
+				MonoAssembly *gs_assembly = mono_domain_assembly_open(scripts_domain, path_utf8.get_data());
 				if (gs_assembly) {
 					godotsharp_assembly = gs_assembly;
 					godotsharp_image = mono_assembly_get_image(gs_assembly);
@@ -911,6 +919,7 @@ MonoClass *GDMono::find_class(const String &p_class_name) {
 
 	// Last resort: search all user assemblies by iterating images
 	// M3 修复: 反向遍历，最新版本优先
+	CharString p_class_name_utf8 = p_class_name.utf8();
 	for (int idx = user_assemblies.size() - 1; idx >= 0; idx--) {
 		const UserAssembly &ua = user_assemblies[idx];
 		if (!ua.image) continue;
@@ -921,7 +930,7 @@ MonoClass *GDMono::find_class(const String &p_class_name) {
 			MonoClass *cls = mono_class_get(ua.image, (i + 1) | (MONO_TABLE_TYPEDEF << 24));
 			if (cls) {
 				const char *name = mono_class_get_name(cls);
-				if (name && strcmp(name, p_class_name.utf8().get_data()) == 0) {
+				if (name && strcmp(name, p_class_name_utf8.get_data()) == 0) {
 					return cls;
 				}
 			}
@@ -932,5 +941,6 @@ MonoClass *GDMono::find_class(const String &p_class_name) {
 }
 
 MonoMethod *GDMono::get_method(MonoClass *p_class, const String &p_name, int p_param_count) {
-	return mono_class_get_method_from_name(p_class, p_name.utf8().get_data(), p_param_count);
+	CharString p_name_utf8 = p_name.utf8();
+	return mono_class_get_method_from_name(p_class, p_name_utf8.get_data(), p_param_count);
 }

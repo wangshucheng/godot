@@ -5,7 +5,9 @@
 MonoMethod *GDMonoClass::get_method(const StringName &p_name, int p_param_count) {
 	if (!mono_class)
 		return nullptr;
-	return mono_class_get_method_from_name(mono_class, String(p_name).utf8().get_data(), p_param_count);
+	String name_str(p_name);
+	CharString name_utf8 = name_str.utf8();
+	return mono_class_get_method_from_name(mono_class, name_utf8.get_data(), p_param_count);
 }
 
 bool GDMonoClass::has_method(const StringName &p_name) {
@@ -15,13 +17,17 @@ bool GDMonoClass::has_method(const StringName &p_name) {
 MonoProperty *GDMonoClass::get_property(const StringName &p_name) {
 	if (!mono_class)
 		return nullptr;
-	return mono_class_get_property_from_name(mono_class, String(p_name).utf8().get_data());
+	String name_str(p_name);
+	CharString name_utf8 = name_str.utf8();
+	return mono_class_get_property_from_name(mono_class, name_utf8.get_data());
 }
 
 MonoField *GDMonoClass::get_field(const StringName &p_name) {
 	if (!mono_class)
 		return nullptr;
-	return mono_class_get_field_from_name(mono_class, String(p_name).utf8().get_data());
+	String name_str(p_name);
+	CharString name_utf8 = name_str.utf8();
+	return mono_class_get_field_from_name(mono_class, name_utf8.get_data());
 }
 
 GDMonoClass::GDMonoClass(const String &p_namespace, const String &p_class, MonoImage *p_image) {
@@ -36,9 +42,11 @@ GDMonoClass::GDMonoClass(const String &p_namespace, const String &p_class, MonoI
 	if (!mono_image)
 		return;
 
+	CharString ns_utf8 = namespace_name.utf8();
+	CharString cls_utf8 = class_name.utf8();
 	mono_class = mono_class_from_name(mono_image,
-			namespace_name.utf8().get_data(),
-			class_name.utf8().get_data());
+			ns_utf8.get_data(),
+			cls_utf8.get_data());
 
 	if (mono_class) {
 		valid = true;

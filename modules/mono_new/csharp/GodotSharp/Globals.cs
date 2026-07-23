@@ -26,157 +26,196 @@ namespace Godot
         [FieldOffset(0)] public float FloatValue;
     }
 
-    public class Callable
-    {
-        internal long nativeCallable;
-        internal Delegate TargetDelegate;
+	public class Callable : IDisposable
+	{
+		internal long nativeCallable;
+		internal Delegate TargetDelegate;
+		private bool disposed = false;
 
-        public Callable()
-        {
-        }
+		public Callable()
+		{
+		}
 
-        public Callable(Delegate @delegate)
-        {
-            TargetDelegate = @delegate;
-            // S5 修复: 立即创建 native Callable 并缓存到 nativeCallable。
-            // 这样 Connect/Disconnect/IsConnected 用同一指针，compare_equal 能匹配。
-            // 原实现每次都新建 Callable（不同 gchandle），导致 Disconnect 永远找不到匹配项。
-            // 注意: godot_icall_Callable_CreateFromDelegatePtr 声明在 Signal 类
-            // (与 C++ 注册名 Godot.Signal::... 对齐)，需用 Signal. 限定。
-            if (@delegate != null)
-            {
-                nativeCallable = Signal.godot_icall_Callable_CreateFromDelegatePtr(@delegate);
-            }
-        }
+		public Callable(Delegate @delegate)
+		{
+			TargetDelegate = @delegate;
+			if (@delegate != null)
+			{
+				nativeCallable = Callable.godot_icall_Callable_CreateFromDelegatePtr(@delegate);
+			}
+		}
 
-        public Callable(GodotObject target, string method)
-        {
-            if (target != null && method != null)
-            {
-                nativeCallable = godot_icall_Callable_CreateFromTarget(target.nativeInstance, method);
-            }
-        }
+		public Callable(GodotObject target, string method)
+		{
+			if (target != null && method != null)
+			{
+				nativeCallable = godot_icall_Callable_CreateFromTarget(target.nativeInstance, method);
+			}
+		}
 
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        internal extern static long godot_icall_Callable_CreateFromTarget(long target, string method);
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static long godot_icall_Callable_CreateFromTarget(long target, string method);
 
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        internal extern static Callable godot_icall_Callable_CreateFromDelegate(Delegate @delegate);
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static Callable godot_icall_Callable_CreateFromDelegate(Delegate @delegate);
 
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        internal extern static void godot_icall_Callable_Call(long nativeCallable, object[] args, out object ret);
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        internal extern static void godot_icall_Callable_Free(long nativeCallable);
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static void godot_icall_Callable_Call(long nativeCallable, object[] args, out object ret);
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static void godot_icall_Callable_Free(long nativeCallable);
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static long godot_icall_Callable_CreateFromDelegatePtr(Delegate @delegate);
 
-        public void Call(params object[] args)
-        {
-            if (nativeCallable != 0)
-            {
-                godot_icall_Callable_Call(nativeCallable, args, out _);
-            }
-            else if (TargetDelegate != null)
-            {
-                TargetDelegate.DynamicInvoke(args);
-            }
-        }
+		public void Call(params object[] args)
+		{
+			if (disposed) throw new ObjectDisposedException("Callable");
+			if (nativeCallable != 0)
+			{
+				godot_icall_Callable_Call(nativeCallable, args, out _);
+			}
+			else if (TargetDelegate != null)
+			{
+				TargetDelegate.DynamicInvoke(args);
+			}
+		}
 
-        public static Callable FromDelegate(Delegate @delegate)
-        {
-            // S5 修复: 直接用构造函数，构造函数内部会创建并缓存 nativeCallable
-            return new Callable(@delegate);
-        }
+		public static Callable FromDelegate(Delegate @delegate)
+		{
+			return new Callable(@delegate);
+		}
 
-        public static implicit operator Callable(Delegate @delegate)
-        {
-            return FromDelegate(@delegate);
-        }
-        ~Callable()
-        {
-            if (nativeCallable != 0)
-            {
-                godot_icall_Callable_Free(nativeCallable);
-                nativeCallable = 0;
-            }
-        }
-    }
+		public static implicit operator Callable(Delegate @delegate)
+		{
+			return FromDelegate(@delegate);
+		}
 
-    public class Signal
-    {
-        // nativeSignal holds an int64 pointer to a native Callable (signal connection).
-        // Must be `long` (8 bytes) to match C++ pointer width on 64-bit platforms.
-        internal long nativeSignal = 0;
-        public GodotObject Owner { get; }
-        public StringName Name { get; }
+		public void Dispose()
+		{
+			Dispose(true);
+			GC.SuppressFinalize(this);
+		}
 
-        public Signal(GodotObject owner, StringName name)
-        {
-            Owner = owner;
-            Name = name;
-        }
+		protected virtual void Dispose(bool disposing)
+		{
+			if (!disposed)
+			{
+				if (nativeCallable != 0)
+				{
+					godot_icall_Callable_Free(nativeCallable);
+					nativeCallable = 0;
+				}
+				disposed = true;
+			}
+		}
 
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        internal extern static bool godot_icall_Signal_Connect(long ownerPtr, string signal, long callablePtr, bool oneshot);
+		~Callable()
+		{
+			Dispose(false);
+		}
+	}
 
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        internal extern static bool godot_icall_Signal_Disconnect(long ownerPtr, string signal, long callablePtr);
+	public class Signal : IDisposable
+	{
+		internal long nativeSignal = 0;
+		public GodotObject Owner { get; }
+		public StringName Name { get; }
+		private bool disposed = false;
 
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        internal extern static bool godot_icall_Signal_IsConnected(long ownerPtr, string signal, long callablePtr);
+		public Signal(GodotObject owner, StringName name)
+		{
+			Owner = owner;
+			Name = name;
+		}
 
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        internal extern static void godot_icall_Signal_Emit(long ownerPtr, string signal, object[] args);
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static bool godot_icall_Signal_Connect(long ownerPtr, string signal, long callablePtr, bool oneshot);
 
-        public bool Connect(Callable callable, uint flags = 0)
-        {
-            if (Owner == null || Name == null || callable == null) return false;
-            bool oneshot = (flags & (uint)GodotObject.ConnectFlags.OneShot) != 0;
-            long callablePtr = callable.nativeCallable;
-            if (callablePtr == 0 && callable.TargetDelegate != null)
-            {
-                // Fallback: wrap delegate-based Callable into native Callable.
-                callablePtr = godot_icall_Callable_CreateFromDelegatePtr(callable.TargetDelegate);
-                callable.nativeCallable = callablePtr; // S5 修复: 回写缓存，Connect/Disconnect/IsConnected 共用同一指针且不再泄漏
-            }
-            if (callablePtr == 0) return false;
-            return godot_icall_Signal_Connect(Owner.nativeInstance, Name.ToString(), callablePtr, oneshot);
-        }
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static bool godot_icall_Signal_Disconnect(long ownerPtr, string signal, long callablePtr);
 
-        public void Disconnect(Callable callable)
-        {
-            if (Owner == null || Name == null || callable == null) return;
-            long callablePtr = callable.nativeCallable;
-            if (callablePtr == 0 && callable.TargetDelegate != null)
-            {
-                callablePtr = godot_icall_Callable_CreateFromDelegatePtr(callable.TargetDelegate);
-                callable.nativeCallable = callablePtr; // S5 修复: 回写缓存，Connect/Disconnect/IsConnected 共用同一指针且不再泄漏
-            }
-            if (callablePtr == 0) return;
-            godot_icall_Signal_Disconnect(Owner.nativeInstance, Name.ToString(), callablePtr);
-        }
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static bool godot_icall_Signal_IsConnected(long ownerPtr, string signal, long callablePtr);
 
-        public bool IsConnected(Callable callable)
-        {
-            if (Owner == null || Name == null || callable == null) return false;
-            long callablePtr = callable.nativeCallable;
-            if (callablePtr == 0 && callable.TargetDelegate != null)
-            {
-                callablePtr = godot_icall_Callable_CreateFromDelegatePtr(callable.TargetDelegate);
-                callable.nativeCallable = callablePtr; // S5 修复: 回写缓存，Connect/Disconnect/IsConnected 共用同一指针且不再泄漏
-            }
-            if (callablePtr == 0) return false;
-            return godot_icall_Signal_IsConnected(Owner.nativeInstance, Name.ToString(), callablePtr);
-        }
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static void godot_icall_Signal_Emit(long ownerPtr, string signal, object[] args);
 
-        public void Emit(params object[] args)
-        {
-            if (Owner == null || Name == null) return;
-            godot_icall_Signal_Emit(Owner.nativeInstance, Name.ToString(), args ?? new object[0]);
-        }
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		internal extern static void godot_icall_Signal_Free(long nativeSignal);
 
-        // Helper icall: wrap a Delegate into a native Callable and return its pointer.
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        internal extern static long godot_icall_Callable_CreateFromDelegatePtr(Delegate @delegate);
-    }
+		public bool Connect(Callable callable, uint flags = 0)
+		{
+			if (disposed) throw new ObjectDisposedException("Signal");
+			if (Owner == null || Name == null || callable == null) return false;
+			bool oneshot = (flags & (uint)GodotObject.ConnectFlags.OneShot) != 0;
+			long callablePtr = callable.nativeCallable;
+			if (callablePtr == 0 && callable.TargetDelegate != null)
+			{
+				callablePtr = Callable.godot_icall_Callable_CreateFromDelegatePtr(callable.TargetDelegate);
+				callable.nativeCallable = callablePtr;
+			}
+			if (callablePtr == 0) return false;
+			return godot_icall_Signal_Connect(Owner.nativeInstance, Name.ToString(), callablePtr, oneshot);
+		}
+
+		public void Disconnect(Callable callable)
+		{
+			if (disposed) throw new ObjectDisposedException("Signal");
+			if (Owner == null || Name == null || callable == null) return;
+			long callablePtr = callable.nativeCallable;
+			if (callablePtr == 0 && callable.TargetDelegate != null)
+			{
+				callablePtr = Callable.godot_icall_Callable_CreateFromDelegatePtr(callable.TargetDelegate);
+				callable.nativeCallable = callablePtr;
+			}
+			if (callablePtr == 0) return;
+			godot_icall_Signal_Disconnect(Owner.nativeInstance, Name.ToString(), callablePtr);
+		}
+
+		public bool IsConnected(Callable callable)
+		{
+			if (disposed) throw new ObjectDisposedException("Signal");
+			if (Owner == null || Name == null || callable == null) return false;
+			long callablePtr = callable.nativeCallable;
+			if (callablePtr == 0 && callable.TargetDelegate != null)
+			{
+				callablePtr = Callable.godot_icall_Callable_CreateFromDelegatePtr(callable.TargetDelegate);
+				callable.nativeCallable = callablePtr;
+			}
+			if (callablePtr == 0) return false;
+			return godot_icall_Signal_IsConnected(Owner.nativeInstance, Name.ToString(), callablePtr);
+		}
+
+		public void Emit(params object[] args)
+		{
+			if (disposed) throw new ObjectDisposedException("Signal");
+			if (Owner == null || Name == null) return;
+			godot_icall_Signal_Emit(Owner.nativeInstance, Name.ToString(), args ?? new object[0]);
+		}
+
+		public void Dispose()
+		{
+			Dispose(true);
+			GC.SuppressFinalize(this);
+		}
+
+		protected virtual void Dispose(bool disposing)
+		{
+			if (!disposed)
+			{
+				if (nativeSignal != 0)
+				{
+					godot_icall_Signal_Free(nativeSignal);
+					nativeSignal = 0;
+				}
+				disposed = true;
+			}
+		}
+
+		~Signal()
+		{
+			Dispose(false);
+		}
+	}
 
     public static partial class GD
     {

@@ -157,6 +157,7 @@ cppcheck-cppcheck-build-dir/
 # GNU patch
 *.orig
 *.rej
+*.bak
 
 # Gprof
 gmon.out

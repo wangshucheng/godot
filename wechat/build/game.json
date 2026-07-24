@@ -11,6 +11,10 @@
     {
       "name": "wasm_pkg",
       "root": "wasm_pkg/"
+    },
+    {
+      "name": "data_pkg",
+      "root": "data_pkg/"
     }
   ]
 }

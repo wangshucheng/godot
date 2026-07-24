@@ -391,7 +391,7 @@ namespace Godot
 
     public class VScrollBar : Control
     {
-        internal VScrollBar() { }
+        public VScrollBar() { }
 
         public double MaxValue
         {

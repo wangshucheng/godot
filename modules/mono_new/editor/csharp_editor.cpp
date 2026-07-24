@@ -863,13 +863,26 @@ private:
 	}
 
 	void _deploy_mono_web(const String &p_exe_dir) {
-		String godotsharp_dll = p_exe_dir.path_join("GodotSharp.dll");
-		if (FileAccess::exists(godotsharp_dll)) {
-			// 部署到 .mono/assemblies/GodotSharp.dll 以匹配 gd_mono.cpp 中的搜索路径
-			// (res://.mono/assemblies/GodotSharp.dll)
-			// 之前部署到 PCK 根目录会导致运行时找不到文件 (errno=44)
-			add_file(".mono/assemblies/GodotSharp.dll", FileAccess::get_file_as_bytes(godotsharp_dll), false);
+		// 优先从 BCL 目录读取 GodotSharp.dll（运行时实际加载的版本），
+		// exe 目录作为 fallback。BCL 目录总是与引擎同步更新，
+		// 而 exe 目录可能残留旧版（如构建后未同步），导致 WASM 下
+		// icall 签名不匹配（function signature mismatch）。
+		String bcl_dll = p_exe_dir.path_join("..").path_join("mono").path_join("lib").path_join("mono").path_join("4.5").path_join("GodotSharp.dll");
+		String exe_dll = p_exe_dir.path_join("GodotSharp.dll");
+
+		String source_dll;
+		if (FileAccess::exists(bcl_dll)) {
+			source_dll = bcl_dll;
+		} else if (FileAccess::exists(exe_dll)) {
+			source_dll = exe_dll;
+		} else {
+			MonoLogger::log_warning(vformat("Export (web): GodotSharp.dll not found (tried %s and %s)", bcl_dll, exe_dll));
+			return;
 		}
+
+		PackedByteArray data = FileAccess::get_file_as_bytes(source_dll);
+		MonoLogger::log(vformat("Export (web): deploying GodotSharp.dll from %s (%d bytes)", source_dll, data.size()));
+		add_file(".mono/assemblies/GodotSharp.dll", data, false);
 	}
 };
 

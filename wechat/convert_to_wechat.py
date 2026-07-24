@@ -179,6 +179,7 @@ globalThis._wasmSubpkg = "{wasm_subpkg}";      // F4: 承载 .wasm.br 的分包�
 globalThis._wasmBrInSubpkg = {wasm_br_in_subpkg};  // F4: 分包内是否有 .wasm.br
 globalThis._dataSubpkg = "{data_subpkg}";      // F5: 承载 .data 的分包名（空字符串表示无分包）
 globalThis._dataInSubpkg = {data_in_subpkg};   // F5: 分包内是否有 .data
+globalThis._dataBinName = "{data_bin_name}";   // F5: 分包内 .dat 文件名（.data 改扩展名以绕过 DevTools .data permission + .bin atob bug）
 // === End WeChat Variables ==='''.strip()
 
 
@@ -215,7 +216,7 @@ PROJECT_CONFIG_TEMPLATE = {
     "description": "2048 WeChat MiniGame",
     "compileType": "game",
     "libVersion": "3.17.0",
-    "appid": "touristappid",
+    "appid": "wxc07c26935264a5e5",
     "projectname": "2048-minigame",
     "setting": {
         "urlCheck": False,
@@ -232,7 +233,7 @@ PROJECT_CONFIG_TEMPLATE = {
 }
 
 
-def patch_index_js(content: str, cdn_url: str, wasm_file: str, data_file: str, pck_file: str, file_sizes: dict, executable: str, pck_embedded: bool, wasm_subpkg: str = "", wasm_br_in_subpkg: bool = False, data_subpkg: str = "", data_in_subpkg: bool = False) -> str:
+def patch_index_js(content: str, cdn_url: str, wasm_file: str, data_file: str, pck_file: str, file_sizes: dict, executable: str, pck_embedded: bool, wasm_subpkg: str = "", wasm_br_in_subpkg: bool = False, data_subpkg: str = "", data_in_subpkg: bool = False, data_bin_name: str = "") -> str:
     """对 Godot index.js 应用核心修补点"""
     # 1. 在文件开头注入变量
     vars_block = WECHAT_VARS_TEMPLATE.format(
@@ -249,6 +250,7 @@ def patch_index_js(content: str, cdn_url: str, wasm_file: str, data_file: str, p
         wasm_br_in_subpkg="true" if wasm_br_in_subpkg else "false",
         data_subpkg=data_subpkg,
         data_in_subpkg="true" if data_in_subpkg else "false",
+        data_bin_name=data_bin_name,
     )
     content = vars_block + "\n\n" + content
 
@@ -1023,7 +1025,7 @@ def patch_optional_chaining(content: str) -> str:
     return content
 
 
-def convert(source_dir: str, output_dir: str, cdn_url: str) -> str:
+def convert(source_dir: str, output_dir: str, cdn_url: str, cdn_only: bool = True) -> str:
     """执行完整转换流程
 
     如果输出目录被锁定（如微信开发者工具正在使用），自动切换到带时间戳的新目录。
@@ -1139,7 +1141,7 @@ def convert(source_dir: str, output_dir: str, cdn_url: str) -> str:
     if wasm_br_file.exists():
         br_size = wasm_br_file.stat().st_size
         br_size_mb = br_size / (1024 * 1024)
-        if br_size_mb <= 19.0:  # 分包限 20MB，留 1MB 余量
+        if br_size_mb <= 19.0 and not cdn_only:  # cdn_only 模式跳过分包，大文件全走 CDN
             # 创建分包目录并复制 .wasm.br
             subpkg_dir = output / WASM_SUBPACKAGE_ROOT.rstrip("/")
             subpkg_dir.mkdir(parents=True, exist_ok=True)
@@ -1210,6 +1212,7 @@ def convert(source_dir: str, output_dir: str, cdn_url: str) -> str:
     data_output_name = ""
     data_in_subpkg = False
     data_subpkg_name = ""
+    data_bin_name = ""
     if data_file:
         data_size = data_file.stat().st_size
         data_size_mb = data_size / (1024 * 1024)
@@ -1218,21 +1221,29 @@ def convert(source_dir: str, output_dir: str, cdn_url: str) -> str:
         if data_size_mb <= 3.8:
             shutil.copy(data_file, output / data_output_name)
             print(f"[Copy] {data_file.name} ({data_size_mb:.2f} MB, in main package)")
-        elif data_size_mb <= 19.9:
-            # F5: 放入 data_pkg 分包（微信分包限 20MB，留 0.1MB 余量给 game.js 入口）
+        elif data_size_mb <= 19.9 and not cdn_only:
+            # F5: 把 .data 改扩展名为 .dat 放入分包
+            # 原因：编辑器(DevTools) 对 .data 扩展名 readFileSync 返回 permission denied，
+            # 对 .bin 扩展名 readFileSync 内部调原生 atob 嵬尽失败（二进制被当 base64 解码）。
+            # .dat 扩展名不受这两个限制影响。
+            # 原始二进制，不 base64，不拆分，单分包即可。
             data_subpkg_dir = output / DATA_SUBPACKAGE_ROOT.rstrip("/")
             data_subpkg_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy(data_file, data_subpkg_dir / data_output_name)
+            # 复制时改扩展名为 .dat（adapter 读取时用 .dat 路径）
+            _bin_output_name = data_output_name.rsplit('.', 1)[0] + '.dat'
+            shutil.copy(data_file, data_subpkg_dir / _bin_output_name)
+            data_bin_name = _bin_output_name
             # 分包硬性要求：root 下必须有 game.js 入口
             (data_subpkg_dir / "game.js").write_text(
                 f"// {DATA_SUBPACKAGE_NAME} subpackage entry (auto-generated)\n"
-                f"// 本分包仅用于承载 {data_output_name}，无需任何 JS 逻辑\n"
+                f"// 本分包仅用于承载 {_bin_output_name}，无需任何 JS 逻辑\n"
                 f"console.log('[{DATA_SUBPACKAGE_NAME}] subpackage entry loaded');\n",
                 encoding="utf-8"
             )
             data_in_subpkg = True
             data_subpkg_name = DATA_SUBPACKAGE_NAME
-            print(f"[Subpkg] {data_file.name} -> {DATA_SUBPACKAGE_ROOT}{data_output_name} ({data_size_mb:.2f} MB, in subpackage)")
+            # 记录 .dat 文件名（供 adapter 使用，通过 globalThis._dataBinName 传递）
+            print(f"[Subpkg] {data_file.name} -> {DATA_SUBPACKAGE_ROOT}{_bin_output_name} ({data_size_mb:.2f} MB, in subpackage, .dat extension to bypass DevTools .data permission + .bin atob bug)")
             print(f"[Subpkg] Wrote {DATA_SUBPACKAGE_ROOT}game.js (subpackage entry stub)")
         else:
             print(f"[CDN]  {data_file.name} ({data_size_mb:.2f} MB) -> CDN (exceeds 20MB subpackage limit)")
@@ -1259,6 +1270,7 @@ def convert(source_dir: str, output_dir: str, cdn_url: str) -> str:
         wasm_br_in_subpkg=wasm_br_in_subpkg,
         data_subpkg=data_subpkg_name,
         data_in_subpkg=data_in_subpkg,
+        data_bin_name=data_bin_name,
     )
     (output / "index.js").write_text(patched_content, encoding='utf-8')
     print(f"[Write] index.js (patched, {len(patched_content)} chars)")
@@ -1277,7 +1289,7 @@ def convert(source_dir: str, output_dir: str, cdn_url: str) -> str:
             "name": DATA_SUBPACKAGE_NAME,
             "root": DATA_SUBPACKAGE_ROOT,
         })
-        print(f"[Write] game.json: subpackage {DATA_SUBPACKAGE_NAME} (data)")
+        print(f"[Write] game.json: subpackage {DATA_SUBPACKAGE_NAME} (data, .dat extension)")
     if subpackages_list:
         game_json["subpackages"] = subpackages_list
     else:
@@ -1310,12 +1322,22 @@ def convert(source_dir: str, output_dir: str, cdn_url: str) -> str:
     print(f"\nNext steps:")
     print(f"  1. Open WeChat Developer Tools")
     print(f"  2. Import project from: {output}")
-    print(f"  3. Set your AppID in project.config.json (currently: touristappid)")
-    if not wasm_in_main or (data_file and data_file.stat().st_size > 4 * 1024 * 1024):
-        print(f"  4. Upload CDN files (.wasm/.data) to: {cdn_url}")
-        print(f"     - {wasm_file.name}")
+    print(f"  3. AppID in project.config.json: {PROJECT_CONFIG_TEMPLATE['appid']}")
+    if cdn_only:
+        # CDN 模式：大文件未打入包内，必须上传到 CDN 服务器
+        print(f"  4. [CDN mode] Upload large files to: {cdn_url}")
+        print(f"     - {wasm_file.name} ({wasm_size_mb:.2f} MB)")
         if data_file:
-            print(f"     - {data_file.name}")
+            print(f"     - {data_file.name} ({data_file.stat().st_size / (1024*1024):.2f} MB)")
+        print(f"     NOTE: Mobile preview requires CDN reachable from device network.")
+    else:
+        # 分包模式：小游戏自包含，无需外部 CDN
+        print(f"  4. [Subpackage mode] Self-contained: .wasm.br in wasm_pkg/, .dat in data_pkg/")
+        print(f"     No CDN upload needed. Mobile preview works without external server.")
+        if data_file and data_file.stat().st_size / (1024*1024) > 18.0:
+            data_mb = data_file.stat().st_size / (1024*1024)
+            print(f"     WARNING: .data is {data_mb:.2f} MB, close to 20MB subpackage limit.")
+            print(f"     If engine updates cause .data to exceed 20MB, switch to --cdn-only.")
 
     return str(output)
 
@@ -1334,16 +1356,41 @@ def main():
     )
     parser.add_argument(
         "--cdn-url", default="",
-        help="CDN base URL for large files (.wasm/.data). Example: https://cdn.example.com/game/"
+        help="CDN base URL for large files (.wasm/.data). Example: https://cdn.example.com/game/ "
+             "Only used when --cdn-only is set; in subpackage mode (--no-cdn-only) this is ignored."
     )
+    # === 大文件加载策略 ===
+    # 默认 --no-cdn-only: .wasm.br 和 .data 走子包，小游戏自包含，手机预览无需外部 CDN。
+    #   - 主包 ~530KB（JS + pck_data.js base64）
+    #   - wasm_pkg 子包: Game2048.wasm.br (~6.9MB，由 WXWebAssembly 原生解压)
+    #   - data_pkg 子包: <data_name>.dat (~19.35MB，原始二进制，扩展名 .dat 绕过 DevTools 限制)
+    # --cdn-only: 大文件全走 CDN，主包极小但需要 CDN 服务器在线且手机可达。
+    #   适用于 .data 接近/超过 20MB 子包限制、或已有公网 CDN 的场景。
+    parser.add_argument(
+        "--cdn-only", action="store_true", default=False,
+        help="Large files (.wasm.br/.data) only via CDN, no subpackages. "
+             "Use this when .data exceeds 20MB subpackage limit or you have a public CDN."
+    )
+    parser.add_argument(
+        "--no-cdn-only", dest="cdn_only", action="store_false",
+        help="Use subpackages for large files (default). Self-contained mini game, "
+             "works on mobile preview without external CDN server."
+    )
+    parser.set_defaults(cdn_only=False)
     args = parser.parse_args()
 
-    if not args.cdn_url:
-        print("WARNING: No --cdn-url provided. Large files (.wasm/.data) need CDN.")
+    if args.cdn_only and not args.cdn_url:
+        print("WARNING: --cdn-only mode requires --cdn-url but none provided.")
         print("         For local testing, set --cdn-url=http://localhost:8000/")
         args.cdn_url = "http://localhost:8000"
 
-    actual_output = convert(args.source, args.output, args.cdn_url)
+    if not args.cdn_only:
+        # 分包模式不需要 CDN；cdn_url 仍传入但 adapter 不会用到
+        if args.cdn_url:
+            print(f"[INFO] --no-cdn-only mode: ignoring --cdn-url={args.cdn_url} (subpackages are self-contained)")
+        args.cdn_url = args.cdn_url or ""
+
+    actual_output = convert(args.source, args.output, args.cdn_url, cdn_only=args.cdn_only)
     if actual_output and actual_output != args.output:
         print(f"\n[INFO] 实际输出目录: {actual_output}")
         print(f"[INFO] 请在微信开发者工具中导入此目录")

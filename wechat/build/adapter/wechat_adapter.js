@@ -33,81 +33,6 @@
   var fileSystemManager = wx.getFileSystemManager ? wx.getFileSystemManager() : null;
   var USER_DATA_PATH = (wx.env && wx.env.USER_DATA_PATH) ? wx.env.USER_DATA_PATH : '';
   console.log('[WeChat Adapter] USER_DATA_PATH = ' + USER_DATA_PATH);
-  // ============================================================
-  // TextDecoder/TextEncoder polyfill
-  // Emscripten UTF8ToString uses `new TextDecoder('utf-8').decode(bytes)`
-  // to decode strings (e.g. GLSL shader source in glShaderSource).
-  // WeChat Mini Game lacks TextDecoder natively -> engine crashes at
-  // first shader compilation with "Cannot read properties of undefined (reading 'decode')".
-  // ============================================================
-  if (typeof TextDecoder === 'undefined') {
-    function TextDecoderPolyfill(label) {
-      this.label = (label || 'utf-8').toLowerCase();
-    }
-    TextDecoderPolyfill.prototype.decode = function (bytes, options) {
-      if (!bytes) return '';
-      var u8;
-      if (bytes instanceof ArrayBuffer) {
-        u8 = new Uint8Array(bytes);
-      } else if (bytes && bytes.buffer instanceof ArrayBuffer) {
-        u8 = new Uint8Array(bytes.buffer, bytes.byteOffset || 0, bytes.byteLength);
-      } else if (bytes && typeof bytes.length === 'number') {
-        u8 = new Uint8Array(bytes);
-      } else {
-        return '';
-      }
-      var result = '';
-      var i = 0;
-      var len = u8.length;
-      while (i < len) {
-        var c = u8[i++];
-        if (c < 0x80) {
-          result += String.fromCharCode(c);
-        } else if (c < 0xE0) {
-          var c2 = u8[i++];
-          result += String.fromCharCode(((c & 0x1F) << 6) | (c2 & 0x3F));
-        } else if (c < 0xF0) {
-          var c2 = u8[i++], c3 = u8[i++];
-          result += String.fromCharCode(((c & 0x0F) << 12) | ((c2 & 0x3F) << 6) | (c3 & 0x3F));
-        } else {
-          var c2 = u8[i++], c3 = u8[i++], c4 = u8[i++];
-          var cp = ((c & 0x07) << 18) | ((c2 & 0x3F) << 12) | ((c3 & 0x3F) << 6) | (c4 & 0x3F);
-          cp -= 0x10000;
-          result += String.fromCharCode(0xD800 + (cp >> 10), 0xDC00 + (cp & 0x3FF));
-        }
-      }
-      return result;
-    };
-    safeDefineGlobal('TextDecoder', TextDecoderPolyfill);
-    console.log('[WeChat Adapter] TextDecoder polyfill installed');
-  }
-
-  if (typeof TextEncoder === 'undefined') {
-    function TextEncoderPolyfill() {}
-    TextEncoderPolyfill.prototype.encode = function (str) {
-      str = str || '';
-      var bytes = [];
-      for (var i = 0; i < str.length; i++) {
-        var c = str.charCodeAt(i);
-        if (c < 0x80) {
-          bytes.push(c);
-        } else if (c < 0x800) {
-          bytes.push(0xC0 | (c >> 6), 0x80 | (c & 0x3F));
-        } else if (c < 0xD800 || c >= 0xE000) {
-          bytes.push(0xE0 | (c >> 12), 0x80 | ((c >> 6) & 0x3F), 0x80 | (c & 0x3F));
-        } else {
-          i++;
-          var c2 = str.charCodeAt(i);
-          var cp = 0x10000 + (((c & 0x3FF) << 10) | (c2 & 0x3FF));
-          bytes.push(0xF0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3F), 0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F));
-        }
-      }
-      return new Uint8Array(bytes);
-    };
-    safeDefineGlobal('TextEncoder', TextEncoderPolyfill);
-    console.log('[WeChat Adapter] TextEncoder polyfill installed');
-  }
-
 
   // ============================================================
   // 模块 0a: zlib 解压（已删除 - F2 修复）
@@ -252,10 +177,17 @@
         return result;
       } catch (e) { return false; }
     },
-    // === WeChat Patch: 不提供 instantiateStreaming ===
-    // Emscripten 检测到 WebAssembly.instantiateStreaming 存在时会优先用 streaming 模式，
-    // 这会绕过我们的 instantiateWasm 回调，导致用临时文件路径调用 WXWebAssembly.instantiate 失败。
-    // 不定义 instantiateStreaming，强制 Emscripten 走 instantiateWasm 回调路径。
+    instantiateStreaming: function (source, imports) {
+      // 不支持 streaming，回退到 instantiate
+      if (source && typeof source.then === 'function') {
+        return source.then(function (resp) {
+          return resp.arrayBuffer();
+        }).then(function (buf) {
+          return WAPolyfill.instantiate(buf, imports);
+        });
+      }
+      return Promise.reject(new Error('instantiateStreaming not supported'));
+    },
     // H6 修复: 保留原始 WebAssembly.Memory/Table/Global 构造器。
     // Emscripten 运行时会用 new WebAssembly.Memory(...) 创建线性内存，
     // 空函数会产生无 buffer 的空对象导致崩溃。
@@ -279,39 +211,61 @@
   // ============================================================
 
   // 加载分包（如果已加载则立即 resolve）。返回 Promise。
-  // 关键: 编辑器模式下 wx.loadSubpackage 可能不回调（既不 success 也不 fail），
-  // 必须加超时保护，否则 _resolveWasmPath 永远卡住。
-  function _ensureSubpkgLoaded(subpkgName) {
+  function _ensureSubpkgLoaded(subpkgName, probeFile, timeoutMs) {
     if (!subpkgName) return Promise.resolve();
-    if (globalThis.__updateBootStatus) {
-      globalThis.__updateBootStatus('Loading subpackage: ' + subpkgName + '...', 0.55);
+    timeoutMs = timeoutMs || 30000;
+
+    // 1. 先同步探测：若分包文件已可访问，跳过 loadSubpackage（规避 DevTools __name__ bug）
+    if (probeFile) {
+      try {
+        fileSystemManager.accessSync(probeFile);
+        console.log('[WeChat] Subpackage already accessible (skip loadSubpackage): ' + subpkgName + ' -> ' + probeFile);
+        return Promise.resolve();
+      } catch (e) {
+        // 文件不可访问，继续走 loadSubpackage
+      }
     }
+
+    // 2. 调 wx.loadSubpackage，带超时和同步异常防御
     return new Promise(function (resolve, reject) {
-      var settled = false;
       if (typeof wx !== 'undefined' && typeof wx.loadSubpackage === 'function') {
-        wx.loadSubpackage({
-          name: subpkgName,
-          success: function (res) {
-            if (settled) return;
-            settled = true;
-            console.log('[WeChat] Subpackage loaded: ' + subpkgName + ', res=' + JSON.stringify(res || {}));
-            resolve(res);
-          },
-          fail: function (err) {
-            if (settled) return;
-            settled = true;
-            console.warn('[WeChat] Subpackage load failed: ' + subpkgName + ': ' + (err.errMsg || 'unknown'));
-            reject(new Error('Subpackage ' + subpkgName + ' load failed'));
-          },
-        });
-        // 超时保护：30秒内无回调则假设已加载（真机下载分包可能较慢）
-        setTimeout(function () {
+        var settled = false;
+        var timer = setTimeout(function () {
           if (settled) return;
           settled = true;
-          console.warn('[WeChat] Subpackage load timeout (30s), assuming loaded: ' + subpkgName);
-          resolve({ timeout: true });
-        }, 30000);
+          console.warn('[WeChat] Subpackage load timeout: ' + subpkgName + ', assuming ready');
+          resolve(); // 超时也 resolve，让后续 accessSync 再判断
+        }, timeoutMs);
+
+        try {
+          wx.loadSubpackage({
+            name: subpkgName,
+            success: function (res) {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timer);
+              console.log('[WeChat] Subpackage loaded: ' + subpkgName + ', res=' + JSON.stringify(res || {}));
+              resolve(res);
+            },
+            fail: function (err) {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timer);
+              console.warn('[WeChat] Subpackage load failed: ' + subpkgName + ': ' + (err.errMsg || 'unknown') + ', assuming ready');
+              resolve(); // 失败也 resolve：分包可能已预加载，后续 accessSync 会再检查
+            },
+          });
+        } catch (syncErr) {
+          // DevTools __name__ bug 可能导致 loadSubpackage 同步抛出
+          if (!settled) {
+            settled = true;
+            clearTimeout(timer);
+            console.warn('[WeChat] wx.loadSubpackage threw synchronously (likely DevTools __name__ bug): ' + syncErr.message + ', assuming ready');
+            resolve();
+          }
+        }
       } else {
+        // 不支持 loadSubpackage（老版本），假设已可用
         resolve();
       }
     });
@@ -330,16 +284,7 @@
     // 1. 分包内 .wasm.br（F4 主路径 - 唯一在 devtool 和真机都可用的方案）
     if (wasmSubpkg && brInSubpkg) {
       var subpkgBrPath = wasmSubpkg + '/' + brFileName;
-      // 先尝试直接 accessSync：编辑器模式下分包文件可能已自动可用，
-      // 不需要 wx.loadSubpackage（该 API 在编辑器模式下可能不回调）。
-      try {
-        fileSystemManager.accessSync(subpkgBrPath);
-        console.log('[WeChat] WASM in subpackage (direct access): ' + subpkgBrPath);
-        return Promise.resolve(subpkgBrPath);
-      } catch (directErr) {
-        // 直接访问失败，走 loadSubpackage 流程
-      }
-      return _ensureSubpkgLoaded(wasmSubpkg).then(function () {
+      return _ensureSubpkgLoaded(wasmSubpkg, subpkgBrPath).then(function () {
         try {
           fileSystemManager.accessSync(subpkgBrPath);
           console.log('[WeChat] WASM in subpackage: ' + subpkgBrPath);
@@ -399,30 +344,19 @@
 
     function downloadOne(fileName) {
       var cdnUrl = cdnBaseUrl + '/' + fileName;
-      console.log('[WeChat] Downloading WASM from CDN: ' + cdnUrl);
+      console.log('[WeChat] Downloading: ' + cdnUrl);
       return new Promise(function (resolve, reject) {
-        var settled = false;
-        var dlTimeout = setTimeout(function () {
-          if (settled) return;
-          settled = true;
-          reject(new Error('Download ' + fileName + ' TIMEOUT (60s) - check LAN connectivity'));
-        }, 60000);
         wx.downloadFile({
           url: cdnUrl,
-          timeout: 60000,
           success: function (res) {
-            if (settled) return;
-            clearTimeout(dlTimeout);
             if (res.statusCode !== 200 || !res.tempFilePath) {
-              settled = true;
               reject(new Error('Download ' + fileName + ' HTTP ' + res.statusCode));
               return;
             }
             var tempFilePath = res.tempFilePath;
-            console.log('[WeChat] Downloaded WASM: ' + fileName + ' -> ' + tempFilePath);
+            console.log('[WeChat] Downloaded: ' + fileName + ' -> ' + tempFilePath);
 
             if (!USER_DATA_PATH) {
-              settled = true;
               reject(new Error('USER_DATA_PATH unavailable'));
               return;
             }
@@ -446,28 +380,22 @@
               }
             }
             if (!saved) {
-              settled = true;
               reject(new Error('Failed to save ' + fileName));
               return;
             }
             try {
               var st = fileSystemManager.statSync(savedPath);
               if (!st || st.size <= 0) {
-                settled = true;
                 reject(new Error('Saved ' + fileName + ' is empty'));
                 return;
               }
-              console.log('[WeChat] Saved WASM: ' + savedPath + ' (' + (st.size / 1048576).toFixed(2) + ' MB)');
+              console.log('[WeChat] Saved: ' + savedPath + ' (' + (st.size / 1048576).toFixed(2) + ' MB)');
             } catch (e) {
               console.warn('[WeChat] statSync failed: ' + e.message);
             }
-            settled = true;
             resolve(savedPath);
           },
           fail: function (err) {
-            if (settled) return;
-            clearTimeout(dlTimeout);
-            settled = true;
             reject(new Error('Download ' + fileName + ' failed: ' + (err.errMsg || 'unknown')));
           },
         });
@@ -524,27 +452,19 @@
   // ============================================================
   safeDefineGlobal('_instantiateWasmSmart', function (imports) {
     console.log('[WeChat] _instantiateWasmSmart called, imports keys: ' + (imports ? Object.keys(imports).join(',') : 'none'));
-    if (globalThis.__updateBootStatus) {
-      globalThis.__updateBootStatus('Instantiating WASM...', 0.65);
-    }
 
     return _resolveWasmPath().then(function (wasmPath) {
       var isBr = wasmPath && wasmPath.length > 3 && wasmPath.substring(wasmPath.length - 3) === '.br';
       console.log('[WeChat] Resolved WASM path: ' + wasmPath + ' (isBr=' + isBr + ')');
 
       if (isBr) {
-        if (globalThis.__updateBootStatus) {
-          globalThis.__updateBootStatus('Compiling WASM (brotli)...', 0.70);
-        }
+        // .wasm.br: 只能用 WXWebAssembly.instantiate(path) 自动解压
         if (!_WXWA || typeof _WXWA.instantiate !== 'function') {
           return Promise.reject(new Error('.wasm.br requires WXWebAssembly.instantiate(path) for auto-decompression, but WXWebAssembly is unavailable'));
         }
         console.log('[WeChat] Strategy A: WXWebAssembly.instantiate(.wasm.br path) - auto-decompress');
         return _WXWA.instantiate(wasmPath, imports).then(function (result) {
           console.log('[WeChat] WXWebAssembly.instantiate(.wasm.br) succeeded');
-          if (globalThis.__updateBootStatus) {
-            globalThis.__updateBootStatus('WASM compiled OK', 0.75);
-          }
           if (result && result.instance && result.module) return result;
           return { instance: result.instance || result, module: result.module || null };
         });
@@ -695,16 +615,6 @@
         var listeners = _mainCanvas._listeners[event.type] || [];
         event.target = _mainCanvas;
         event.currentTarget = _mainCanvas;
-        // 标准 Event API 补丁：Emscripten/Godot 的事件处理可能调用这些方法
-        if (typeof event.preventDefault !== 'function') {
-          event.preventDefault = function () {};
-        }
-        if (typeof event.stopPropagation !== 'function') {
-          event.stopPropagation = function () {};
-        }
-        if (typeof event.stopImmediatePropagation !== 'function') {
-          event.stopImmediatePropagation = function () {};
-        }
         for (var i = 0; i < listeners.length; i++) {
           try { listeners[i].call(_mainCanvas, event); } catch (e) { console.error(e); }
         }
@@ -887,115 +797,6 @@
     wx.onTouchMove(function (e) { dispatchTouch('touchmove', e.touches); });
     wx.onTouchEnd(function (e) { dispatchTouch('touchend', e.changedTouches); });
     wx.onTouchCancel(function (e) { dispatchTouch('touchcancel', e.changedTouches); });
-  }
-
-  // 物理键盘事件（PC 端微信开发者工具测试时必需，真机蓝牙键盘同样适用）
-  // 微信小游戏不自动分发键盘事件到 canvas，必须显式监听 wx.onKeyDown/onKeyUp
-  // PC 端预览没有 wx.onKeyDown，回退到 window.addEventListener
-  function _handleKeyBind(type, e) {
-    var keyName = e.key || _mapKeyCodeToName(e.keyCode);
-    // wx.onKeyDown 在 PC 编辑器下 e.keyCode 是 undefined，只有 e.key
-    // 必须从 e.key 反推 keyCode，否则 Godot 无法识别 action
-    var keyCode = e.keyCode;
-    if (keyCode === undefined || keyCode === null) {
-      keyCode = _mapKeyNameToCode(keyName);
-    }
-    if (type === 'keydown') {
-      console.log('[WeChat KeyDown] keyCode=' + keyCode + ' key=' + keyName);
-    }
-    dispatchKeyEvent(type, keyName, keyCode);
-  }
-
-  // 从 key name 反推 keyCode（标准 KeyboardEvent.key → keyCode 映射）
-  function _mapKeyNameToCode(keyName) {
-    if (!keyName) return 0;
-    var key = keyName.toLowerCase();
-    switch (key) {
-      case 'arrowup': return 38;
-      case 'arrowdown': return 40;
-      case 'arrowleft': return 37;
-      case 'arrowright': return 39;
-      case 'enter': return 13;
-      case 'escape': return 27;
-      case ' ': case 'space': return 32;
-      case 'tab': return 9;
-      case 'backspace': return 8;
-      case 'shift': return 16;
-      case 'control': return 17;
-      case 'alt': return 18;
-      case 'a': return 65;
-      case 'b': return 66;
-      case 'c': return 67;
-      case 'd': return 68;
-      case 'e': return 69;
-      case 'f': return 70;
-      case 'g': return 71;
-      case 'h': return 72;
-      case 'i': return 73;
-      case 'j': return 74;
-      case 'k': return 75;
-      case 'l': return 76;
-      case 'm': return 77;
-      case 'n': return 78;
-      case 'o': return 79;
-      case 'p': return 80;
-      case 'q': return 81;
-      case 'r': return 82;
-      case 's': return 83;
-      case 't': return 84;
-      case 'u': return 85;
-      case 'v': return 86;
-      case 'w': return 87;
-      case 'x': return 88;
-      case 'y': return 89;
-      case 'z': return 90;
-      case '0': return 48;
-      case '1': return 49;
-      case '2': return 50;
-      case '3': return 51;
-      case '4': return 52;
-      case '5': return 53;
-      case '6': return 54;
-      case '7': return 55;
-      case '8': return 56;
-      case '9': return 57;
-      default:
-        if (key.length === 1 && key >= 'a' && key <= 'z') return key.charCodeAt(0) - 32;
-        if (key.length === 1 && key >= '0' && key <= '9') return key.charCodeAt(0);
-        return 0;
-    }
-  }
-
-  if (wx.onKeyDown) {
-    wx.onKeyDown(function (e) { _handleKeyBind('keydown', e); });
-  }
-  if (wx.onKeyUp) {
-    wx.onKeyUp(function (e) { _handleKeyBind('keyup', e); });
-  }
-
-  // PC 预览（wx.onKeyDown 不存在）回退到 window 事件
-  if (typeof globalThis.window !== 'undefined' && !wx.onKeyDown) {
-    globalThis.window.addEventListener('keydown', function (e) {
-      _handleKeyBind('keydown', e);
-    });
-    globalThis.window.addEventListener('keyup', function (e) {
-      _handleKeyBind('keyup', e);
-    });
-    console.log('[WeChat Adapter] keyboard via window.addEventListener (PC preview fallback)');
-  }
-
-  function _mapKeyCodeToName(keyCode) {
-    // 常见按键映射（微信 wx.onKeyDown 的 keyCode 遵循标准 key code）
-    switch (keyCode) {
-      case 37: return 'ArrowLeft';
-      case 38: return 'ArrowUp';
-      case 39: return 'ArrowRight';
-      case 40: return 'ArrowDown';
-      case 13: return 'Enter';
-      case 27: return 'Escape';
-      case 32: return ' ';
-      default: return String.fromCharCode(keyCode) || ('Key' + keyCode);
-    }
   }
 
   // ============================================================
@@ -1436,115 +1237,126 @@
     throw new Error('File not found in package: ' + path + ' (errors: ' + errors.join('; ') + ')');
   }
 
+  // downloadCdnFile: 从 CDN 下载文件为 ArrayBuffer。
+  //
+  // 根因分析（基于 DevTools 2.02.2607232 实测）:
+  //   wx.downloadFile 成功后，临时文件 http://tmp/...bin 用 readFileSync(path, 'binary')
+  //   读取返回空 Object（ctor=Object, byteLength=undefined）—— DevTools 的 'binary'
+  //   encoding 对大文件不生效。downloadFile + readFileSync 组合在 DevTools 下不可靠。
+  //
+  //   wx.request(responseType: 'arraybuffer') 直接在 JS 层返回 ArrayBuffer，完全绕过
+  //   文件系统，是 DevTools 下获取大文件 ArrayBuffer 的唯一可靠方式。
+  //   真机环境下分包读取通常已成功，CDN fallback 很少触发；即使触发，wx.request
+  //   在真机上也可靠（但 19MB 响应体会全量加载到内存，注意内存压力）。
+  //
+  // 策略:
+  //   1. 检查 USER_DATA_PATH 缓存（真机有效；DevTools readFileSync 返回空则跳过）
+  //   2. 优先 wx.request(responseType: 'arraybuffer') —— 绕过文件系统，DevTools 可靠
+  //   3. wx.request 失败 → downloadFile + readFileSync('binary') 兜底
+  //   4. 下载成功后写入 USER_DATA_PATH 缓存（真机有效，DevTools 可能写入失败但不影响）
   function downloadCdnFile(url) {
     return new Promise(function (resolve, reject) {
-      // 检查缓存
       var fileName = '';
       var parts = url.split('/');
       fileName = parts[parts.length - 1].split('?')[0];
-      var skipCache = false;
-      if (!skipCache && USER_DATA_PATH && fileName) {
+
+      // 1. 检查缓存（USER_DATA_PATH 下的文件）
+      if (USER_DATA_PATH && fileName) {
         var cachedPath = USER_DATA_PATH + '/' + fileName;
         try {
           fileSystemManager.accessSync(cachedPath);
           var stat = fileSystemManager.statSync(cachedPath);
           if (stat.size > 0) {
-            var cachedData = fileSystemManager.readFileSync(cachedPath);
-            var ab = cachedData instanceof ArrayBuffer ? cachedData : (cachedData.buffer ? cachedData.buffer.slice(cachedData.byteOffset, cachedData.byteOffset + cachedData.byteLength) : new ArrayBuffer(0));
-            if (ab.byteLength > 0) {
-              console.log('[WeChat] Cache hit: ' + fileName + ' (' + (ab.byteLength / 1024 / 1024).toFixed(2) + ' MB)');
-              resolve(ab);
+            var cachedData = fileSystemManager.readFileSync(cachedPath, 'binary');
+            var cachedAb = _coerceToArrayBufferGlobal(cachedData, cachedPath);
+            if (cachedAb.byteLength > 0) {
+              console.log('[WeChat] Cache hit: ' + fileName + ' (' + (cachedAb.byteLength / 1024 / 1024).toFixed(2) + ' MB)');
+              resolve(cachedAb);
               return;
             }
           }
-        } catch (e) {}
+        } catch (e) {
+          // 缓存读取失败（DevTools readFileSync 可能返回空），继续走网络下载
+        }
       }
 
-      // Fix: wx.request arraybuffer corrupts large binaries in devtool (UTF-8 reencoding)
-      // Use wx.downloadFile + async readFile instead.
-      console.log('[WeChat] Downloading (wx.downloadFile): ' + url);
-      if (globalThis.__updateBootStatus) {
-        globalThis.__updateBootStatus('Downloading: ' + fileName + '...', 0.75);
-      }
-      var dlTimeout = setTimeout(function () {
-        console.error('[WeChat] downloadFile TIMEOUT (60s): ' + url);
-        console.log('[WeChat] Trying fallback request after timeout...');
-        _fallbackRequest(url, fileName, resolve, reject);
-      }, 60000);
-      wx.downloadFile({
+      // 2. 优先 wx.request(responseType: 'arraybuffer') —— 绕过文件系统
+      console.log('[WeChat] Downloading via wx.request: ' + url);
+      wx.request({
         url: url,
-        timeout: 60000,
-        success: function (dlRes) {
-          clearTimeout(dlTimeout);
-          if (dlRes.statusCode >= 200 && dlRes.statusCode < 300 && dlRes.tempFilePath) {
-            var tempPath = dlRes.tempFilePath;
-            console.log('[WeChat] Downloaded to temp: ' + fileName + ' -> ' + tempPath);
-            fileSystemManager.readFile({
-              filePath: tempPath,
-              success: function (r) {
-                var ab = r.data instanceof ArrayBuffer ? r.data : (r.data.buffer ? r.data.buffer.slice(r.data.byteOffset, r.data.byteOffset + r.data.byteLength) : new ArrayBuffer(0));
-                clearTimeout(dlTimeout);
-                console.log('[WeChat] Read OK: ' + fileName + ' (' + ab.byteLength + ' bytes)');
-                if (USER_DATA_PATH && fileName && ab.byteLength > 0) {
-                  try {
-                    fileSystemManager.writeFile({
-                      filePath: USER_DATA_PATH + '/' + fileName,
-                      data: ab,
-                      encoding: 'binary',
-                    });
-                  } catch (we) {
-                    console.log('[WeChat] Cache write skipped: ' + (we.message || we));
-                  }
-                }
-                resolve(ab);
-              },
-              fail: function (e) {
-                clearTimeout(dlTimeout);
-                console.error('[WeChat] readFile failed: ' + (e.errMsg || e.message || e) + ', fallback to wx.request');
-                _fallbackRequest(url, fileName, resolve, reject);
-              },
-            });
+        method: 'GET',
+        responseType: 'arraybuffer',
+        success: function (res) {
+          console.log('[WeChat] wx.request success: statusCode=' + res.statusCode + ' data type=' + typeof res.data +
+                      (res.data ? ' byteLength=' + res.data.byteLength + ' instanceof ArrayBuffer=' + (res.data instanceof ArrayBuffer) : ''));
+          if (res.statusCode === 200 && res.data instanceof ArrayBuffer && res.data.byteLength > 0) {
+            var ab = res.data;
+            console.log('[WeChat] Downloaded: ' + fileName + ' (' + (ab.byteLength / 1024 / 1024).toFixed(2) + ' MB)');
+            // 写入缓存（真机有效，DevTools 可能失败但不影响本次返回）
+            if (USER_DATA_PATH && fileName) {
+              try {
+                fileSystemManager.writeFileSync(USER_DATA_PATH + '/' + fileName, ab, 'binary');
+              } catch (we) {
+                console.warn('[WeChat] Cache write failed: ' + (we && we.message));
+              }
+            }
+            resolve(ab);
           } else {
-            console.error('[WeChat] downloadFile bad status: ' + dlRes.statusCode + ', fallback to wx.request');
-            _fallbackRequest(url, fileName, resolve, reject);
+            // wx.request 返回非 ArrayBuffer 或 0 字节，fallback 到 downloadFile
+            console.warn('[WeChat] wx.request returned non-ArrayBuffer or 0 bytes (data=' + typeof res.data + '), trying downloadFile');
+            _downloadViaDownloadFile(url, fileName, resolve, reject);
           }
         },
         fail: function (err) {
-          clearTimeout(dlTimeout);
-          console.error('[WeChat] downloadFile failed: ' + (err.errMsg || 'unknown') + ', fallback to wx.request');
-          _fallbackRequest(url, fileName, resolve, reject);
-        },
+          console.warn('[WeChat] wx.request failed: ' + (err && err.errMsg) + ', trying downloadFile');
+          _downloadViaDownloadFile(url, fileName, resolve, reject);
+        }
       });
     });
   }
 
-  // Fallback: wx.request + arraybuffer (used if wx.downloadFile fails)
-  function _fallbackRequest(url, fileName, resolve, reject) {
-    console.log('[WeChat] Fallback to wx.request: ' + url);
-    var fbTimeout = setTimeout(function () {
-      console.error('[WeChat] Fallback request TIMEOUT (60s): ' + url);
-      reject(new Error('Download timeout (60s): ' + url + ' - check CDN/LAN connectivity'));
-    }, 60000);
-    wx.request({
+  // downloadFile + readFileSync 兜底路径（wx.request 失败时使用）
+  function _downloadViaDownloadFile(url, fileName, resolve, reject) {
+    wx.downloadFile({
       url: url,
-      method: 'GET',
-      responseType: 'arraybuffer',
-      timeout: 60000,
       success: function (res) {
-        clearTimeout(fbTimeout);
-        if (res.statusCode >= 200 && res.statusCode < 300 && res.data) {
-          var ab = res.data instanceof ArrayBuffer ? res.data : (res.data.buffer ? res.data.buffer.slice(res.data.byteOffset, res.data.byteOffset + res.data.byteLength) : new ArrayBuffer(0));
-          console.log('[WeChat] Fallback download OK: ' + fileName + ' (' + ab.byteLength + ' bytes)');
-          resolve(ab);
+        console.log('[WeChat] downloadFile success: statusCode=' + res.statusCode + ' tempFilePath=' + res.tempFilePath);
+        if (res.statusCode === 200 && res.tempFilePath) {
+          try {
+            var data = fileSystemManager.readFileSync(res.tempFilePath, 'binary');
+            var ab = _coerceToArrayBufferGlobal(data, res.tempFilePath);
+            console.log('[WeChat] Downloaded via downloadFile: ' + fileName + ' (' + (ab.byteLength / 1024 / 1024).toFixed(2) + ' MB)');
+            // 缓存
+            if (USER_DATA_PATH && fileName && ab.byteLength > 0) {
+              try {
+                fileSystemManager.writeFileSync(USER_DATA_PATH + '/' + fileName, ab, 'binary');
+              } catch (we) {}
+            }
+            resolve(ab);
+          } catch (e) {
+            reject(new Error('Read downloaded file failed: ' + e.message));
+          }
         } else {
-          reject(new Error('Download failed: HTTP ' + res.statusCode));
+          reject(new Error('downloadFile non-200: ' + res.statusCode));
         }
       },
       fail: function (err) {
-        clearTimeout(fbTimeout);
-        reject(new Error(err.errMsg || 'Download failed'));
-      },
+        reject(new Error('downloadFile failed: ' + (err && err.errMsg || 'unknown')));
+      }
     });
+  }
+
+  // 全局类型转换辅助（downloadCdnFile 等非 fetch 上下文使用）
+  function _coerceToArrayBufferGlobal(data, label) {
+    if (data instanceof ArrayBuffer) {
+      return data;
+    }
+    if (data && data.buffer instanceof ArrayBuffer) {
+      return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+    }
+    throw new Error('readFileSync returned uncoercible type: ' + typeof data +
+                    ' constructor=' + (data && data.constructor ? data.constructor.name : 'N/A') +
+                    ' for ' + label);
   }
 
   safeDefineGlobal('fetch', function (url, options) {
@@ -1570,99 +1382,378 @@
 
     var urlStr = String(url);
 
-    // === F5: .data 文件从 base64 .js 模块读取（避免 devtool permission denied）===
-    // 微信 devtool 对 .data 扩展名的 readFileSync 返回 "permission denied"，
-    // 但 .js 文件可以通过 require() 加载。所以把 .data base64 编码后放进 .js 模块，
-    // 拆成 2 个分包（data_pkg_1 + data_pkg_2），各 ~13MB base64。
-    var _dataFileName = globalThis._dataFileName || '';
-    var _dataInSubpkg = globalThis._dataInSubpkg === true;
-    if (_dataFileName && _dataInSubpkg && urlStr.indexOf(_dataFileName) !== -1) {
-      console.log('[WeChat fetch F5] .data file detected, loading from base64 subpackages');
-
-      // F5 诊断
-      function _f5diag(msg) {
-        try {
-          var fs2 = wx.getFileSystemManager();
-          var p2 = wx.env.USER_DATA_PATH + '/game_diag.log';
-          var prev = '';
-          try { prev = fs2.readFileSync(p2, 'utf8') + '\n'; } catch (e) {}
-          fs2.writeFileSync(p2, prev + '[' + new Date().toISOString() + '] [F5] ' + msg + '\n', 'utf8');
-          console.log('[F5] ' + msg);
-        } catch (e) {}
+    // _coerceToArrayBuffer: 将 readFile/readFileSync 的各种可能返回类型统一转为 ArrayBuffer。
+    // 真机返回 ArrayBuffer；DevTools 'binary' encoding 可能返回 Uint8Array 或其他 TypedArray。
+    function _coerceToArrayBuffer(data, label) {
+      if (data instanceof ArrayBuffer) {
+        return data;
       }
-      _f5diag('F5 triggered for url: ' + urlStr);
+      // TypedArray (Uint8Array 等): 通过 .buffer 取底层 ArrayBuffer 副本
+      if (data && data.buffer instanceof ArrayBuffer) {
+        return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+      }
+      throw new Error('readFile returned uncoercible type: ' + typeof data +
+                      ' constructor=' + (data && data.constructor ? data.constructor.name : 'N/A') +
+                      ' for ' + label);
+    }
 
-      // 加载两个分包（data_pkg_1 + data_pkg_2）
-      _f5diag('loading data_pkg_1 and data_pkg_2...');
-      return Promise.all([
-        _ensureSubpkgLoaded('data_pkg_1'),
-        _ensureSubpkgLoaded('data_pkg_2'),
-      ]).then(function () {
-        _f5diag('both subpackages loaded, checking chunks...');
-
-        // 检查 globalThis._dataChunk1 和 _dataChunk2 是否已由分包 game.js 设置
-        var chunk1 = globalThis._dataChunk1;
-        var chunk2 = globalThis._dataChunk2;
-
-        if (!chunk1 || !chunk1.buffer) {
-          // 分包 game.js 可能没执行，尝试直接 require
-          _f5diag('chunk1 not in globalThis, trying require...');
-          try {
-            chunk1 = require('data_pkg_1/data_part1.js');
-            _f5diag('require data_pkg_1/data_part1.js OK, size=' + (chunk1 ? chunk1.size : 'null'));
-          } catch (e) {
-            _f5diag('require data_part1.js failed: ' + e.message);
-            try {
-              chunk1 = require('./data_pkg_1/data_part1.js');
-              _f5diag('require ./data_pkg_1/data_part1.js OK, size=' + (chunk1 ? chunk1.size : 'null'));
-            } catch (e2) {
-              _f5diag('require ./data_pkg_1/data_part1.js failed: ' + e2.message);
-              throw new Error('Cannot load data chunk 1: ' + e2.message);
+    // _readDataFileAsync: 异步读取分包内二进制文件为 ArrayBuffer。
+    //
+    // 根因分析（基于 DevTools 2.02.2607232 多轮实测）:
+    //   readFileSync(path) 不传 encoding → DevTools 内部 coverRes 调 atob → "Failed to execute 'atob'"
+    //   readFileSync(path, 'binary') → DevTools 返回空 Object（19MB 大文件，数据丢失）
+    //   readFile(path, {encoding: 'binary'}) 异步 → 同样 bug，大文件返回空 Object
+    //   readFile(path, {}) 不传 encoding → DevTools 回调不触发，Promise 永久悬挂（致命！）
+    //   readFile(path, {encoding: 'base64'}) → DevTools 返回 Object 而非 string，不可靠
+    //   wx.request(code包相对路径) → "invalid url" 错误（wx.request 只接受 http/https URL）
+    //   结论: DevTools 2.02.2607232 的 FileSystemManager 对 19MB 大文件所有整文件读取 API 都不可靠。
+    //
+    // 根本性修复: 分块读取（Chunked Reading）
+    //   DevTools 的 bug 是针对"大文件"的，对小块数据（1MB）的 readFile 应该可靠。
+    //   用 readFile 的 offset + length 参数，把 19MB 文件分成 20 块 1MB，逐块异步读取后拼接。
+    //   - 每块 1MB，远低于 DevTools 大文件 bug 阈值
+    //   - 异步 readFile 不传 encoding，官方默认返回 ArrayBuffer
+    //   - 并行读取所有块（Promise.all），总时间 ≈ 单块时间（非 N 倍）
+    //   - 每块加 10s 超时保护，避免回调不触发导致永久悬挂
+    //   - 真机也兼容（offset/length 是官方标准参数）
+    //
+    //   失败时降级到整文件读取（策略 2/3），作为真机兼容兜底。
+    function _readDataFileAsync(dataPath) {
+      // _withTimeout: 给 Promise 加超时保护，避免回调不触发导致永久悬挂
+      function _withTimeout(promise, ms, label) {
+        return new Promise(function (resolve, reject) {
+          var settled = false;
+          var timer = setTimeout(function () {
+            if (!settled) {
+              settled = true;
+              reject(new Error(label + ' timeout after ' + ms + 'ms (callback not fired)'));
             }
-          }
-        }
-
-        if (!chunk2 || !chunk2.buffer) {
-          _f5diag('chunk2 not in globalThis, trying require...');
-          try {
-            chunk2 = require('data_pkg_2/data_part2.js');
-            _f5diag('require data_pkg_2/data_part2.js OK, size=' + (chunk2 ? chunk2.size : 'null'));
-          } catch (e) {
-            _f5diag('require data_part2.js failed: ' + e.message);
-            try {
-              chunk2 = require('./data_pkg_2/data_part2.js');
-              _f5diag('require ./data_pkg_2/data_part2.js OK, size=' + (chunk2 ? chunk2.size : 'null'));
-            } catch (e2) {
-              _f5diag('require ./data_pkg_2/data_part2.js failed: ' + e2.message);
-              throw new Error('Cannot load data chunk 2: ' + e2.message);
+          }, ms);
+          promise.then(function (val) {
+            if (!settled) {
+              settled = true;
+              clearTimeout(timer);
+              resolve(val);
             }
-          }
-        }
-
-        _f5diag('chunk1: size=' + chunk1.size + ' offset=' + chunk1.offset + ' bufferType=' + Object.prototype.toString.call(chunk1.buffer));
-        _f5diag('chunk2: size=' + chunk2.size + ' offset=' + chunk2.offset + ' bufferType=' + Object.prototype.toString.call(chunk2.buffer));
-
-        // 拼接两个 ArrayBuffer
-        var totalSize = chunk1.size + chunk2.size;
-        var combined = new ArrayBuffer(totalSize);
-        var view = new Uint8Array(combined);
-        var view1 = new Uint8Array(chunk1.buffer);
-        var view2 = new Uint8Array(chunk2.buffer);
-        view.set(view1, 0);
-        view.set(view2, chunk1.size);
-
-        _f5diag('.data assembled: ' + (totalSize / 1024 / 1024).toFixed(2) + ' MB (' + chunk1.size + ' + ' + chunk2.size + ')');
-        console.log('[WeChat fetch F5] .data assembled from 2 chunks: ' + (totalSize / 1024 / 1024).toFixed(2) + ' MB');
-
-        return new Response(combined, {
-          status: 200,
-          headers: { 'Content-Length': String(totalSize) },
+          }, function (err) {
+            if (!settled) {
+              settled = true;
+              clearTimeout(timer);
+              reject(err);
+            }
+          });
         });
-      }).catch(function (f5err) {
-        _f5diag('F5 FINAL FAIL: ' + f5err.message);
-        if (f5err.stack) _f5diag('stack: ' + f5err.stack);
-        console.error('[WeChat fetch F5] FAILED: ' + f5err.message);
-        throw f5err;
+      }
+
+      // 获取文件总大小（从 _fileSizes 注入变量）
+      var _fileSizes = globalThis._fileSizes || {};
+      var _dataFileName = globalThis._dataFileName || '';
+      var totalSize = _fileSizes[_dataFileName] || 0;
+      var CHUNK_SIZE = 1024 * 1024;  // 1MB per chunk
+
+      // ============================================================
+      // 策略 1 (ROOT-CAUSE FIX): fd-based sequential reading
+      // ============================================================
+      // 根因分析 (2026-07-24):
+      //   DevTools 2.02.2607232 的 FileSystemManager.readFile({offset, length})
+      //   忽略 offset 参数 — 所有 chunk 都从 offset 0 读取，导致组装后的 buffer
+      //   前 1MB 重复 20 次。Emscripten .data 元数据（在文件头部）能正确解析，
+      //   所以 MEMFS 中文件路径/大小正确，但文件内容（在 .data 后半部分）全部
+      //   错误 → mscorlib.dll 报 "invalid CIL image"（MZ 头丢失）。
+      //
+      // 根本性修复: 用 openSync + readSync 顺序读取，完全不依赖 offset 参数。
+      //   fd 内部维护文件位置，每次 readSync 自动从前次位置继续。
+      //   每次 read 1MB（小块数据可靠），顺序读 20 次完成全文件读取。
+      //   - 不依赖 readFile 的 offset 参数（规避 DevTools bug）
+      //   - 不依赖 readFileSync 整文件读取（规避大文件返回空 Object bug）
+      //   - 真机兼容（openSync/readSync 是 2.16.0+ 标准API）
+      // ============================================================
+      if (totalSize > 0 && fileSystemManager.openSync && fileSystemManager.readSync) {
+        console.log('[WeChat fetch F5] Strategy 1 (fd-based sequential): ' + totalSize + ' bytes in 1MB chunks');
+        try {
+          var fd = fileSystemManager.openSync({ filePath: dataPath, flag: 'r' });
+          console.log('[WeChat fetch F5] openSync OK, fd=' + fd);
+
+          var fdChunks = [];
+          var fdRemaining = totalSize;
+          var fdChunkIndex = 0;
+          var fdMaxChunks = Math.ceil(totalSize / CHUNK_SIZE) + 2;  // safeguard against infinite loop
+          while (fdRemaining > 0 && fdChunkIndex < fdMaxChunks) {
+            var readLen = Math.min(CHUNK_SIZE, fdRemaining);
+            var readBuf = new ArrayBuffer(readLen);
+            var readResult = fileSystemManager.readSync({
+              fd: fd,
+              arrayBuffer: readBuf,
+              offset: 0,
+              length: readLen,
+            });
+            var bytesRead = (readResult && typeof readResult.bytesRead === 'number') ? readResult.bytesRead : 0;
+            if (bytesRead === 0) {
+              console.warn('[WeChat fetch F5] readSync returned 0 at chunk ' + fdChunkIndex + ' (EOF?), stopping');
+              break;
+            }
+            // Partial read: use only the bytes actually read
+            fdChunks.push(bytesRead < readLen ? readBuf.slice(0, bytesRead) : readBuf);
+            fdRemaining -= bytesRead;
+            fdChunkIndex++;
+          }
+          if (fdChunkIndex >= fdMaxChunks && fdRemaining > 0) {
+            console.warn('[WeChat fetch F5] readSync hit max chunk limit (' + fdMaxChunks + '), file position may not be advancing');
+          }
+          try { fileSystemManager.closeSync({ fd: fd }); } catch (closeErr) {
+            console.warn('[WeChat fetch F5] closeSync failed: ' + closeErr.message);
+          }
+
+          // Assemble chunks into single ArrayBuffer
+          var actualSize = totalSize - fdRemaining;
+          var fdAb = new ArrayBuffer(actualSize);
+          var fdView = new Uint8Array(fdAb);
+          var fdPos = 0;
+          for (var fi = 0; fi < fdChunks.length; fi++) {
+            fdView.set(new Uint8Array(fdChunks[fi]), fdPos);
+            fdPos += fdChunks[fi].byteLength;
+          }
+          console.log('[WeChat fetch F5] Strategy 1 OK: ' + fdAb.byteLength + ' bytes (' + fdChunks.length + ' chunks)');
+
+          // === 诊断: 验证每个 chunk 的前 4 字节 ===
+          // 如果 offset bug 存在，所有 chunk 的前 4 字节会相同（都是文件开头的字节）
+          // 修复后，每个 chunk 的前 4 字节应该不同（因为是顺序读取不同位置的数据）
+          var fdDiag = [];
+          for (var dk = 0; dk < Math.min(fdChunks.length, 6); dk++) {
+            var dck = new Uint8Array(fdChunks[dk]);
+            fdDiag.push(dk + ':[' +
+              (dck[0] < 16 ? '0' : '') + dck[0].toString(16) +
+              (dck[1] < 16 ? '0' : '') + dck[1].toString(16) +
+              (dck[2] < 16 ? '0' : '') + dck[2].toString(16) +
+              (dck[3] < 16 ? '0' : '') + dck[3].toString(16) + ']');
+          }
+          console.log('[WeChat Diag] fd-based chunk first-4-bytes: ' + fdDiag.join(' '));
+
+          // 验证: 搜索组装后 buffer 中的 MZ 头位置
+          var fdMzPos = [];
+          var fdSearchEnd = Math.min(fdView.length, 16 * 1024 * 1024);
+          for (var fmi = 0; fmi < fdSearchEnd - 1; fmi++) {
+            if (fdView[fmi] === 0x4D && fdView[fmi + 1] === 0x5A) {
+              fdMzPos.push(fmi);
+              if (fdMzPos.length >= 5) break;
+            }
+          }
+          console.log('[WeChat Diag] fd-based MZ positions (first 5): ' + JSON.stringify(fdMzPos));
+          // mscorlib.dll 在 .data 中通常在 offset ~12MB 处
+          if (fdView.length > 12198599) {
+            console.log('[WeChat Diag] bytes @12198595 (expected mscorlib MZ): ' +
+              (fdView[12198595] < 16 ? '0' : '') + fdView[12198595].toString(16) +
+              (fdView[12198596] < 16 ? '0' : '') + fdView[12198596].toString(16) + ' ' +
+              (fdView[12198597] < 16 ? '0' : '') + fdView[12198597].toString(16) +
+              (fdView[12198598] < 16 ? '0' : '') + fdView[12198598].toString(16));
+          }
+
+          if (fdAb.byteLength === totalSize) {
+            return Promise.resolve(fdAb);
+          }
+          console.warn('[WeChat fetch F5] Strategy 1 got ' + fdAb.byteLength + '/' + totalSize + ' bytes (short read), trying fallback');
+        } catch (fdErr) {
+          console.warn('[WeChat fetch F5] Strategy 1 (fd-based) failed: ' + fdErr.message + ', falling back to parallel chunked');
+        }
+      }
+
+      // ============================================================
+      // 策略 2 (FALLBACK): Parallel chunked reading (legacy, DevTools offset bug 可能触发)
+      // 仅在 openSync/readSync 不可用或失败时使用。真机环境通常不需要走这里。
+      // ============================================================
+      if (totalSize > 0) {
+        var chunkCount = Math.ceil(totalSize / CHUNK_SIZE);
+        console.log('[WeChat fetch F5] Strategy 2 (parallel chunked): ' + totalSize + ' bytes / ' + chunkCount + ' chunks x ' + CHUNK_SIZE + ' bytes');
+
+        var chunkPromises = [];
+        for (var i = 0; i < chunkCount; i++) {
+          var offset = i * CHUNK_SIZE;
+          var length = Math.min(CHUNK_SIZE, totalSize - offset);
+          chunkPromises.push(_readChunkAsync(dataPath, offset, length, i, _withTimeout));
+        }
+
+        return Promise.all(chunkPromises).then(function (chunks) {
+          var ab = new ArrayBuffer(totalSize);
+          var view = new Uint8Array(ab);
+          var pos = 0;
+          for (var j = 0; j < chunks.length; j++) {
+            if (!chunks[j] || chunks[j].byteLength === 0) {
+              throw new Error('chunk ' + j + ' is empty');
+            }
+            view.set(new Uint8Array(chunks[j]), pos);
+            pos += chunks[j].byteLength;
+          }
+          console.log('[WeChat fetch F5] Strategy 2 OK: ' + ab.byteLength + ' bytes (' + chunks.length + ' chunks)');
+
+          // 诊断: chunk first-4-bytes（如果 offset bug 存在，所有 chunk 前 4 字节相同）
+          var chunkDiag = [];
+          for (var k = 0; k < Math.min(chunks.length, 6); k++) {
+            var ck = new Uint8Array(chunks[k]);
+            chunkDiag.push(k + ':[' +
+              (ck[0] < 16 ? '0' : '') + ck[0].toString(16) +
+              (ck[1] < 16 ? '0' : '') + ck[1].toString(16) +
+              (ck[2] < 16 ? '0' : '') + ck[2].toString(16) +
+              (ck[3] < 16 ? '0' : '') + ck[3].toString(16) + ']');
+          }
+          console.log('[WeChat Diag] parallel chunk first-4-bytes: ' + chunkDiag.join(' '));
+
+          return ab;
+        }).catch(function (err) {
+          console.warn('[WeChat fetch F5] strategy 2 (chunked) failed: ' + err.message + ', falling back to whole-file base64');
+          // 降级到策略 3: 整文件 base64 读取（真机可靠）
+          return _withTimeout(_readDataFileBase64(dataPath), 15000, 'readFile(base64)');
+        }).catch(function (err2) {
+          console.warn('[WeChat fetch F5] strategy 3 (base64) failed: ' + err2.message + ', trying sync binary');
+          // 降级到策略 4: 整文件同步 binary 读取（真机可靠，DevTools 可能失败）
+          try {
+            var syncData = fileSystemManager.readFileSync(dataPath, 'binary');
+            var syncAb = _coerceToArrayBuffer(syncData, dataPath);
+            if (syncAb.byteLength === 0) {
+              throw new Error('readFileSync(binary) returned empty buffer (DevTools large-file bug)');
+            }
+            console.log('[WeChat fetch F5] strategy 4 (sync binary) OK: ' + syncAb.byteLength + ' bytes');
+            return syncAb;
+          } catch (e3) {
+            throw new Error('All strategies failed: [chunked: ' + err2.message + ' | sync: ' + e3.message + ']');
+          }
+        });
+      }
+
+      // totalSize 未知，直接走整文件读取（真机路径）
+      console.warn('[WeChat fetch F5] totalSize unknown, falling back to whole-file base64');
+      return _withTimeout(_readDataFileBase64(dataPath), 15000, 'readFile(base64)').catch(function (err2) {
+        console.warn('[WeChat fetch F5] base64 failed: ' + err2.message + ', trying sync binary');
+        try {
+          var syncData2 = fileSystemManager.readFileSync(dataPath, 'binary');
+          var ab2 = _coerceToArrayBuffer(syncData2, dataPath);
+          if (ab2.byteLength === 0) {
+            throw new Error('readFileSync(binary) returned empty buffer');
+          }
+          return ab2;
+        } catch (e3) {
+          throw new Error('All strategies failed: [' + err2.message + ' | ' + e3.message + ']');
+        }
+      });
+    }
+
+    // _readChunkAsync: 读取文件的某一块（offset + length 参数），返回 Promise<ArrayBuffer>。
+    // 小块数据（1MB）的 readFile 在 DevTools 下可靠，规避大文件 bug。
+    function _readChunkAsync(dataPath, offset, length, index, _withTimeout) {
+      return _withTimeout(new Promise(function (resolve, reject) {
+        fileSystemManager.readFile({
+          filePath: dataPath,
+          offset: offset,
+          length: length,
+          // 不传 encoding: 官方默认返回 ArrayBuffer
+          success: function (res) {
+            var data = res && res.data;
+            if (data instanceof ArrayBuffer && data.byteLength > 0) {
+              resolve(data);
+            } else if (data && data.buffer instanceof ArrayBuffer && data.byteLength > 0) {
+              // TypedArray: 取底层 ArrayBuffer 副本
+              resolve(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength));
+            } else {
+              reject(new Error('chunk ' + index + ' returned invalid data: type=' + typeof data +
+                              ' byteLength=' + (data ? data.byteLength : 'N/A')));
+            }
+          },
+          fail: function (err) {
+            reject(new Error('chunk ' + index + ' readFile failed: ' + (err && err.errMsg || JSON.stringify(err))));
+          },
+        });
+      }), 10000, 'chunk ' + index).then(function (ab) {
+        if ((index + 1) % 5 === 0 || index === 0) {
+          console.log('[WeChat fetch F5] chunk ' + index + ' OK: ' + ab.byteLength + ' bytes');
+        }
+        return ab;
+      });
+    }
+
+    // _readDataFileBase64: 通过 base64 编码读取二进制文件并转为 ArrayBuffer（真机可靠，DevTools 失败）。
+    function _readDataFileBase64(dataPath) {
+      return new Promise(function (resolve, reject) {
+        fileSystemManager.readFile({
+          filePath: dataPath,
+          encoding: 'base64',
+          success: function (res) {
+            var b64 = res && res.data;
+            if (typeof b64 !== 'string' || b64.length === 0) {
+              reject(new Error('readFile(base64) returned non-string or empty: type=' + typeof b64));
+              return;
+            }
+            console.log('[WeChat fetch F5] readFile(base64) got ' + b64.length + ' chars, decoding...');
+            // 优先用 wx.base64ToArrayBuffer 原生 API（高效，无中间 binary string）
+            if (typeof wx !== 'undefined' && typeof wx.base64ToArrayBuffer === 'function') {
+              try {
+                var ab = wx.base64ToArrayBuffer(b64);
+                if (ab && ab.byteLength > 0) {
+                  console.log('[WeChat fetch F5] wx.base64ToArrayBuffer OK: ' + ab.byteLength + ' bytes');
+                  resolve(ab);
+                  return;
+                }
+                console.warn('[WeChat fetch F5] wx.base64ToArrayBuffer returned empty, falling back to atob');
+              } catch (e) {
+                console.warn('[WeChat fetch F5] wx.base64ToArrayBuffer threw: ' + e.message + ', falling back to atob');
+              }
+            }
+            // 兜底: atob + 手动填充 Uint8Array（兼容性最高，但慢）
+            try {
+              var bin = atob(b64);
+              var ab2 = new ArrayBuffer(bin.length);
+              var view = new Uint8Array(ab2);
+              for (var i = 0; i < bin.length; i++) {
+                view[i] = bin.charCodeAt(i);
+              }
+              console.log('[WeChat fetch F5] atob decode OK: ' + ab2.byteLength + ' bytes');
+              resolve(ab2);
+            } catch (e2) {
+              reject(new Error('atob decode failed: ' + e2.message));
+            }
+          },
+          fail: function (err) {
+            reject(new Error('readFile(base64) failed: ' + (err && err.errMsg || JSON.stringify(err))));
+          },
+        });
+      });
+    }
+
+    // === F5: .data 文件从分包异步读取（分块读取策略）===
+    // convert 脚本把 .data 原样复制为 .dat 放入 data_pkg 分包（≤20MB 限制内）。
+    // _readDataFileAsync 内部按可靠性顺序尝试 3 种读取方式：
+    //   1. 分块读取（Chunked Reading）: readFile offset+length，每块 1MB，规避 DevTools 大文件 bug
+    //   2. 整文件 base64 读取 + wx.base64ToArrayBuffer（真机可靠，DevTools 失败时降级）
+    //   3. 整文件同步 binary 读取（真机可靠，DevTools 可能失败，最后兜底）
+    // 全部失败时走 CDN fallback（downloadCdnFile 内部 wx.request + wx.downloadFile 双层兜底）。
+    var _dataFileName = globalThis._dataFileName || '';
+    var _dataBinName = globalThis._dataBinName || '';
+    var _dataInSubpkg = globalThis._dataInSubpkg === true;
+    var _dataSubpkg = globalThis._dataSubpkg || 'data_pkg';
+    if (_dataFileName && _dataInSubpkg && urlStr.indexOf(_dataFileName) !== -1 && _dataBinName) {
+      console.log('[WeChat fetch F5] .data file detected, loading from subpackage: ' + _dataSubpkg + ' (file: ' + _dataBinName + ')');
+      var dataPath = _dataSubpkg + '/' + _dataBinName;
+      return _ensureSubpkgLoaded(_dataSubpkg, dataPath).then(function () {
+        // 异步 readFile(path, {encoding: 'binary'}) 绕过 DevTools readFileSync bug
+        return _readDataFileAsync(dataPath);
+      }).then(function (ab) {
+        console.log('[WeChat fetch F5] data loaded from subpackage: ' + dataPath + ' (' + (ab.byteLength / 1048576).toFixed(2) + ' MB)');
+        return new Response(ab, {
+          status: 200,
+          headers: { 'Content-Length': String(ab.byteLength) },
+        });
+      }).catch(function (err) {
+        // 分包读取失败，走 CDN fallback
+        if (_cdnBase) {
+          var cdnUrl = _cdnBase.replace(/\/$/, '') + '/' + _dataFileName;
+          console.warn('[WeChat fetch F5] subpackage read failed, fallback CDN: ' + cdnUrl + ' (' + (err && err.message) + ')');
+          return downloadCdnFile(cdnUrl).then(function (ab) {
+            console.log('[WeChat fetch F5] data loaded from CDN: ' + (ab.byteLength / 1048576).toFixed(2) + ' MB');
+            return new Response(ab, {
+              status: 200,
+              headers: { 'Content-Length': String(ab.byteLength) },
+            });
+          });
+        }
+        throw err;
       });
     }
 
@@ -1703,30 +1794,17 @@
       var filename = urlStr.split('/').pop() || urlStr;
       console.log('[WeChat fetch] Looking for: ' + filename + ' (url: ' + urlStr + ')');
 
-      // === WASM 文件特殊处理: 返回真实文件内容 ===
-      // Emscripten 需要 Response.body.getReader() 流式读取，且最终 arrayBuffer() 必须是合法 WASM。
-      // 即使配置了 instantiateWasm 回调，Emscripten 仍会先 fetch WASM 字节并实例化。
-      // 所以必须返回真实 WASM 文件内容（从 wasm_pkg 分包读取 .wasm.br 或 .wasm）
+      // === WASM 文件特殊处理: 不读取内容，返回轻量占位 Response ===
+      // 原因: 104MB WASM 通过 getTrackedResponse 流式读取 (64KB chunk × 1664 次) 会卡死
+      // 真正的 WASM 实例化由 instantiateWasm 回调处理 (用文件路径，不经过 fetch)
       if (filename.toLowerCase().endsWith('.wasm') || filename.toLowerCase().endsWith('.wasm.br')) {
-        console.log('[WeChat fetch] WASM file detected, loading real content: ' + filename);
-        _resolveWasmPath().then(function (wasmPath) {
-          console.log('[WeChat fetch] Reading WASM from: ' + wasmPath);
-          try {
-            var data = fileSystemManager.readFileSync(wasmPath);
-            var ab = data instanceof ArrayBuffer ? data : (data.buffer ? data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) : new ArrayBuffer(0));
-            console.log('[WeChat fetch] WASM read OK: ' + (ab.byteLength / 1024 / 1024).toFixed(2) + ' MB');
-            resolve(new Response(ab, {
-              status: 200,
-              headers: { 'Content-Type': 'application/wasm', 'Content-Length': String(ab.byteLength) },
-            }));
-          } catch (e) {
-            console.error('[WeChat fetch] WASM read failed: ' + e.message);
-            reject(new Error('Read WASM failed: ' + e.message));
-          }
-        }).catch(function (err) {
-          console.error('[WeChat fetch] WASM resolve failed: ' + err.message);
-          reject(err);
-        });
+        console.log('[WeChat fetch] WASM file detected, returning placeholder response: ' + filename);
+        // 返回一个 1 字节的占位 ArrayBuffer，避免 null 检查失败
+        var placeholder = new ArrayBuffer(1);
+        resolve(new Response(placeholder, {
+          status: 200,
+          headers: { 'Content-Type': 'application/wasm', 'Content-Length': '1' },
+        }));
         return;
       }
 
@@ -2012,34 +2090,6 @@
     title: '',
   };
   safeDefineGlobal('document', _document);
-  // 全局 location（Emscripten loadPackage 访问 window.location.pathname）
-  // 关键: 新版基础库自带的 location 是只读/冻结对象，safeDefineGlobal 无法覆盖。
-  // 改为增量化补全缺失属性（pathname 等）到现有 location 对象上。
-  var _locationDefaults = { href: '', pathname: '/', origin: '', search: '', hash: '', host: '', hostname: '', port: '', protocol: 'http:' };
-  function _augmentLocation(loc) {
-    if (!loc || typeof loc !== 'object') return;
-    Object.keys(_locationDefaults).forEach(function (k) {
-      if (loc[k] === undefined || loc[k] === null) {
-        try { loc[k] = _locationDefaults[k]; return; } catch (e) {}
-        try { Object.defineProperty(loc, k, { value: _locationDefaults[k], writable: true, configurable: true }); } catch (e2) {}
-      }
-    });
-  }
-  _augmentLocation(globalThis.location);
-  // 同时补全 window.location（可能与 globalThis.location 是不同对象）
-  (function () {
-    var w = globalThis.window;
-    if (!w || typeof w !== 'object') return;
-    if (!w.location) {
-      try { w.location = globalThis.location || _locationDefaults; } catch (e) {
-        try { Object.defineProperty(w, 'location', { value: globalThis.location || _locationDefaults, writable: true, configurable: true }); } catch (e2) {}
-      }
-    }
-    _augmentLocation(w.location);
-    var lp = (globalThis.location && globalThis.location.pathname) || '(none)';
-    var wlp = (w.location && w.location.pathname) || '(none)';
-    console.log('[WeChat Adapter] location augmented: global.pathname=' + lp + ', window.location.pathname=' + wlp);
-  })();
   // 暴露完整 polyfill 对象本身：新版基础库的 document 是冻结对象（不可替换不可扩展），
   // convert_to_wechat.py 会把 index.js 里的 document.querySelector 重定向到这里。
   safeDefineGlobal('__wechatDocument', _document);

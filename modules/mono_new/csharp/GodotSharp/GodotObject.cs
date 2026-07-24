@@ -1,7 +1,6 @@
 using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Runtime.Serialization;
 
 namespace Godot
 {
@@ -19,18 +18,9 @@ namespace Godot
         {
         }
 
-        // 包装一个已存在的原生对象 (不触发任何 CreateObject, 避免为子节点
-        // /资源额外创建孤儿原生对象导致内存泄漏)。仅用于从 C++ 侧返回的指针。
-        // 在 WASM 解释器下 GetUninitializedObject 比 new + 覆盖字段更安全。
-        internal static T Attach<T>(long p_native) where T : GodotObject
-        {
-            // net48 (Mono 6.12) 无 RuntimeHelpers.GetUninitializedObject (仅 .NET 5+ 提供)，
-            // 使用 FormatterServices 的等价 API 创建跳过构造函数的空对象，
-            // 仅用于包装 C++ 侧已有的原生对象，避免重复 CreateObject 造成泄漏。
-            T obj = (T)FormatterServices.GetUninitializedObject(typeof(T));
-            obj.nativeInstance = p_native;
-            return obj;
-        }
+        // 注意：WASM 解释器下不能用 FormatterServices.GetUninitializedObject 或泛型
+        // new T() (where T : new()) —— 两者都会触发 mscorlib 内部 icall 签名不匹配
+        // (与 GodotSynchronizationContext 同因)。所有包装必须用具体类型的 new 构造。
 
         ~GodotObject()
         {
@@ -321,7 +311,7 @@ namespace Godot
 
     public partial class SceneTree : Node
     {
-        internal SceneTree() { }
+        public SceneTree() { }
 
         public void Quit()
         {
@@ -364,7 +354,9 @@ namespace Godot
 			if (nativeInstance == 0) return null;
 			long tree = godot_icall_Object_CallNoArgsObject(nativeInstance, "get_tree");
 			if (tree == 0) return null;
-			return GodotObject.Attach<SceneTree>(tree);
+			SceneTree st = new SceneTree();
+			st.nativeInstance = tree;
+			return st;
 		}
     }
 

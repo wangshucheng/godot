@@ -273,6 +273,8 @@ namespace Godot
 
         // Internal helper to wrap a raw native pointer into a Node subclass.
         // Uses the class name to determine the proper C# type.
+        // 注意：不能用泛型 Attach<T> (where T : new()) —— WASM 解释器下会触发
+        // mscorlib 内部 icall 签名不匹配。必须用具体类型的 new 构造。
         internal static Node WrapNode(long ptr)
         {
             if (ptr == 0) return null;
@@ -280,26 +282,26 @@ namespace Godot
             Node n;
             switch (cls)
             {
-                case "Node2D": n = GodotObject.Attach<Node2D>(ptr); break;
-                case "Node3D": n = GodotObject.Attach<Node3D>(ptr); break;
-                case "Label": n = GodotObject.Attach<Label>(ptr); break;
-                case "Button": n = GodotObject.Attach<Button>(ptr); break;
-                case "Control": n = GodotObject.Attach<Control>(ptr); break;
-                case "Panel": n = GodotObject.Attach<Panel>(ptr); break;
-                case "Camera2D": n = GodotObject.Attach<Camera2D>(ptr); break;
-                case "Sprite2D": n = GodotObject.Attach<Sprite2D>(ptr); break;
-                case "Timer": n = GodotObject.Attach<Timer>(ptr); break;
-                case "AnimationPlayer": n = GodotObject.Attach<AnimationPlayer>(ptr); break;
-                case "RigidBody2D": n = GodotObject.Attach<RigidBody2D>(ptr); break;
-                case "CollisionShape2D": n = GodotObject.Attach<CollisionShape2D>(ptr); break;
-                case "Area2D": n = GodotObject.Attach<Area2D>(ptr); break;
-                case "AudioStreamPlayer": n = GodotObject.Attach<AudioStreamPlayer>(ptr); break;
-                case "LineEdit": n = GodotObject.Attach<LineEdit>(ptr); break;
-                case "ColorRect": n = GodotObject.Attach<ColorRect>(ptr); break;
-                case "VBoxContainer": n = GodotObject.Attach<VBoxContainer>(ptr); break;
-                case "HBoxContainer": n = GodotObject.Attach<HBoxContainer>(ptr); break;
-                case "CanvasLayer": n = GodotObject.Attach<CanvasLayer>(ptr); break;
-                default: n = GodotObject.Attach<Node>(ptr); break;
+                case "Node2D": n = new Node2D(); break;
+                case "Node3D": n = new Node3D(); break;
+                case "Label": n = new Label(); break;
+                case "Button": n = new Button(); break;
+                case "Control": n = new Control(); break;
+                case "Panel": n = new Panel(); break;
+                case "Camera2D": n = new Camera2D(); break;
+                case "Sprite2D": n = new Sprite2D(); break;
+                case "Timer": n = new Timer(); break;
+                case "AnimationPlayer": n = new AnimationPlayer(); break;
+                case "RigidBody2D": n = new RigidBody2D(); break;
+                case "CollisionShape2D": n = new CollisionShape2D(); break;
+                case "Area2D": n = new Area2D(); break;
+                case "AudioStreamPlayer": n = new AudioStreamPlayer(); break;
+                case "LineEdit": n = new LineEdit(); break;
+                case "ColorRect": n = new ColorRect(); break;
+                case "VBoxContainer": n = new VBoxContainer(); break;
+                case "HBoxContainer": n = new HBoxContainer(); break;
+                case "CanvasLayer": n = new CanvasLayer(); break;
+                default: n = new Node(); break;
             }
             n.nativeInstance = ptr;
             return n;

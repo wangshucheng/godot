@@ -20,6 +20,15 @@ _diag('[WeChat Boot] game.js executing');
 _diag('[WeChat Boot] typeof wx = ' + typeof wx);
 _diag('[WeChat Boot] typeof require = ' + typeof require);
 
+// .data 文件加载说明（F5 .dat 单分包方案）：
+// convert 脚本把 .data 原样复制为 .dat 放入 data_pkg 单分包，不 base64、不拆分、
+// 不依赖 JS 模块 require。.dat 扩展名规避了 .data 的 permission denied 和 .bin 的
+// 内部 atob 解码 bug。adapter 的 fetch F5 分支通过 accessSync 探测可达性 +
+// wx.getFileSystemManager().readFileSync() 直接读取原始二进制。
+// 因此 game.js 启动阶段无需任何预加载：分包文件在 DevTools 下随主包预解压，
+// accessSync 通常直接命中；真机若未命中，adapter 内部 _ensureSubpkgLoaded 会调
+// wx.loadSubpackage（带 __name__ bug 同步异常防御 + 超时兑底）。
+
 try {
   _diag('[WeChat Boot] requiring wechat_adapter.js...');
   require('./adapter/wechat_adapter.js');

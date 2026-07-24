@@ -1,4 +1,4 @@
-﻿#include "gd_mono_interop_variant.h"
+#include "gd_mono_interop_variant.h"
 
 #include "gd_mono_callable.h"
 #include "../../mono_runtime/gd_mono.h"
@@ -877,12 +877,7 @@ Variant mono_object_to_variant(MonoObject *p_obj, VariantTypeManaged p_hint_type
 // pass float parameters or receive float/double return values across the
 // Mono WASM interpreter boundary.  C# callers must use the corresponding
 // FloatIntUnion / DoubleLongUnion unions to reinterpret.
-
-static float bits_to_float(int32_t bits) {
-	union { int32_t i; float f; } u;
-	u.i = bits;
-	return u.f;
-}
+// NOTE: bits_to_float / bits_to_double are defined at the top of this file.
 
 static Vector2 bits_to_vector2(int32_t x_bits, int32_t y_bits) {
 	return Vector2(bits_to_float(x_bits), bits_to_float(y_bits));

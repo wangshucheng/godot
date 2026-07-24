@@ -343,9 +343,16 @@ def configure(env: "SConsEnvironment"):
     # Wrap the JavaScript support code around a closure named Godot.
     env.Append(LINKFLAGS=["-sMODULARIZE=1", "-sEXPORT_NAME='Godot'"])
 
-    # Force long jump mode to 'wasm'
-    env.Append(CCFLAGS=["-sSUPPORT_LONGJMP='wasm'"])
-    env.Append(LINKFLAGS=["-sSUPPORT_LONGJMP='wasm'"])
+    # Force long jump mode to '1' (JS-based longjmp).
+    # [GodotExt] 2026-07-23 根因修复：原值 'wasm' 会启用 WASM EH 提案
+    # （-sSUPPORT_LONGJMP='wasm' 使用 try/catch 实现 longjmp，在 target_features
+    # 中加入 +exception-handling 并生成 Tag section），导致微信 WXWebAssembly
+    # 编译失败（Invalid opcode 0x06 try）。
+    # 改用 SUPPORT_LONGJMP=1（JS-based longjmp，不启用 EH 提案），与 Mono 模块
+    # SCsub 中的 -sSUPPORT_LONGJMP=1 保持一致。
+    # 验证：emcc 4.0.5 + -msimd128 + -sSUPPORT_LONGJMP=1 产生的 .o 无 +exception-handling。
+    env.Append(CCFLAGS=["-sSUPPORT_LONGJMP=1"])
+    env.Append(LINKFLAGS=["-sSUPPORT_LONGJMP=1"])
 
     # Allow increasing memory buffer size during runtime. This is efficient
     # when using WebAssembly (in comparison to asm.js) and works well for

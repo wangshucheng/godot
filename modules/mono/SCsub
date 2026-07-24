@@ -6,6 +6,9 @@ env_mono = env_modules.Clone()
 # AOT compilation option (Full AOT mode for WASM)
 opts = Variables()
 opts.Add(BoolVariable("mono_aot", "Enable Mono Full AOT compilation for WASM", False))
+# [GodotExt] 文档 §13.3: 自定义 Mono 静态库路径（用于禁用 EH 的纯净重编产物）。
+# 不指定时使用默认路径 #mono/libs/<platform>/<arch>。
+opts.Add("custom_mono_static_lib_path", "Path to custom Mono static library (e.g. rebuilt without EH)", "")
 opts.Update(env)
 Help(opts.GenerateHelpText(env))
 
@@ -45,28 +48,129 @@ def _get_bcl_wasm_dir():
     return bcl_dir  # Return whatever was set (may be empty/invalid)
 
 
-def _embed_bcl_assemblies(env):
-    """Embed BCL assemblies into WASM MEMFS via emcc --embed-file."""
+# Godot Mono WASM 运行时必需的 BCL 程序集（白名单）。
+# 这些是 netstandard2.0 + GodotSharp 的最小依赖集合，从第一性原理确定：
+#   - mscorlib.dll: BCL 核心（Object/String/Type/Exception/_collections_）
+#   - System.dll: BCL 扩展（Uri/TimeZone/IO/Net 等）
+#   - System.Core.dll: LINQ / Expression Trees / DynamicMethod
+#   - netstandard.dll: netstandard2.0 facade（GodotSharp.dll 与用户 .dll 的目标框架）
+# 其他 BCL（System.Xml / System.Data / Microsoft.AspNetCore.* 等）Godot 不使用，
+# 嵌入它们只会徒增 WASM 体积（每个 .dll 进入 MEMFS 数据段，且 emcc 不压缩）。
+# 用户可通过 BCL_WASM_EXTRA_DLLS 环境变量追加（例如 System.Numerics.dll）。
+_BCL_WASM_REQUIRED_DLLS = (
+    "mscorlib.dll",
+    "System.dll",
+    "System.Core.dll",
+    "netstandard.dll",
+)
+
+
+def _select_bcl_dlls(bcl_wasm_dir):
+    """Select BCL DLLs to embed into WASM MEMFS.
+
+    第一性原理：只嵌入 Godot Mono 运行时实际需要的 BCL，避免体积膨胀。
+
+    策略：
+      1. 白名单（_BCL_WASM_REQUIRED_DLLS）：默认必须嵌入的 4 个核心 BCL
+      2. 环境变量 BCL_WASM_EXTRA_DLLS：用户可指定额外 DLL（逗号分隔，按需添加）
+      3. 硬性排除：.so 原生库（已通过 mono 静态库链接进 WASM，重复嵌入浪费 18MB）
+
+    Returns:
+        List of (src_path, dst_path) tuples for emcc --embed-file.
+    """
     import os
-    from glob import glob
+    selected = list(_BCL_WASM_REQUIRED_DLLS)
+
+    extra = os.environ.get("BCL_WASM_EXTRA_DLLS", "")
+    if extra:
+        for name in extra.split(","):
+            name = name.strip()
+            if name and name not in selected:
+                selected.append(name)
+
+    result = []
+    for name in selected:
+        src = os.path.join(bcl_wasm_dir, name)
+        if src.endswith(".so"):
+            # Mono AOT 原生产物（<assembly>.dll.so），WASM 解释器模式不需要。
+            continue
+        if os.path.isfile(src):
+            dst = "/lib/mono/4.5/" + name
+            result.append((src, dst))
+        else:
+            print("[Mono] WASM: WARNING - BCL DLL not found: %s" % src)
+    return result
+
+
+def _embed_bcl_assemblies(env):
+    """Embed BCL assemblies into WASM MEMFS via emcc --embed-file.
+
+    [GodotExt] 2026-07-23 重构（从第一性原理出发）：
+    旧实现用 `--embed-file dir@mount` 嵌入整个 BCL 目录（32MB），其中包含：
+      - mscorlib.dll.so（18MB Mono AOT 原生产物，已通过 mono 静态库链接进 WASM）
+      - Microsoft.AspNetCore.*.dll / Microsoft.Extensions.*.dll（Blazor/DI，Godot 不用）
+      - System.Xml / System.Data / System.Web.Services 等（WCF/ADO.NET/MEF，Godot 不用）
+      - HelloWorld.dll（BCL WASM 测试样本，不应嵌入游戏 WASM）
+    导致 WASM 体积膨胀约 18MB（.so 文件）+ 5MB（无关 BCL）。
+
+    新实现用 `--embed-file file@mount` 逐个嵌入白名单 BCL：
+      - 白名单（_BCL_WASM_REQUIRED_DLLS）：mscorlib / System / System.Core / netstandard
+      - 环境变量 BCL_WASM_EXTRA_DLLS：用户可按需追加
+      - 硬性排除 .so 原生库
+
+    命令行长度安全：每个 --embed-file 对约 80 字节，10 个 DLL ~800B，
+    远低于 Windows 32KB 命令行限制（旧注释中提到的 WinError 206 是其他原因）。
+    """
+    import os
     bcl_wasm_dir = _get_bcl_wasm_dir()
-    if bcl_wasm_dir and os.path.isdir(bcl_wasm_dir):
-        bcl_dlls = sorted(glob(os.path.join(bcl_wasm_dir, "*.dll")))
-        for dll in bcl_dlls:
-            dll_name = os.path.basename(dll)
-            env.Append(LINKFLAGS=[
-                "--embed-file", dll + "@/lib/mono/4.5/" + dll_name,
-            ])
-        print("[Mono] WASM: BCL assemblies embedded from %s (%d DLLs, %.1f MB)"
-              % (bcl_wasm_dir, len(bcl_dlls),
-                 sum(os.path.getsize(d) for d in bcl_dlls) / (1024*1024)))
-    else:
+    if not (bcl_wasm_dir and os.path.isdir(bcl_wasm_dir)):
         print("[Mono] WASM: WARNING - BCL directory not found: '%s'. "
               "Set BCL_WASM_DIR env var or run setup_mono_windows.ps1." % bcl_wasm_dir)
+        return
+
+    dlls = _select_bcl_dlls(bcl_wasm_dir)
+    if not dlls:
+        print("[Mono] WASM: WARNING - no BCL DLLs selected from %s" % bcl_wasm_dir)
+        return
+
+    embed_flags = []
+    for src, dst in dlls:
+        embed_flags.extend(["--embed-file", src + "@" + dst])
+    env.Append(LINKFLAGS=embed_flags)
+
+    total_mb = sum(os.path.getsize(s) for s, _ in dlls) / (1024 * 1024)
+    dll_names = ", ".join(os.path.basename(s) for s, _ in dlls)
+    print("[Mono] WASM: BCL assemblies embedded (%d DLLs, %.2f MB): %s"
+          % (len(dlls), total_mb, dll_names))
+
+    # 诊断：列出被排除的文件（帮助用户识别遗漏）
+    try:
+        selected_srcs = {s for s, _ in dlls}
+        all_files = [f for f in os.listdir(bcl_wasm_dir)
+                     if os.path.isfile(os.path.join(bcl_wasm_dir, f))]
+        excluded = [f for f in all_files
+                    if os.path.join(bcl_wasm_dir, f) not in selected_srcs]
+        if excluded:
+            excluded_mb = sum(os.path.getsize(os.path.join(bcl_wasm_dir, f))
+                              for f in excluded) / (1024 * 1024)
+            print("[Mono] WASM: BCL excluded %d files (%.2f MB): %s"
+                  % (len(excluded), excluded_mb, ", ".join(sorted(excluded))))
+    except OSError:
+        pass
 
 
 def _apply_wasm_common_linkflags(env, env_mono):
-    """Apply WASM link flags shared by both AOT and Interpreter modes."""
+    """Apply WASM link flags shared by both AOT and Interpreter modes.
+
+    [GodotExt] 文档 §3.2 标准：Mono 6.12 WASM 静态库编译期已禁用 EH
+    （通过 EMCC_CFLAGS=-sWASM_EXCEPTIONS=0，见 build_mono_wasm_lib.sh），
+    链接期仅需保持 SUPPORT_LONGJMP=1（Mono 运行时需要 longjmp）和
+    ERROR_ON_UNDEFINED_SYMBOLS=0（Mono 库引用 JS 侧函数）。
+
+    历史问题：旧版静态库预编译时启用了 EH，导致微信 WXWebAssembly
+    编译失败（Invalid opcode 0x06 try）。现通过重编静态库从根本解决，
+    不再需要任何事后 strip（wasm-opt --strip-eh / Python strip section 13）。
+    """
     wasm_threads = env.get("wasm_threads", False)
     if wasm_threads:
         env_mono.Append(CPPDEFINES=[("MONO_WASM_THREADS", 1)])
@@ -89,12 +193,35 @@ def _apply_wasm_common_linkflags(env, env_mono):
 
     # Mono WASM libraries reference JS-side functions; don't error on them.
     env.Append(LINKFLAGS=["-sERROR_ON_UNDEFINED_SYMBOLS=0"])
-    # C++ exception support required by Mono runtime.
-    env.Append(LINKFLAGS=["-sDISABLE_EXCEPTION_THROWING=0"])
-    env.Append(LINKFLAGS=["-sDISABLE_EXCEPTION_CATCHING=0"])
-    env.Append(LINKFLAGS=["-sSUPPORT_LONGJMP=emscripten"])
+    # [GodotExt] 文档 §3.2: SUPPORT_LONGJMP=1 是 Mono 运行时核心需求
+    # （Mono 用 longjmp 实现 C# 异常语义，不依赖 WASM EH 提案）。
+    # 注意：emcc 4.0.1 中 WASM_EXCEPTIONS 是内部设置，不能通过 -s 设置。
+    #   - 默认就是不启用 WASM EH（只有显式 -sWASM_EXCEPTIONS=1 才启用）
+    #   - 静态库编译期已禁用 EH（见 build_mono_wasm_lib.sh），链接期无需再设
+    env.Append(LINKFLAGS=["-sSUPPORT_LONGJMP=1"])
 
     return wasm_threads, wasm_memory
+
+
+def _resolve_mono_lib_path(env, default_path):
+    """Resolve Mono static library path.
+
+    [GodotExt] 文档 §13.3: 支持通过 custom_mono_static_lib_path 参数
+    指定自研重编的 Mono 静态库路径（禁用 EH 的纯净产物）。
+    未指定时使用默认路径 #mono/libs/<platform>/<arch>。
+    """
+    custom = env.get("custom_mono_static_lib_path", "")
+    if custom:
+        import os
+        # custom_mono_static_lib_path 指向单个 .a 文件，库目录为其父目录
+        lib_dir = os.path.dirname(custom)
+        if os.path.isdir(lib_dir):
+            print("[Mono] Using custom Mono static lib dir: %s" % lib_dir)
+            return lib_dir
+        else:
+            print("[Mono] WARNING: custom_mono_static_lib_path dir not found: %s, "
+                  "falling back to default" % lib_dir)
+    return default_path
 
 
 def _run_aot_workflow(env, env_mono, mono_sources_list):
@@ -362,7 +489,7 @@ elif env["platform"] == "web":
             _run_aot_workflow(env, env_mono, mono_sources)
 
         # Keep Interpreter libraries for Hybrid fallback
-        mono_lib_path = mono_root + "/libs/web/wasm"
+        mono_lib_path = _resolve_mono_lib_path(env, mono_root + "/libs/web/wasm")
         env.Prepend(LIBPATH=[mono_lib_path])
         env.Append(LIBS=[
             "mini",
@@ -406,7 +533,7 @@ elif env["platform"] == "web":
             ("MONO_INTERP_MODE", 1),
         ])
 
-        mono_lib_path = mono_root + "/libs/web/wasm"
+        mono_lib_path = _resolve_mono_lib_path(env, mono_root + "/libs/web/wasm")
         env.Prepend(LIBPATH=[mono_lib_path])
         env_mono.Prepend(LIBPATH=[mono_lib_path])
 

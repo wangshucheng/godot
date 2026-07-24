@@ -3,7 +3,7 @@ using System;
 
 // ============================================================
 // Godot 4.7 Mono WASM C# Workflow Systematic Test Suite
-// 22 test scenarios with detailed assertions.
+// 23 test scenarios with detailed assertions.
 // All native operations use WASM-safe icalls (string/int params only).
 // Assertion framework is implemented in C++ via icalls to avoid
 // Mono WASM interpreter signature mismatch on void methods with strings.

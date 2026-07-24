@@ -22,7 +22,7 @@ public partial class Game2048 : Control
     private const int N = 4;
 
     // Game state (pure int - WASM-safe)
-    private int[,] _grid = new int[N, N];
+    private int[] _grid = new int[N * N];
     private int _score;
     private bool _gameOver;
     private bool _won;
@@ -34,7 +34,7 @@ public partial class Game2048 : Control
     private int _rngState = 12345;
 
     // Undo (one-step history)
-    private int[,] _undoGrid = new int[N, N];
+    private int[] _undoGrid = new int[N * N];
     private int _undoScore;
     private bool _undoValid;
 
@@ -137,7 +137,7 @@ public partial class Game2048 : Control
     {
         for (int r = 0; r < N; r++)
             for (int c = 0; c < N; c++)
-                _grid[r, c] = 0;
+                _grid[(int)(r) * N + (int)(c)] = 0;
         _score = 0;
         _gameOver = false;
         _won = false;
@@ -160,7 +160,7 @@ public partial class Game2048 : Control
         int emptyCount = 0;
         for (int r = 0; r < N; r++)
             for (int c = 0; c < N; c++)
-                if (_grid[r, c] == 0) emptyCount++;
+                if (_grid[(int)(r) * N + (int)(c)] == 0) emptyCount++;
 
         if (emptyCount == 0) return;
 
@@ -171,12 +171,12 @@ public partial class Game2048 : Control
         {
             for (int c = 0; c < N; c++)
             {
-                if (_grid[r, c] == 0)
+                if (_grid[(int)(r) * N + (int)(c)] == 0)
                 {
                     if (idx == target)
                     {
                         // 90% chance of 2, 10% chance of 4
-                        _grid[r, c] = (NextRandom() % 10 < 9) ? 2 : 4;
+                        _grid[(int)(r) * N + (int)(c)] = (NextRandom() % 10 < 9) ? 2 : 4;
                         return;
                     }
                     idx++;
@@ -189,7 +189,7 @@ public partial class Game2048 : Control
     {
         for (int r = 0; r < N; r++)
             for (int c = 0; c < N; c++)
-                _undoGrid[r, c] = _grid[r, c];
+                _undoGrid[(int)(r) * N + (int)(c)] = _grid[(int)(r) * N + (int)(c)];
         _undoScore = _score;
         _undoValid = true;
     }
@@ -199,7 +199,7 @@ public partial class Game2048 : Control
         if (!_undoValid) return false;
         for (int r = 0; r < N; r++)
             for (int c = 0; c < N; c++)
-                _grid[r, c] = _undoGrid[r, c];
+                _grid[(int)(r) * N + (int)(c)] = _undoGrid[(int)(r) * N + (int)(c)];
         _score = _undoScore;
         _undoValid = false;
         _gameOver = false;
@@ -243,12 +243,12 @@ public partial class Game2048 : Control
             for (int r = 0; r < N; r++)
             {
                 int[] line = new int[N];
-                for (int c = 0; c < N; c++) line[c] = _grid[r, c];
+                for (int c = 0; c < N; c++) line[c] = _grid[(int)(r) * N + (int)(c)];
                 bool rowMoved = CompressAndMerge(line);
                 if (rowMoved)
                 {
                     moved = true;
-                    for (int c = 0; c < N; c++) _grid[r, c] = line[c];
+                    for (int c = 0; c < N; c++) _grid[(int)(r) * N + (int)(c)] = line[c];
                 }
             }
         }
@@ -258,12 +258,12 @@ public partial class Game2048 : Control
             for (int r = 0; r < N; r++)
             {
                 int[] line = new int[N];
-                for (int c = 0; c < N; c++) line[c] = _grid[r, N - 1 - c];
+                for (int c = 0; c < N; c++) line[c] = _grid[(int)(r) * N + (int)(N - 1 - c)];
                 bool rowMoved = CompressAndMerge(line);
                 if (rowMoved)
                 {
                     moved = true;
-                    for (int c = 0; c < N; c++) _grid[r, N - 1 - c] = line[c];
+                    for (int c = 0; c < N; c++) _grid[(int)(r) * N + (int)(N - 1 - c)] = line[c];
                 }
             }
         }
@@ -273,12 +273,12 @@ public partial class Game2048 : Control
             for (int c = 0; c < N; c++)
             {
                 int[] line = new int[N];
-                for (int r = 0; r < N; r++) line[r] = _grid[r, c];
+                for (int r = 0; r < N; r++) line[r] = _grid[(int)(r) * N + (int)(c)];
                 bool colMoved = CompressAndMerge(line);
                 if (colMoved)
                 {
                     moved = true;
-                    for (int r = 0; r < N; r++) _grid[r, c] = line[r];
+                    for (int r = 0; r < N; r++) _grid[(int)(r) * N + (int)(c)] = line[r];
                 }
             }
         }
@@ -288,12 +288,12 @@ public partial class Game2048 : Control
             for (int c = 0; c < N; c++)
             {
                 int[] line = new int[N];
-                for (int r = 0; r < N; r++) line[r] = _grid[N - 1 - r, c];
+                for (int r = 0; r < N; r++) line[r] = _grid[(int)(N - 1 - r) * N + (int)(c)];
                 bool colMoved = CompressAndMerge(line);
                 if (colMoved)
                 {
                     moved = true;
-                    for (int r = 0; r < N; r++) _grid[N - 1 - r, c] = line[r];
+                    for (int r = 0; r < N; r++) _grid[(int)(N - 1 - r) * N + (int)(c)] = line[r];
                 }
             }
         }
@@ -305,7 +305,7 @@ public partial class Game2048 : Control
     {
         for (int r = 0; r < N; r++)
             for (int c = 0; c < N; c++)
-                if (_grid[r, c] == target) return true;
+                if (_grid[(int)(r) * N + (int)(c)] == target) return true;
         return false;
     }
 
@@ -361,17 +361,17 @@ public partial class Game2048 : Control
         // Check for empty cells
         for (int r = 0; r < N; r++)
             for (int c = 0; c < N; c++)
-                if (_grid[r, c] == 0) return false;
+                if (_grid[(int)(r) * N + (int)(c)] == 0) return false;
 
         // Check for adjacent equal tiles (horizontal)
         for (int r = 0; r < N; r++)
             for (int c = 0; c < N - 1; c++)
-                if (_grid[r, c] == _grid[r, c + 1]) return false;
+                if (_grid[(int)(r) * N + (int)(c)] == _grid[(int)(r) * N + (int)(c + 1)]) return false;
 
         // Check for adjacent equal tiles (vertical)
         for (int c = 0; c < N; c++)
             for (int r = 0; r < N - 1; r++)
-                if (_grid[r, c] == _grid[r + 1, c]) return false;
+                if (_grid[(int)(r) * N + (int)(c)] == _grid[(int)(r + 1) * N + (int)(c)]) return false;
 
         return true;
     }
@@ -383,7 +383,7 @@ public partial class Game2048 : Control
         {
             for (int c = 0; c < N; c++)
             {
-                Runtime.GameUiSetTile(r, c, _grid[r, c]);
+                Runtime.GameUiSetTile(r, c, _grid[(int)(r) * N + (int)(c)]);
             }
         }
 

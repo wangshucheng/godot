@@ -62,6 +62,10 @@ tests/data/crypto/out*
 *.lib
 *.lo
 *.o
+
+# Backup files (debug residue)
+*.bak
+*.bak.*
 *.os
 *.ox
 *.Plo

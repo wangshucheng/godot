@@ -32,6 +32,9 @@
 #ifdef TOOLS_ENABLED
 #include "editor/settings/editor_settings.h"
 #include "editor/script_templates/templates.gen.h"
+// P4: MonoBuildPanel — bottom dock for dotnet build output. build_project()
+// routes stdout/stderr here via MonoBuildPanel::append_output().
+#include "editor/mono_build_panel.h"
 #endif
 
 using namespace mono_variant;
@@ -1725,15 +1728,23 @@ bool CSharpLanguage::build_project() {
 		return true;
 	}
 
+	// P4: route build output to the Mono bottom panel when available.
+	// Falls back to printf when the panel isn't instantiated (e.g. running
+	// headless tests or before the editor dock manager has created it).
+	MonoBuildPanel *panel = MonoBuildPanel::get_singleton();
+
 	ensure_project_file();
 
 	String csproj_path = get_project_csproj_path();
 	if (!FileAccess::exists(csproj_path)) {
-		ERR_PRINT("[Mono] Cannot build: .csproj not found.");
+		String msg = "[Mono] Cannot build: .csproj not found: " + csproj_path;
+		ERR_PRINT(msg);
+		if (panel) {
+			panel->append_output(msg);
+			panel->set_status("Build failed", true);
+		}
 		return false;
 	}
-
-	String project_dir = csproj_path.get_base_dir();
 
 	List<String> args;
 	args.push_back("build");
@@ -1744,48 +1755,98 @@ bool CSharpLanguage::build_project() {
 
 	String dotnet_cmd = "dotnet";
 
-	printf("[Mono] Building C# project: %s\n", csproj_path.utf8().get_data());
+	String header = "[Mono] Building C# project: " + csproj_path;
+	printf("%s\n", header.utf8().get_data());
 	fflush(stdout);
+
+	if (panel) {
+		panel->clear_output();
+		panel->append_output(header);
+		panel->set_status("Building...");
+	}
 
 	String pipe_output;
 	int exit_code = -1;
 	Error err = OS::get_singleton()->execute(dotnet_cmd, args, &pipe_output, &exit_code, true, nullptr, false);
 
 	if (err != OK) {
-		printf("[Mono] WARNING: Failed to execute dotnet build. Is .NET SDK installed?\n");
+		String msg = "[Mono] WARNING: Failed to execute dotnet build. Is .NET SDK installed?";
+		printf("%s\n", msg.utf8().get_data());
 		fflush(stdout);
+		if (panel) {
+			panel->append_output(msg);
+			panel->append_output(pipe_output);
+			panel->set_status("Build failed", true);
+		}
 		return false;
 	}
 
 	if (!pipe_output.is_empty()) {
 		printf("%s\n", pipe_output.utf8().get_data());
 		fflush(stdout);
+		if (panel) {
+			panel->append_output(pipe_output);
+		}
 	}
 
 	if (exit_code != 0) {
-		printf("[Mono] C# build failed with exit code: %d\n", exit_code);
+		String msg = "[Mono] C# build failed with exit code: " + itos(exit_code);
+		printf("%s\n", msg.utf8().get_data());
 		fflush(stdout);
+		if (panel) {
+			panel->append_output(msg);
+			panel->set_status("Build failed", true);
+		}
 		return false;
 	}
 
-	printf("[Mono] C# build succeeded.\n");
+	String ok_msg = "[Mono] C# build succeeded.";
+	printf("%s\n", ok_msg.utf8().get_data());
 	fflush(stdout);
+	if (panel) {
+		panel->append_output(ok_msg);
+	}
+
+	// P4 fix: close the old scripts assembly before opening the new one.
+	// Without mono_assembly_close(), mono_domain_assembly_open() returns the
+	// cached old image (keyed by file path) even after the .dll on disk has
+	// been recompiled — hot reload silently loads stale IL. This mirrors the
+	// pattern already used in reload_all_scripts().
+	if (scripts_assembly) {
+		printf("[Mono] Closing old scripts assembly for rebuild...\n");
+		fflush(stdout);
+		mono_assembly_close(scripts_assembly);
+		scripts_assembly = nullptr;
+	}
 
 	String assemblies_dir = get_mono_assemblies_dir();
 	String output_dll = assemblies_dir.path_join(get_project_csproj_path().get_file().get_basename() + ".dll");
 
 	if (FileAccess::exists(output_dll)) {
-		scripts_assembly = nullptr;
 		scripts_assembly = mono_domain_assembly_open(MonoHost::get_singleton()->get_domain(), output_dll.utf8().get_data());
 		if (scripts_assembly) {
-			printf("[Mono] Loaded project scripts assembly: %s\n", output_dll.utf8().get_data());
+			String load_msg = "[Mono] Loaded project scripts assembly: " + output_dll;
+			printf("%s\n", load_msg.utf8().get_data());
 			fflush(stdout);
+			if (panel) {
+				panel->append_output(load_msg);
+			}
 
 			reload_all_pending_scripts();
+			if (panel) {
+				panel->set_status("Build succeeded");
+			}
 		} else {
-			printf("[Mono] Failed to load compiled scripts assembly.\n");
+			String fail_msg = "[Mono] Failed to load compiled scripts assembly.";
+			printf("%s\n", fail_msg.utf8().get_data());
 			fflush(stdout);
+			if (panel) {
+				panel->append_output(fail_msg);
+				panel->set_status("Assembly load failed", true);
+			}
 		}
+	} else if (panel) {
+		panel->set_status("Build succeeded");
 	}
 
 	return exit_code == 0;

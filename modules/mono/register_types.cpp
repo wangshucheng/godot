@@ -16,6 +16,8 @@
 #include "mono_export_plugin.h"
 #include "editor/editor_node.h"
 #include "editor/export/editor_export.h"
+#include "editor/docks/editor_dock_manager.h"
+#include "editor/mono_build_panel.h"
 #endif
 
 #include <cstdio>
@@ -24,10 +26,20 @@ static MonoHost *mono_host = nullptr;
 static CSharpLanguage *csharp_lang = nullptr;
 
 #ifdef TOOLS_ENABLED
+// P4: Owned by EditorDockManager (added via add_dock). The dock manager
+// takes responsibility for parenting/destroying it on editor shutdown.
+static MonoBuildPanel *mono_build_panel = nullptr;
+
 static void _editor_init() {
 	Ref<MonoExportPlugin> mono_export;
 	mono_export.instantiate();
 	EditorExport::get_singleton()->add_export_plugin(mono_export);
+
+	// P4: register the Mono Build bottom panel.
+	// add_dock() reparents the Control to the dock tab container, so the
+	// editor's lifecycle owns it from here on.
+	mono_build_panel = memnew(MonoBuildPanel);
+	EditorDockManager::get_singleton()->add_dock(mono_build_panel);
 }
 #endif
 
@@ -105,4 +117,9 @@ void uninitialize_mono_module(ModuleInitializationLevel p_level) {
 		memdelete(mono_host);
 		mono_host = nullptr;
 	}
+#ifdef TOOLS_ENABLED
+	// P4: panel is owned by the dock manager's tab container, which is freed
+	// by EditorNode before module uninitialize. Clear the dangling pointer.
+	mono_build_panel = nullptr;
+#endif
 }

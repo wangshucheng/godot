@@ -32,6 +32,7 @@ mono_sources = [
     "mono_export_plugin.cpp",
     "editor/bindings_generator.cpp",
     "editor/semver.cpp",  # A4: SemVer 解析工具（dotnet --version 输出解析，P4 消费）
+    "editor/mono_build_panel.cpp",  # P4: Mono bottom dock (dotnet build output)
     "utils/path_utils.cpp",
     "utils/naming_utils.cpp",  # A3: snake/Pascal → PascalCase/camelCase 转换（含上游 overrides）
     "utils/string_utils.cpp",  # A3: sformat / is_csharp_keyword / escape_csharp_keyword / read_all_file_utf8

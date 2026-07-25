@@ -1,5 +1,5 @@
 {
-  "compileType": "game",
+  "compileType": "minigame",
   "appid": "touristappid",
   "projectname": "test_minimal",
   "libVersion": "3.17.0"

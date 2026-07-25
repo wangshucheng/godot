@@ -175,7 +175,8 @@ python "$projectRoot\wechat\convert_to_wechat.py" `
 
 **解决**：
 - 升级开发者工具到最新稳定版
-- 确认 `project.config.json` 中 `compileType` 为 `"miniGame"`
+- 确认 `project.config.json` 中 `compileType` 为 `"minigame"`（全小写，官方合法值）
+- 确认 `project.private.config.json` 中 `compileType` 也为 `"minigame"`（私有配置优先级高于公共配置，DevTools 自动生成时可能用错误默认值覆盖）
 - 确认导入时选择的是「小游戏」分类
 
 ### Q2：CDN 下载失败（404 / 超时）
@@ -252,9 +253,11 @@ python wechat\convert_to_wechat.py `
 
 | 类型 | 大小限制 | 当前 2048 项目 |
 |------|---------|----------------|
-| 主包 | 4 MB | ✅ 约 516 KB（仅 index.js + index.pck） |
-| 分包 | 单包 4 MB，总计 20 MB | 未使用 |
-| CDN | 无限制 | ✅ .wasm + .data 走 CDN |
+| 主包 | 4 MB | ✅ 约 531 KB（index.js + index.pck + adapter） |
+| 分包 | 单包 20 MB，总计 20 MB | ✅ `wasm_pkg`（~6.9 MB .wasm.br）+ `data_pkg`（~19.4 MB .dat） |
+| CDN | 无限制 | 可选：`--cdn-only` 模式下 .wasm/.data 走 CDN |
+
+> ⚠️ **关键配置**：`project.config.json` 与 `project.private.config.json` 的 `compileType` 必须为 `"minigame"`（全小写官方合法值）。若误用 `"game"` 或 `"miniGame"`（驼峰式），微信服务端无法识别项目为小游戏，`game.json` 中的 `subpackages` 配置失效，所有文件会被打成名为 `__FULL__` 的主包，超过 4 MB 限制时报 `subpackage __FULL__ source size exceed max limit 4096KB`。
 
 ## 八、参考文档
 

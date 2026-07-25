@@ -11,6 +11,15 @@
 (function () {
   'use strict';
 
+  // 全局错误捕获：捕获未处理的 Promise rejection（doInit 的 Promise 链没有 .catch()，
+  // 错误会被静默吞掉，导致引擎卡在 HEARTBEAT 无法启动）
+  if (typeof globalThis.addEventListener === 'function') {
+    globalThis.addEventListener('unhandledrejection', function(event) {
+      console.error('[WeChat] Unhandled rejection:', event.reason);
+      if (event.reason && event.reason.stack) console.error(event.reason.stack);
+    });
+  }
+
   function safeDefineGlobal(name, value) {
     try {
       globalThis[name] = value;
@@ -215,18 +224,23 @@
     if (!subpkgName) return Promise.resolve();
     timeoutMs = timeoutMs || 30000;
 
-    // 1. 先同步探测：若分包文件已可访问，跳过 loadSubpackage（规避 DevTools __name__ bug）
-    if (probeFile) {
-      try {
-        fileSystemManager.accessSync(probeFile);
-        console.log('[WeChat] Subpackage already accessible (skip loadSubpackage): ' + subpkgName + ' -> ' + probeFile);
-        return Promise.resolve();
-      } catch (e) {
-        // 文件不可访问，继续走 loadSubpackage
-      }
-    }
+    // ============================================================
+    // 根因分析 (2026-07-25):
+    //   之前用 accessSync(probeFile) 作为短路探测，规避 DevTools __name__ bug。
+    //   但 DevTools 2.02.2607232 的 accessSync 对分包源文件返回成功（因为文件
+    //   存在于项目源码中），这是假阳性 —— 文件并未真正解压到 USER_DATA_PATH。
+    //   后续 openSync({flag:'r'}) 需要文件在 USER_DATA_PATH，因此失败。
+    //   回退到 readFile offset+length 有 DevTools offset bug（所有 chunk 返回
+    //   文件开头），组装后的 buffer 全是重复的第一块 → mscorlib.dll MZ 头丢失。
+    //
+    // 修复: 始终调用 wx.loadSubpackage。
+    //   - loadSubpackage 是幂等的（已加载时立即 success）
+    //   - __name__ bug 由 try/catch 兜底（即使抛错也 resolve）
+    //   - 加载完成后文件在 USER_DATA_PATH，openSync 可正常访问
+    //   - 真机上也安全：loadSubpackage 对已加载分包立即返回 success
+    // ============================================================
 
-    // 2. 调 wx.loadSubpackage，带超时和同步异常防御
+    // 调 wx.loadSubpackage，带超时和同步异常防御
     return new Promise(function (resolve, reject) {
       if (typeof wx !== 'undefined' && typeof wx.loadSubpackage === 'function') {
         var settled = false;
@@ -864,6 +878,148 @@
   safeDefineGlobal('atob', atobPolyfill);
   safeDefineGlobal('btoa', btoaPolyfill);
   console.log('[WeChat Adapter] atob/btoa polyfill installed');
+
+  // ============================================================
+  // 模块 5b: TextDecoder / TextEncoder polyfill
+  // ============================================================
+  // 根因 (2026-07-25):
+  //   Emscripten 4.0.5 的 index.js 顶层有:
+  //     var UTF8Decoder = typeof TextDecoder != "undefined" ? new TextDecoder : undefined;
+  //   GL.getSource (WebGL glShaderSource 入口) 调用 UTF8Decoder.decode(slice):
+  //     source += UTF8Decoder.decode(slice);
+  //   微信小游戏环境无 TextDecoder → UTF8Decoder = undefined → "Cannot read
+  //   properties of undefined (reading 'decode')" → 引擎 start() 后渲染首帧
+  //   的着色器编译立即崩溃。
+  //
+  //   Emscripten 的 UTF8ArrayToString 也有 typeof TextDecoder 分支，但
+  //   GL.getSource 直接用全局 UTF8Decoder，不回退到 UTF8ToString。
+  //
+  // 实现: 标准 TextDecoder API 子集（utf-8 only，streaming=false）。
+  //   - decode(input?: ArrayBuffer | ArrayBufferView): string
+  //   - decode() 无参返回 '' （标准行为）
+  //   支持 UTF-8 全集（1-4 字节序列，含代理对）
+  // ============================================================
+  function TextDecoderPolyfill(label) {
+    // label 参数被忽略（仅支持 utf-8，已是 Emscripten 唯一用法）
+    this.encoding = 'utf-8';
+    this.fatal = false;
+    this.ignoreBOM = false;
+  }
+
+  TextDecoderPolyfill.prototype.decode = function (input, options) {
+    if (input == null) return '';
+    // 标准 TextDecoder 接受 ArrayBuffer 或 ArrayBufferView
+    var bytes;
+    if (input instanceof ArrayBuffer) {
+      bytes = new Uint8Array(input);
+    } else if (ArrayBuffer.isView && ArrayBuffer.isView(input)) {
+      // Uint8Array.subarray / slice / 各种 TypedArray
+      var view = input;
+      bytes = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
+    } else if (input.buffer instanceof ArrayBuffer) {
+      // 兜底：某种带 buffer 的对象
+      var buf = input.buffer;
+      bytes = new Uint8Array(buf, input.byteOffset || 0, input.byteLength || buf.byteLength);
+    } else {
+      // 不支持的输入类型，返回空字符串（fatal=false 模式）
+      return '';
+    }
+
+    var len = bytes.length;
+    if (len === 0) return '';
+
+    // UTF-8 解码（无 BOM 处理，fatal=false 容错）
+    var result = '';
+    var i = 0;
+    while (i < len) {
+      var b1 = bytes[i++];
+      if (b1 < 0x80) {
+        // 1 字节序列
+        result += String.fromCharCode(b1);
+      } else if (b1 < 0xC0) {
+        // 孤立的 continuation byte，用 U+FFFD 替换
+        result += '\uFFFD';
+      } else if (b1 < 0xE0) {
+        // 2 字节序列
+        if (i >= len) { result += '\uFFFD'; break; }
+        var b2 = bytes[i++];
+        if ((b2 & 0xC0) !== 0x80) { result += '\uFFFD'; continue; }
+        var cp = ((b1 & 0x1F) << 6) | (b2 & 0x3F);
+        result += String.fromCharCode(cp);
+      } else if (b1 < 0xF0) {
+        // 3 字节序列
+        if (i + 1 >= len) { result += '\uFFFD'; break; }
+        var b2 = bytes[i++];
+        var b3 = bytes[i++];
+        if ((b2 & 0xC0) !== 0x80 || (b3 & 0xC0) !== 0x80) { result += '\uFFFD'; continue; }
+        var cp = ((b1 & 0x0F) << 12) | ((b2 & 0x3F) << 6) | (b3 & 0x3F);
+        result += String.fromCharCode(cp);
+      } else if (b1 < 0xF8) {
+        // 4 字节序列（含代理对）
+        if (i + 2 >= len) { result += '\uFFFD'; break; }
+        var b2 = bytes[i++];
+        var b3 = bytes[i++];
+        var b4 = bytes[i++];
+        if ((b2 & 0xC0) !== 0x80 || (b3 & 0xC0) !== 0x80 || (b4 & 0xC0) !== 0x80) { result += '\uFFFD'; continue; }
+        var cp = ((b1 & 0x07) << 18) | ((b2 & 0x3F) << 12) | ((b3 & 0x3F) << 6) | (b4 & 0x3F);
+        // 转代理对
+        cp -= 0x10000;
+        var hi = 0xD800 + (cp >> 10);
+        var lo = 0xDC00 + (cp & 0x3FF);
+        result += String.fromCharCode(hi, lo);
+      } else {
+        // 非法首字节 (>= 0xF8)
+        result += '\uFFFD';
+      }
+    }
+    return result;
+  };
+
+  function TextEncoderPolyfill(label) {
+    // label 参数被忽略（仅支持 utf-8）
+    this.encoding = 'utf-8';
+  }
+
+  TextEncoderPolyfill.prototype.encode = function (input, options) {
+    if (input == null) input = '';
+    if (typeof input !== 'string') input = String(input);
+    var bytes = [];
+    for (var i = 0; i < input.length; i++) {
+      var cp = input.charCodeAt(i);
+      // 处理代理对
+      if (cp >= 0xD800 && cp <= 0xDBFF && i + 1 < input.length) {
+        var lo = input.charCodeAt(i + 1);
+        if (lo >= 0xDC00 && lo <= 0xDFFF) {
+          var combined = ((cp - 0xD800) << 10) + (lo - 0xDC00) + 0x10000;
+          bytes.push(0xF0 | (combined >> 18));
+          bytes.push(0x80 | ((combined >> 12) & 0x3F));
+          bytes.push(0x80 | ((combined >> 6) & 0x3F));
+          bytes.push(0x80 | (combined & 0x3F));
+          i++;
+          continue;
+        }
+      }
+      if (cp < 0x80) {
+        bytes.push(cp);
+      } else if (cp < 0x800) {
+        bytes.push(0xC0 | (cp >> 6));
+        bytes.push(0x80 | (cp & 0x3F));
+      } else {
+        bytes.push(0xE0 | (cp >> 12));
+        bytes.push(0x80 | ((cp >> 6) & 0x3F));
+        bytes.push(0x80 | (cp & 0x3F));
+      }
+    }
+    return new Uint8Array(bytes);
+  };
+
+  if (typeof globalThis.TextDecoder === 'undefined' || !globalThis.TextDecoder) {
+    safeDefineGlobal('TextDecoder', TextDecoderPolyfill);
+    safeDefineGlobal('TextEncoder', TextEncoderPolyfill);
+    console.log('[WeChat Adapter] TextDecoder/TextEncoder polyfill installed');
+  } else {
+    console.log('[WeChat Adapter] TextDecoder already available, skip polyfill');
+  }
 
   // ============================================================
   // 模块 6: localStorage polyfill
@@ -1597,6 +1753,34 @@
           }
           console.log('[WeChat Diag] parallel chunk first-4-bytes: ' + chunkDiag.join(' '));
 
+          // ============================================================
+          // offset bug 检测 (2026-07-25):
+          //   DevTools 2.02.2607232 的 readFile({offset, length}) 忽略 offset，
+          //   所有 chunk 都返回文件开头的数据。组装后的 buffer 前 1MB 重复 N 次，
+          //   后续 mscorlib.dll 等文件 MZ 头丢失 → "invalid CIL image" 崩溃。
+          //
+          // 检测策略: 比较 chunk[0] 和 chunk[1] 的前 4 字节。
+          //   - 正常情况: 不同位置的 1MB 数据，前 4 字节几乎不可能完全相同
+          //   - offset bug: 所有 chunk 都是文件开头，前 4 字节必然相同
+          //   例外: 若文件本身就是全相同字节（如全 0），不在此列——但 .dat 是
+          //         二进制资源包，不可能全相同。
+          //
+          // 检测到 bug 时抛错，强制走 Strategy 3 (base64) 兜底，避免静默返回损坏数据。
+          // ============================================================
+          if (chunks.length >= 2) {
+            var c0 = new Uint8Array(chunks[0]);
+            var c1 = new Uint8Array(chunks[1]);
+            if (c0[0] === c1[0] && c0[1] === c1[1] && c0[2] === c1[2] && c0[3] === c1[3]) {
+              console.error('[WeChat fetch F5] Strategy 2 OFFSET BUG DETECTED: chunk 0 and chunk 1 have identical first-4-bytes [' +
+                (c0[0] < 16 ? '0' : '') + c0[0].toString(16) +
+                (c0[1] < 16 ? '0' : '') + c0[1].toString(16) +
+                (c0[2] < 16 ? '0' : '') + c0[2].toString(16) +
+                (c0[3] < 16 ? '0' : '') + c0[3].toString(16) +
+                '], readFile ignored offset parameter, data is corrupted, falling back to base64');
+              throw new Error('DevTools readFile offset bug detected (chunks 0,1 identical first-4-bytes)');
+            }
+          }
+
           return ab;
         }).catch(function (err) {
           console.warn('[WeChat fetch F5] strategy 2 (chunked) failed: ' + err.message + ', falling back to whole-file base64');
@@ -2025,6 +2209,20 @@
           }
         }
       });
+
+      // location 对象（Emscripten loadPackage 在 typeof window==="object" 时
+      // 访问 window.location.pathname 来推导 PACKAGE_PATH；微信无浏览器 location，
+      // 不补全会抛 "Cannot read properties of undefined (reading 'pathname')"，
+      // 导致 Godot() 失败、引擎黑屏。浏览器里 window.location === document.location，
+      // 这里与 _document.location 共享同一对象保持一致。）
+      if (!_win.location || typeof _win.location !== 'object') {
+        var _loc = { href: '', pathname: '/', origin: '', search: '', hash: '', host: '', hostname: '', port: '', protocol: 'http:' };
+        try {
+          _win.location = _loc;
+        } catch (e) {
+          try { Object.defineProperty(_win, 'location', { value: _loc, configurable: true, writable: true }); } catch (e2) {}
+        }
+      }
     } catch (e) {
       console.warn('[WeChat Adapter] window augment failed: ' + e);
     }

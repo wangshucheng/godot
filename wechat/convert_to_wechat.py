@@ -212,12 +212,64 @@ DATA_SUBPACKAGE_ROOT = "data_pkg/"
 # project.config.json - 微信开发者工具配置
 # 注意: 不包含 miniprogramRoot 字段（该字段名含 "miniprogram" 可能干扰项目类型识别）
 # 极简配置，仅保留必需字段，让 DevTools 根据 compileType + game.json 自动识别
+#
+# compileType 合法值（来自微信官方小游戏文档，详见：
+#   https://developers.weixin.qq.com/minigame/dev/devtools/projectconfig.html#compileType）
+#   - "minigame"     当前为普通小游戏项目
+#   - "gamePlugin"   当前为小游戏插件项目
+#
+# compileType: "minigame" —— 官方唯一正确的小游戏项目类型（微信官方文档明确列出）
+#   https://developers.weixin.qq.com/minigame/dev/devtools/projectconfig.html#compileType
+#   - "minigame"     当前为普通小游戏项目（✅ Godot 游戏用这个）
+#   - "gamePlugin"   当前为小游戏插件项目
+#
+# ⚠️ 历史踩坑（2026-07-24）：
+#   1. 曾误用 "game" 作为 compileType——这不是官方合法值，是旧版教程的历史遗留写法。
+#      新版 DevTools 不识别 "game"，不会按小游戏模式解析 game.json 的 subpackages，
+#      导致所有文件被打到 __FULL__ 主包，超过 4MB 时报
+#      "subpackage __FULL__ source size exceed max limit 4096KB"。
+#   2. 曾误以为 "minigame" 是小程序轻量模式——实际上 "minigame" 才是正确的小游戏项目类型，
+#      "miniProgram"（注意大小写）才是小程序。两者不要混淆。
+#   3. DevTools 内部可能以 "miniGame"（驼峰式）存储，但 project.config.json 中
+#      必须写 "minigame"（全小写），否则服务端不识别。
+#
+# miniprogramRoot: "" —— 必须显式设为空字符串（官方建议）
+#   若省略或设为非空（如 "./"），DevTools 可能以该路径为基准扫描 game.json，
+#   导致项目根目录的 game.json 被忽略，subpackages 失效。
+#
+# packOptions.include —— 强制包含无 JS 依赖的资源文件夹（官方机制）
+#   官方文档：https://developers.weixin.qq.com/minigame/dev/devtools/projectconfig.html#packOptions
+#   "用以配置打包时需要强制带上的文件（仅限后缀名白名单内）或者文件夹，
+#    匹配的这些文件或文件夹将一定会出现在预览或上传的结果内。"
+#
+#   ⚠️ 历史踩坑（2026-07-24）：
+#   data_pkg 分包内的 .dat 文件（19.35MB mscorlib.dll 等二进制资源）没有任何 JS 依赖
+#   引用它，DevTools 的依赖图分析认为它是"无依赖文件"，即使 setting.ignoreDevUnusedFiles
+#   设为 false 也会被过滤掉（loadSubpackage 返回 totalBytesExpectedToWrite: 0）。
+#   结果：分包加载成功但内部空空如也，adapter 读取 .dat 时报
+#   "openSync:fail no such file or directory"，引擎卡在 HEARTBEAT 黑屏。
+#
+#   packOptions.include 是官方针对此场景设计的字段，force-include 后无论依赖图
+#   如何分析，匹配的文件/文件夹一定会被打入产物。.dat 在小游戏后缀名白名单内。
+#
+#   同时把 wasm_pkg 也加入 include：当前 .wasm.br 因 WXWebAssembly 特殊处理能被
+#   accessSync 直接命中，但这是实现细节而非契约，显式 include 更稳健。
 PROJECT_CONFIG_TEMPLATE = {
     "description": "2048 WeChat MiniGame",
-    "compileType": "game",
+    "compileType": "minigame",
+    "miniprogramRoot": "",
     "libVersion": "3.17.0",
     "appid": "wxc07c26935264a5e5",
     "projectname": "2048-minigame",
+    "packOptions": {
+        "ignore": [],
+        "include": [
+            # 强制包含承载 .wasm.br 的分包目录（无 JS 依赖的资源文件）
+            {"type": "folder", "value": "wasm_pkg"},
+            # 强制包含承载 .dat 的分包目录（mscorlib.dll 等二进制资源）
+            {"type": "folder", "value": "data_pkg"},
+        ]
+    },
     "setting": {
         "urlCheck": False,
         "es6": False,
@@ -229,6 +281,59 @@ PROJECT_CONFIG_TEMPLATE = {
             "disablePlugins": [],
             "outputPath": ""
         }
+    }
+}
+
+
+# project.private.config.json - 个人私有配置
+# 微信官方文档规定：project.private.config.json 中相同字段的优先级高于
+# project.config.json，且 DevTools 在打开项目时会自动创建该文件并写入 IDE 中的
+# 用户设置。如果 DevTools 自动写入的 compileType 与项目实际类型不一致，会覆盖
+# project.config.json 的正确值，导致服务端无法识别项目类型，subpackages 失效。
+#
+# 修复方案：主动生成 project.private.config.json，明确写入 compileType="minigame"，
+# 确保 DevTools 自动加载时也用正确值，不会被默认设置覆盖。
+#
+# 注意：根据官方文档，"与最终编译产物有关的设置无法在 project.private.config.json
+# 中生效"，但 compileType 是一级字段（不在 setting 中），可以在私有配置中生效。
+#
+# ⚠️ 补充（2026-07-24）：packOptions 也必须写入私有配置。
+#   实测 DevTools 2.02.2607232 存在行为：若私有配置存在但缺失 packOptions，
+#   不会 fallback 到公共配置的 packOptions，而是用空默认值（即不强制包含任何文件），
+#   导致分包内无 JS 依赖的二进制文件（.wasm.br / .dat）被过滤，
+#   loadSubpackage 返回 totalBytesExpectedToWrite: 0，文件系统访问时报
+#   "no such file or directory"。双写 packOptions 是双保险。
+PROJECT_PRIVATE_CONFIG_TEMPLATE = {
+    "compileType": "minigame",
+    "libVersion": "3.17.0",
+    "projectname": "2048-minigame",
+    "appid": "wxc07c26935264a5e5",
+    "condition": {},
+    "packOptions": {
+        "ignore": [],
+        "include": [
+            {"type": "folder", "value": "wasm_pkg"},
+            {"type": "folder", "value": "data_pkg"},
+        ]
+    },
+    "setting": {
+        "urlCheck": False,
+        "coverView": True,
+        "lazyloadPlaceholderEnable": False,
+        "skylineRenderEnable": False,
+        "preloadBackgroundData": False,
+        "autoAudits": False,
+        "useApiHook": True,
+        "showShadowRootInWxmlPanel": False,
+        "useStaticServer": False,
+        "useLanDebug": False,
+        "showES6CompileOption": False,
+        "compileHotReLoad": False,
+        "checkInvalidKey": True,
+        "ignoreDevUnusedFiles": False,  # 必须关闭：分包内的 .wasm.br/.dat 不通过 JS 依赖引入，
+        # 开启后会被当作"无依赖文件"过滤，导致分包被认为是空的而整体丢弃，
+        # 所有资源回退到 __FULL__ 主包，超 4MB 时报 "subpackage __FULL__ source size exceed max limit 4096KB"
+        "useIsolateContext": True
     }
 }
 
@@ -296,6 +401,12 @@ def patch_index_js(content: str, cdn_url: str, wasm_file: str, data_file: str, p
 
     # 3. ES2020+ 语法降级: ?. ?? ??= ||= &&= 类字段
     content = patch_optional_chaining(content)
+
+    # 2.13 doInit 错误捕获（黑屏根因修复）
+    # doInit 的 Promise 链没有 .catch()，response.clone() 或 Godot() 抛出的错误被静默吞掉，
+    # 导致引擎卡在 HEARTBEAT 黑屏无任何错误输出。
+    # 旧实现用正则匹配 doInit，但正则的 [ 被当成字符类导致永不匹配。改用大括号计数法。
+    content = patch_doinit(content)
 
     # S6 加固: 注入结果 fail-fast 校验（S6 的教训是"静默失效"，不是模式本身）。
     # 变量块必须存在于产物中；显式传入 CDN URL 时，其转义后的值必须真的写进去了。
@@ -1025,6 +1136,86 @@ def patch_optional_chaining(content: str) -> str:
     return content
 
 
+# ============================================================
+# Patch doInit: 为 Engine.init 内嵌的 doInit 函数补全错误捕获
+#
+# 根因（2026-07-24 黑屏问题）:
+#   Godot 4.7 的 doInit 是裸 Promise 链，三层 .then() 嵌套，没有任何 .catch()。
+#   一旦 response.clone()、Godot() 或 initFS() 任一环节抛错，外层 Promise 永不
+#   resolve/reject，引擎卡在 HEARTBEAT 黑屏，且控制台无任何错误输出
+#   （Promise 未处理 rejection 被静默吞掉）。
+#
+#   旧实现用正则替换 doInit，但正则里 r"( '[headers': \[\[..." 的 [ 被当成字符类
+#   起始，导致整个模式永不匹配，补丁从未生效。
+#
+# 修复: 改用 find_function_range 大括号计数法精确定位 doInit 函数边界（不依赖
+#   缩进/正则），整函数替换为带完整 try/catch + .catch() 的版本，让任何环节的
+#   失败都能立即在控制台打印错误并 reject 外层 Promise。
+# ============================================================
+def patch_doinit(content: str) -> str:
+    func_range = find_function_range(content, 'function doInit')
+    if func_range is None:
+        print("[Patch doInit] WARNING: 'function doInit' not found, skipping")
+        return content
+
+    start, end = func_range
+    old_len = end - start
+
+    # 新 doInit: 保留原逻辑，仅补全错误捕获
+    # - response.clone() 包 try/catch（同步异常防御）
+    # - Godot().then() 链加 .catch()
+    # - module['initFS']().then() 链加 .catch()
+    # - promise.then() 链加 .catch()（loadPromise rejection）
+    # 每条 .catch() 都 console.error + reject，确保黑屏时能看到具体失败原因
+    new_func = (
+        "function doInit(promise) {\n"
+        "\t\t\t\t\treturn new Promise(function (resolve, reject) {\n"
+        "\t\t\t\t\t\tpromise.then(function (response) {\n"
+        "\t\t\t\t\t\t\tconsole.log('[WeChat] doInit: response received, ok=' + (response ? response.ok : 'null'));\n"
+        "\t\t\t\t\t\t\tvar cloned;\n"
+        "\t\t\t\t\t\t\ttry {\n"
+        "\t\t\t\t\t\t\t\tcloned = new Response(response.clone().body, { 'headers': [['content-type', 'application/wasm']] });\n"
+        "\t\t\t\t\t\t\t\tconsole.log('[WeChat] doInit: cloned response OK, calling Godot()');\n"
+        "\t\t\t\t\t\t\t} catch (cloneErr) {\n"
+        "\t\t\t\t\t\t\t\tconsole.error('[WeChat] doInit: response.clone() failed:', cloneErr);\n"
+        "\t\t\t\t\t\t\t\tif (cloneErr && cloneErr.stack) console.error(cloneErr.stack);\n"
+        "\t\t\t\t\t\t\t\treject(cloneErr);\n"
+        "\t\t\t\t\t\t\t\treturn;\n"
+        "\t\t\t\t\t\t\t}\n"
+        "\t\t\t\t\t\t\tGodot(me.config.getModuleConfig(loadPath, cloned)).then(function (module) {\n"
+        "\t\t\t\t\t\t\t\tconsole.log('[WeChat] doInit: Godot module created OK, initFS...');\n"
+        "\t\t\t\t\t\t\t\tconst paths = me.config.persistentPaths;\n"
+        "\t\t\t\t\t\t\t\tmodule['initFS'](paths).then(function (err) {\n"
+        "\t\t\t\t\t\t\t\t\tme.rtenv = module;\n"
+        "\t\t\t\t\t\t\t\t\tif (me.config.unloadAfterInit) {\n"
+        "\t\t\t\t\t\t\t\t\t\tEngine.unload();\n"
+        "\t\t\t\t\t\t\t\t\t}\n"
+        "\t\t\t\t\t\t\t\t\tconsole.log('[WeChat] doInit: engine fully initialized');\n"
+        "\t\t\t\t\t\t\t\t\tresolve();\n"
+        "\t\t\t\t\t\t\t\t}).catch(function (fsErr) {\n"
+        "\t\t\t\t\t\t\t\t\tconsole.error('[WeChat] doInit: initFS failed:', fsErr);\n"
+        "\t\t\t\t\t\t\t\t\tif (fsErr && fsErr.stack) console.error(fsErr.stack);\n"
+        "\t\t\t\t\t\t\t\t\treject(fsErr);\n"
+        "\t\t\t\t\t\t\t\t});\n"
+        "\t\t\t\t\t\t\t}).catch(function (godotErr) {\n"
+        "\t\t\t\t\t\t\t\tconsole.error('[WeChat] doInit: Godot() failed:', godotErr);\n"
+        "\t\t\t\t\t\t\t\tif (godotErr && godotErr.stack) console.error(godotErr.stack);\n"
+        "\t\t\t\t\t\t\t\treject(godotErr);\n"
+        "\t\t\t\t\t\t\t});\n"
+        "\t\t\t\t\t\t}).catch(function (respErr) {\n"
+        "\t\t\t\t\t\t\tconsole.error('[WeChat] doInit: loadPromise rejected:', respErr);\n"
+        "\t\t\t\t\t\t\tif (respErr && respErr.stack) console.error(respErr.stack);\n"
+        "\t\t\t\t\t\t\treject(respErr);\n"
+        "\t\t\t\t\t\t});\n"
+        "\t\t\t\t\t});\n"
+        "\t\t\t\t}"
+    )
+
+    content = content[:start] + new_func + content[end:]
+    print(f"[Patch doInit] doInit hardened with try/catch + .catch() on all Promise chains (replaced {old_len} chars)")
+    return content
+
+
 def convert(source_dir: str, output_dir: str, cdn_url: str, cdn_only: bool = True) -> str:
     """执行完整转换流程
 
@@ -1147,12 +1338,15 @@ def convert(source_dir: str, output_dir: str, cdn_url: str, cdn_only: bool = Tru
             subpkg_dir.mkdir(parents=True, exist_ok=True)
             shutil.copy(wasm_br_file, subpkg_dir / f"{executable_name}.wasm.br")
             # 微信小游戏分包硬性要求：每个分包 root 下必须有 game.js 入口文件
-            # 否则报错 "未找到 [subpackages][N][root] 对应的 /xxx/game.js 文件"
-            # 并可能回退识别为小程序而非小游戏
+            # 且必须包含实际可执行代码（仅注释的空文件会被 DevTools 忽略，
+            # 导致整个分包因"无有效内容"被过滤，subpackages 变空数组，
+            # 所有资源回退到 __FULL__ 主包）。
             subpkg_entry = subpkg_dir / "game.js"
             subpkg_entry.write_text(
                 f"// {WASM_SUBPACKAGE_NAME} subpackage entry (auto-generated)\n"
-                f"// 本分包仅用于承载 {executable_name}.wasm.br，无需任何 JS 逻辑\n",
+                f"// 本分包承载 {executable_name}.wasm.br，此入口文件仅用于占位，确保分包被 DevTools 识别\n"
+                f"var {WASM_SUBPACKAGE_NAME} = {{ loaded: true }};\n"
+                f"console.log('[{WASM_SUBPACKAGE_NAME}] subpackage entry registered');\n",
                 encoding="utf-8"
             )
             wasm_br_in_subpkg = True
@@ -1233,11 +1427,28 @@ def convert(source_dir: str, output_dir: str, cdn_url: str, cdn_only: bool = Tru
             _bin_output_name = data_output_name.rsplit('.', 1)[0] + '.dat'
             shutil.copy(data_file, data_subpkg_dir / _bin_output_name)
             data_bin_name = _bin_output_name
-            # 分包硬性要求：root 下必须有 game.js 入口
+            # 分包硬性要求：root 下必须有 game.js 入口文件，且必须包含实际可执行代码
+            # （仅注释的空文件会被 DevTools 忽略，导致整个分包因"无有效内容"被过滤）。
+            # 与 wasm_pkg/game.js 保持一致的写法：变量声明 + 日志，作为二级防御
+            # （主防御是 project.config.json 的 packOptions.include 强制包含）。
             (data_subpkg_dir / "game.js").write_text(
                 f"// {DATA_SUBPACKAGE_NAME} subpackage entry (auto-generated)\n"
-                f"// 本分包仅用于承载 {_bin_output_name}，无需任何 JS 逻辑\n"
-                f"console.log('[{DATA_SUBPACKAGE_NAME}] subpackage entry loaded');\n",
+                f"// 本分包承载 {_bin_output_name}（BCL 二进制资源）。\n"
+                f"// 主防御：packOptions.include 强制包含 data_pkg 目录（已写入公共和私有配置双保险）。\n"
+                f"// 二级防御：以下 wx.getFileSystemManager 调用的字符串路径可能被\n"
+                f"//   DevTools 静态分析识别为文件依赖，进一步确保 .dat 文件被打入分包。\n"
+                f"var {DATA_SUBPACKAGE_NAME} = {{ loaded: true, payload: '{_bin_output_name}' }};\n"
+                f"console.log('[{DATA_SUBPACKAGE_NAME}] subpackage entry loaded');\n"
+                f"(function() {{\n"
+                f"  try {{\n"
+                f"    var _fs = wx.getFileSystemManager();\n"
+                f"    var _p = '{DATA_SUBPACKAGE_ROOT}{_bin_output_name}';\n"
+                f"    _fs.accessSync(_p);\n"
+                f"    console.log('[{DATA_SUBPACKAGE_NAME}] data file accessible: ' + _p);\n"
+                f"  }} catch (_e) {{\n"
+                f"    console.warn('[{DATA_SUBPACKAGE_NAME}] data file probe failed: ' + _e.message);\n"
+                f"  }}\n"
+                f"}})();\n",
                 encoding="utf-8"
             )
             data_in_subpkg = True
@@ -1300,12 +1511,21 @@ def convert(source_dir: str, output_dir: str, cdn_url: str, cdn_only: bool = Tru
     # 9. 生成 project.config.json
     with open(output / "project.config.json", "w", encoding="utf-8") as f:
         json.dump(PROJECT_CONFIG_TEMPLATE, f, ensure_ascii=False, indent=2)
-    print(f"[Write] project.config.json")
+    print(f"[Write] project.config.json (compileType={PROJECT_CONFIG_TEMPLATE['compileType']})")
 
-    # 9.1 不生成 project.private.config.json
-    # 该文件优先级高于 project.config.json，如果生成错配置会覆盖正确的 compileType。
-    # 让 DevTools 首次打开时基于 project.config.json 自动创建，确保 compileType=minigame 生效。
-    print(f"[Skip] project.private.config.json (let DevTools create from project.config.json)")
+    # 9.1 主动生成 project.private.config.json
+    # 微信官方文档规定：project.private.config.json 中相同字段的优先级高于
+    # project.config.json。如果缺这个文件，DevTools 在打开项目时会自动创建一个，
+    # 并写入 IDE 中的用户设置——历史上 DevTools 自动写入的 compileType 是 "miniGame"
+    # （驼峰式），不是官方合法值 "minigame"（全小写）。这个错误值会覆盖
+    # project.config.json 的正确配置，导致微信服务端识别项目为非小游戏，subpackages
+    # 配置失效，所有文件被打成 __FULL__ 主包超过 4MB 限制。
+    #
+    # 修复：主动生成此文件，明确写入 compileType="minigame"，DevTools 加载时
+    # 会读这个值，不会用错误默认值覆盖。
+    with open(output / "project.private.config.json", "w", encoding="utf-8") as f:
+        json.dump(PROJECT_PRIVATE_CONFIG_TEMPLATE, f, ensure_ascii=False, indent=2)
+    print(f"[Write] project.private.config.json (compileType={PROJECT_PRIVATE_CONFIG_TEMPLATE['compileType']}, prevents DevTools auto-override)")
 
     # 10. 打印最终目录结构
     print("\n=== Output structure ===")

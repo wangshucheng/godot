@@ -400,3 +400,5 @@ $RECYCLE.BIN/
 *.msp
 *.lnk
 *.generated.props
+
+*.bak

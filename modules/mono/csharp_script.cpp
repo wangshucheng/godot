@@ -23,6 +23,15 @@
 #include <cstdio>
 #include <cstring>
 
+// A1: 脚本模板（editor-only）。templates.gen.h 由 script_templates/SCsub 在
+// editor_build 时生成，含 TEMPLATES[] 数组与 TEMPLATES_ARRAY_SIZE。
+// EDITOR_GET 宏来自 editor/settings/editor_settings.h（Godot 4.7 路径），
+// 供 _get_indentation() 读 text_editor/behavior/indent 设置。
+#ifdef TOOLS_ENABLED
+#include "editor/settings/editor_settings.h"
+#include "editor/script_templates/templates.gen.h"
+#endif
+
 using namespace mono_variant;
 using namespace mono_bridge;
 
@@ -1306,20 +1315,31 @@ Ref<Script> CSharpLanguage::make_template(const String &p_template, const String
 	Ref<CSharpScript> script;
 	script.instantiate();
 	String processed = p_template;
+	// A1: 占位符替换。_BINDINGS_NAMESPACE_ 硬编码为 "Godot"（当前 glue 命名空间，
+	// 与旧 mono BINDINGS_NAMESPACE 宏一致）；_TS_ 由 _get_indentation() 提供
+	// （读 text_editor/behavior/indent 设置，非 editor 回退 "\t"）。
 	processed = processed.replace("_CLASS_", p_class_name.to_pascal_case().validate_unicode_identifier())
-	                     .replace("_BASE_", p_base_class_name);
+	                     .replace("_BASE_", p_base_class_name)
+	                     .replace("_BINDINGS_NAMESPACE_", "Godot")
+	                     .replace("_TS_", _get_indentation());
 	script->set_source_code(processed);
 	return script;
 }
 
 Vector<ScriptLanguage::ScriptTemplate> CSharpLanguage::get_built_in_templates(const StringName &p_object) {
 	Vector<ScriptLanguage::ScriptTemplate> templates;
-
-	if (String(p_object) != "Object") {
-		return templates;
+#ifdef TOOLS_ENABLED
+	// A1: 遍历 templates.gen.h 中的 TEMPLATES[]，按 inherit 匹配返回。
+	// 照搬旧 mono 1963b2f 实现（csharp_script.cpp:381-391）。
+	for (int i = 0; i < TEMPLATES_ARRAY_SIZE; i++) {
+		if (TEMPLATES[i].inherit == p_object) {
+			templates.append(TEMPLATES[i]);
+		}
 	}
-
-	{
+	// 兜底：若 TEMPLATES[] 无匹配且 p_object=="Object"，返回内联 Empty 模板。
+	// spec §A1.3：保留现有 id=0 Empty 作为 Object 兜底（正常情况下 Object/empty
+	// 模板会匹配，此分支仅在 templates.gen.h 异常缺失时触发）。
+	if (templates.is_empty() && String(p_object) == "Object") {
 		ScriptTemplate t;
 		t.inherit = p_object;
 		t.name = "Empty";
@@ -1329,19 +1349,23 @@ Vector<ScriptLanguage::ScriptTemplate> CSharpLanguage::get_built_in_templates(co
 		t.origin = ScriptLanguage::TEMPLATE_BUILT_IN;
 		templates.push_back(t);
 	}
-
-	{
-		ScriptTemplate t;
-		t.inherit = p_object;
-		t.name = "C# Script";
-		t.description = "A C# script with _Ready() method.";
-		t.content = "using Godot;\n\npublic partial class _CLASS_ : _BASE_\n{\n\tpublic override void _Ready()\n\t{\n\t\tGD.Print(\"Hello from C#!\");\n\t}\n}\n";
-		t.id = 1;
-		t.origin = ScriptLanguage::TEMPLATE_BUILT_IN;
-		templates.push_back(t);
-	}
-
+#endif
 	return templates;
+}
+
+// A1: 读编辑器缩进设置。非 editor 或非 TOOLS 构建回退为 "\t"。
+// 照搬旧 mono 1963b2f 实现（csharp_script.cpp:427-440）。
+String CSharpLanguage::_get_indentation() const {
+#ifdef TOOLS_ENABLED
+	if (Engine::get_singleton()->is_editor_hint()) {
+		bool use_space_indentation = EDITOR_GET("text_editor/behavior/indent/type");
+		if (use_space_indentation) {
+			int indent_size = EDITOR_GET("text_editor/behavior/indent/size");
+			return String(" ").repeat(indent_size);
+		}
+	}
+#endif
+	return "\t";
 }
 
 Vector<String> CSharpLanguage::get_reserved_words() const {

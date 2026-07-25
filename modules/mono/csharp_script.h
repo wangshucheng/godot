@@ -147,6 +147,9 @@ public:
 	int find_function(const String &p_function, const String &p_code) const override { return -1; }
 	String make_function(const String &p_class, const String &p_name, const PackedStringArray &p_args) const override { return ""; }
 	ScriptNameCasing preferred_file_name_casing() const override { return SCRIPT_NAME_CASING_PASCAL_CASE; }
+	// A1: 读 text_editor/behavior/indent 设置，供 make_template 替换 _TS_ 占位符。
+	// 非 editor 或非 TOOLS 构建回退为 "\t"（与旧 mono 1963b2f 一致）。
+	String _get_indentation() const;
 	bool handles_global_class_type(const String &p_type) const override { return false; }
 	String get_global_class_name(const String &p_path, String *r_base_type, String *r_icon_path, bool *r_is_abstract, bool *r_is_tool) const override { return ""; }
 

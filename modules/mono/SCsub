@@ -563,4 +563,16 @@ elif env["platform"] == "web":
 
 env_mono.add_source_files(env.modules_sources, mono_sources)
 
+# A1: C# script templates (editor-only). 遵循 GDScript 模块与旧 mono 提交
+# (1963b2f) 的实际模式：主 SCsub 用 `if env.editor_build:` 包裹 SConscript，
+# 子 SCsub 内部不包裹。spec §1.2 修订 #01 描述的"主 SCsub 无条件 SConscript
+# + 子 SCsub 内部 if env['tools']: 包裹"与 GDScript 实际不符（评审遗漏），
+# 故按 Godot 项目标准做法实施。
+# [REV-2026-07-25-#01 偏差记录]：源文件追加仍遵循 #01（无条件列入
+# mono_sources，由 C++ 内部 #ifdef TOOLS_ENABLED 裁剪）；但 SConscript
+# 子目录调用是 .gen.h 生成触发器，不属于源文件裁剪范畴，应用
+# env.editor_build 包裹以避免运行时构建生成无用 templates.gen.h。
+if env.editor_build:
+    SConscript("editor/script_templates/SCsub")
+
 print("[Mono] Configured for platform: " + env["platform"])

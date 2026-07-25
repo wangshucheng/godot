@@ -35,6 +35,7 @@ mono_sources = [
     "utils/path_utils.cpp",
     "utils/naming_utils.cpp",  # A3: snake/Pascal → PascalCase/camelCase 转换（含上游 overrides）
     "utils/string_utils.cpp",  # A3: sformat / is_csharp_keyword / escape_csharp_keyword / read_all_file_utf8
+    "utils/mono_script_metadata.cpp",  # B0: C# attribute reader ([Export]/[Signal]/[Tool]/[GlobalClass])
 ]
 
 

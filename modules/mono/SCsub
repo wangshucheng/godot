@@ -31,6 +31,7 @@ mono_sources = [
     "mono_aot_modules.cpp",
     "mono_export_plugin.cpp",
     "editor/bindings_generator.cpp",
+    "editor/semver.cpp",  # A4: SemVer 解析工具（dotnet --version 输出解析，P4 消费）
     "utils/path_utils.cpp",
 ]
 
@@ -574,5 +575,12 @@ env_mono.add_source_files(env.modules_sources, mono_sources)
 # env.editor_build 包裹以避免运行时构建生成无用 templates.gen.h。
 if env.editor_build:
     SConscript("editor/script_templates/SCsub")
+
+# A4: SemVer 单元测试。遵循 Godot 模块测试标准模式（参考 modules/gdscript/SCsub、
+# modules/multiplayer/SCsub）：当 scons tests=yes 时，将 ./tests/*.cpp 加入
+# env.modules_sources，由 tests/SCsub 统一链接进 tests 库。
+# 运行：godot --test "[SemVer]"
+if env["tests"]:
+    env_mono.add_source_files(env.modules_sources, "./tests/*.cpp")
 
 print("[Mono] Configured for platform: " + env["platform"])

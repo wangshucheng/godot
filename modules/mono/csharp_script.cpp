@@ -3,6 +3,7 @@
 #include "mono_bridge.h"
 #include "mono_gc_bridge.h"
 #include "mono_variant.h"
+#include "utils/path_utils.h"
 #include "core/object/object.h"
 #include "core/object/script_language.h"
 #include "core/os/os.h"
@@ -155,43 +156,9 @@ static Ref<ResourceFormatSaverCSharpScript> resource_saver_csharp;
 
 CSharpLanguage *CSharpLanguage::singleton = nullptr;
 
-static String sanitize_project_name(const String &p_name) {
-	String name = p_name;
-	if (name.is_empty()) {
-		name = "GodotProject";
-	}
-	String result;
-	for (int i = 0; i < name.length(); i++) {
-		char32_t c = name[i];
-		if (c < 128) {
-			if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
-				result += c;
-			} else if (c == ' ' || c == '-' || c == '#' || c == '.' || c == '(' || c == ')') {
-				result += '_';
-			}
-		}
-	}
-	if (result.is_empty()) {
-		result = "GodotProject";
-	}
-	if (result[0] >= '0' && result[0] <= '9') {
-		result = "_" + result;
-	}
-	return result;
-}
-
-static String get_safe_project_name() {
-	String project_name;
-	if (ProjectSettings::get_singleton()) {
-		if (ProjectSettings::get_singleton()->has_setting("dotnet/project/assembly_name")) {
-			project_name = ProjectSettings::get_singleton()->get("dotnet/project/assembly_name");
-		}
-		if (project_name.is_empty()) {
-			project_name = ProjectSettings::get_singleton()->get("application/config/name");
-		}
-	}
-	return sanitize_project_name(project_name);
-}
+// A3: sanitize_project_name / get_safe_project_name migrated to utils/path_utils.{h,cpp}
+// as Path::sanitize_project_name / Path::get_csharp_project_name (single source of truth,
+// previously duplicated in mono_export_plugin.cpp as sanitize_assembly_name).
 
 CSharpScript::CSharpScript() {}
 
@@ -1087,7 +1054,7 @@ MonoAssembly *CSharpLanguage::load_scripts_assembly() {
 	if (scripts_assembly) return scripts_assembly;
 	if (!MonoHost::get_singleton() || !MonoHost::get_singleton()->get_domain()) return nullptr;
 
-	String project_name = get_safe_project_name();
+	String project_name = Path::get_csharp_project_name();
 	String assemblies_dir = get_mono_assemblies_dir();
 
 	Vector<String> search_paths;
@@ -1430,7 +1397,7 @@ String CSharpLanguage::get_project_csproj_path() const {
 	if (project_path.is_empty()) {
 		project_path = OS::get_singleton()->get_cwd();
 	}
-	String project_name = get_safe_project_name();
+	String project_name = Path::get_csharp_project_name();
 	return project_path.path_join(project_name + ".csproj");
 }
 
@@ -1439,7 +1406,7 @@ String CSharpLanguage::get_project_sln_path() const {
 	if (project_path.is_empty()) {
 		project_path = OS::get_singleton()->get_cwd();
 	}
-	String project_name = get_safe_project_name();
+	String project_name = Path::get_csharp_project_name();
 	return project_path.path_join(project_name + ".sln");
 }
 

@@ -1,40 +1,14 @@
 #ifdef TOOLS_ENABLED
 
 #include "mono_export_plugin.h"
+#include "utils/path_utils.h"
 #include "core/os/os.h"
 #include "core/io/dir_access.h"
 #include "core/io/file_access.h"
 #include "core/config/project_settings.h"
 
-// M12: sanitize assembly name the same way csharp_script.cpp's
-// sanitize_project_name does — keep the two in sync to avoid export-time
-// surprises (e.g. user sets application/config/name with spaces/#/.).
-// Allowed: [A-Za-z0-9_]; space/-/#/./(/) → '_'; drop other chars; prefix
-// leading digit with '_'; fall back to "GodotProject" if empty/unsanitizable.
-static String sanitize_assembly_name(const String &p_name) {
-	String name = p_name;
-	if (name.is_empty()) {
-		return "GodotProject";
-	}
-	String result;
-	for (int i = 0; i < name.length(); i++) {
-		char32_t c = name[i];
-		if (c < 128) {
-			if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
-				result += c;
-			} else if (c == ' ' || c == '-' || c == '#' || c == '.' || c == '(' || c == ')') {
-				result += '_';
-			}
-		}
-	}
-	if (result.is_empty()) {
-		return "GodotProject";
-	}
-	if (result[0] >= '0' && result[0] <= '9') {
-		result = "_" + result;
-	}
-	return result;
-}
+// A3: sanitize_assembly_name removed — duplicated Path::sanitize_project_name.
+// Single source of truth in utils/path_utils.cpp (migrated from csharp_script.cpp).
 
 void MonoExportPlugin::_export_begin(const HashSet<String> &p_features, bool p_debug, const String &p_path, int p_flags) {
 	// M12: get the assembly name from project settings and sanitize it.
@@ -44,7 +18,7 @@ void MonoExportPlugin::_export_begin(const HashSet<String> &p_features, bool p_d
 	if (ProjectSettings::get_singleton()) {
 		raw_name = ProjectSettings::get_singleton()->get_setting("dotnet/project/assembly_name", String());
 	}
-	String project_name = sanitize_assembly_name(raw_name);
+	String project_name = Path::sanitize_project_name(raw_name);
 	if (project_name != raw_name) {
 		print_line("[Mono Export] Assembly name sanitized: '" + raw_name + "' → '" + project_name + "'");
 	}

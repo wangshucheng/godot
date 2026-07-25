@@ -239,6 +239,31 @@ bool CSharpScript::get_property_default_value(const StringName &p_property, Vari
 	return false;
 }
 
+// P3: Check if the script declares a signal with the given name.
+// Iterates signal_cache (populated in resolve_mono_class from [Signal] delegates).
+bool CSharpScript::has_script_signal(const StringName &p_signal) const {
+	if (!signals_valid) {
+		return false;
+	}
+	for (const MethodInfo &mi : signal_cache) {
+		if (mi.name == p_signal) {
+			return true;
+		}
+	}
+	return false;
+}
+
+// P3: Return all [Signal]-marked delegates as MethodInfo list.
+// Used by the editor signal panel to list available signals for connection.
+void CSharpScript::get_script_signal_list(List<MethodInfo> *r_signals) const {
+	if (!signals_valid) {
+		return;
+	}
+	for (const MethodInfo &mi : signal_cache) {
+		r_signals->push_back(mi);
+	}
+}
+
 String CSharpScript::_parse_base_class() const {
 	if (source.is_empty()) return "Node";
 
@@ -503,8 +528,12 @@ void CSharpScript::resolve_mono_class() {
 			exported_members_valid = true;
 			is_tool_class = mono_script_meta::class_has_attribute(mono_class, "ToolAttribute");
 			is_global_class = mono_script_meta::class_has_attribute(mono_class, "GlobalClassAttribute");
-			printf("[Mono] resolve_mono_class: class '%s' has %d exported members, is_tool=%d, is_global=%d\n",
-					cname, exported_properties.size(), is_tool_class ? 1 : 0, is_global_class ? 1 : 0);
+			// P3: Collect [Signal]-marked nested delegates into signal_cache.
+			signal_cache.clear();
+			mono_script_meta::collect_signals(mono_class, signal_cache);
+			signals_valid = true;
+			printf("[Mono] resolve_mono_class: class '%s' has %d exported members, %d signals, is_tool=%d, is_global=%d\n",
+					cname, exported_properties.size(), signal_cache.size(), is_tool_class ? 1 : 0, is_global_class ? 1 : 0);
 			fflush(stdout);
 		}
 	} else {
@@ -544,6 +573,8 @@ Error CSharpScript::reload(bool p_keep_state) {
 	exported_members_valid = false;
 	is_tool_class = false;
 	is_global_class = false;
+	signal_cache.clear();
+	signals_valid = false;
 
 	if (path.is_empty()) {
 		source_valid = true;

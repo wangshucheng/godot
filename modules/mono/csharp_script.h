@@ -39,6 +39,11 @@ class CSharpScript : public Script {
 	// When true, get_global_name() returns the class_name so the script appears
 	// in the "Add Node" dialog and class database.
 	bool is_global_class = false;
+	// P3: [Signal] cache — collected in resolve_mono_class via
+	// mono_script_meta::collect_signals (nested delegates with [Signal] attribute).
+	// MethodInfo.name is the signal name (EventHandler suffix stripped).
+	List<MethodInfo> signal_cache;
+	bool signals_valid = false;
 
 	void resolve_mono_class();
 	MonoMethod *get_method(const StringName &p_method, int p_argcount = -1);
@@ -55,10 +60,12 @@ public:
 	PlaceHolderScriptInstance *placeholder_instance_create(Object *p_this) override;
 	bool has_source_code() const override { return true; }
 	String get_source_code() const override { return source; }
-	void set_source_code(const String &p_code) override { source = p_code; mono_class = nullptr; mono_image = nullptr; method_cache.clear(); mono_class_valid = false; exported_properties.clear(); exported_members_valid = false; is_tool_class = false; is_global_class = false; }
+	void set_source_code(const String &p_code) override { source = p_code; mono_class = nullptr; mono_image = nullptr; method_cache.clear(); mono_class_valid = false; exported_properties.clear(); exported_members_valid = false; is_tool_class = false; is_global_class = false; signal_cache.clear(); signals_valid = false; }
 	Error reload(bool p_keep_state = false) override;
-	bool has_script_signal(const StringName &p_signal) const override { return false; }
-	void get_script_signal_list(List<MethodInfo> *r_signals) const override {}
+	// P3: Check if the script declares a signal with the given name.
+	bool has_script_signal(const StringName &p_signal) const override;
+	// P3: Return all [Signal]-marked delegates as MethodInfo list for the editor signal panel.
+	void get_script_signal_list(List<MethodInfo> *r_signals) const override;
 	bool get_property_default_value(const StringName &p_property, Variant &r_value) const override;
 	void get_script_method_list(List<MethodInfo> *r_list) const override;
 	bool has_method(const StringName &p_method) const override;

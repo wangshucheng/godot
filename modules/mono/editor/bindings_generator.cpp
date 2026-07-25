@@ -5,6 +5,7 @@
 #include "core/io/file_access.h"
 #include "core/variant/variant.h"
 #include "core/templates/local_vector.h"
+#include "../utils/string_utils.h"
 
 #include <stdio.h>
 
@@ -94,28 +95,12 @@ void BindingsGenerator::handle_cmdline_args(const List<String> &p_cmdline_args) 
 	}
 }
 
-// Prefix C# reserved keywords with '@' to make them valid identifiers.
-static String sanitize_csharp_identifier(const String &p_name) {
-	static const char *reserved[] = {
-		"abstract", "as", "base", "bool", "break", "byte", "case", "catch",
-		"char", "checked", "class", "const", "continue", "decimal", "default",
-		"delegate", "do", "double", "else", "enum", "event", "explicit",
-		"extern", "false", "finally", "fixed", "float", "for", "foreach",
-		"goto", "if", "implicit", "in", "int", "interface", "internal", "is",
-		"lock", "long", "namespace", "new", "null", "object", "operator",
-		"out", "override", "params", "private", "protected", "public",
-		"readonly", "ref", "return", "sbyte", "sealed", "short", "sizeof",
-		"stackalloc", "static", "string", "struct", "switch", "this", "throw",
-		"true", "try", "typeof", "uint", "ulong", "unchecked", "unsafe",
-		"ushort", "using", "virtual", "void", "volatile", "while", nullptr
-	};
-	for (int i = 0; reserved[i] != nullptr; i++) {
-		if (p_name == reserved[i]) {
-			return "@" + p_name;
-		}
-	}
-	return p_name;
-}
+// A3: sanitize_csharp_identifier removed — replaced by StringUtils::escape_csharp_keyword
+// (utils/string_utils.h). The two implementations were behaviorally identical (same 77
+// C# keywords, same '@' prefix). Using the shared utility eliminates duplicate keyword lists.
+// NOTE: to_pascal_case below is intentionally NOT replaced with NamingUtils::snake_to_pascal_case:
+// the local version treats '/', '-' as word separators (Godot uses '/' for grouped properties
+// like "visibility/layer_name"), and lacks upstream acronym overrides — different semantics.
 
 String BindingsGenerator::to_pascal_case(const String &p_snake_case) {
 	if (p_snake_case.is_empty()) return p_snake_case;
@@ -409,7 +394,7 @@ String BindingsGenerator::generate_class(const StringName &p_class_name) {
 					param_name = String::char_lowercase(param_name[0]) + param_name.substr(1);
 				}
 				// Escape C# reserved keywords (e.g. "class" -> "@class")
-				param_name = sanitize_csharp_identifier(param_name);
+				param_name = escape_csharp_keyword(param_name);
 
 				if (i > 0) {
 					param_list += ", ";

@@ -294,6 +294,116 @@ String CSharpScript::_parse_namespace() const {
 	return "";
 }
 
+// P2: Parse a .cs file to extract class name, base type, and attributes.
+// Used by the editor to scan res:// for global classes without loading the assembly.
+// Returns the class name (or "" if not a valid C# script).
+// r_base_type: the Godot native base class (Node, Control, etc.)
+// r_icon_path: currently empty (IconPath attribute parsing not implemented)
+// r_is_abstract: true if class has "abstract" modifier
+// r_is_tool: true if class has [Tool] attribute (text-based scan)
+String CSharpLanguage::get_global_class_name(const String &p_path, String *r_base_type, String *r_icon_path, bool *r_is_abstract, bool *r_is_tool) const {
+	if (p_path.get_extension().to_lower() != "cs") {
+		return "";
+	}
+
+	// Filter out build directories (same logic as ResourceFormatLoaderCSharpScript).
+	String path_lower = p_path.to_lower();
+	if (path_lower.contains("/obj/") || path_lower.contains("\\obj\\") ||
+		path_lower.contains("/bin/") || path_lower.contains("\\bin\\") ||
+		path_lower.contains("/.mono/") || path_lower.contains("\\.mono\\")) {
+		return "";
+	}
+
+	Ref<FileAccess> f = FileAccess::open(p_path, FileAccess::READ);
+	if (f.is_null()) {
+		return "";
+	}
+
+	String source = f->get_as_utf8_string();
+	Vector<String> lines = source.split("\n");
+
+	bool has_global_class = false;
+	bool has_tool = false;
+	bool is_abstract = false;
+	String class_name_str;
+	String base_type;
+
+	for (int i = 0; i < lines.size(); i++) {
+		String line = lines[i].strip_edges();
+
+		// Strip comments.
+		int comment_pos = line.find("//");
+		if (comment_pos >= 0) line = line.substr(0, comment_pos).strip_edges();
+		if (line.is_empty()) continue;
+
+		// Check for [GlobalClass] attribute (text-based scan).
+		if (line.begins_with("[GlobalClass")) {
+			has_global_class = true;
+			continue;
+		}
+		// Check for [Tool] attribute.
+		if (line.begins_with("[Tool")) {
+			has_tool = true;
+			continue;
+		}
+
+		// Look for class declaration: "public partial class Foo : Bar"
+		// or "public abstract class Foo : Bar"
+		int class_pos = line.find("class ");
+		if (class_pos < 0) continue;
+
+		// Check for "abstract" modifier before "class".
+		String before_class = line.substr(0, class_pos);
+		if (before_class.find("abstract") >= 0) {
+			is_abstract = true;
+		}
+
+		// Extract class name.
+		String after_class = line.substr(class_pos + 6).strip_edges();
+		// Class name ends at space, colon, or brace.
+		int name_end = after_class.length();
+		for (int c = 0; c < after_class.length(); c++) {
+			char32_t ch = after_class[c];
+			if (ch == ' ' || ch == ':' || ch == '{' || ch == '\t') {
+				name_end = c;
+				break;
+			}
+		}
+		class_name_str = after_class.substr(0, name_end).strip_edges();
+
+		// Extract base type (same logic as _parse_base_class).
+		int colon_pos = line.find(":");
+		if (colon_pos >= 0) {
+			String after_colon = line.substr(colon_pos + 1).strip_edges();
+			if (!after_colon.is_empty()) {
+				Vector<String> parts = after_colon.split(",", false);
+				if (parts.size() > 0) {
+					String base = parts[0].strip_edges();
+					int space_pos = base.find(" ");
+					if (space_pos > 0) base = base.substr(0, space_pos).strip_edges();
+					int angle_pos = base.find("<");
+					if (angle_pos > 0) base = base.substr(0, angle_pos).strip_edges();
+					int dot_pos = base.rfind(".");
+					if (dot_pos >= 0) base = base.substr(dot_pos + 1).strip_edges();
+					base_type = base;
+				}
+			}
+		}
+		break; // Only parse first class declaration.
+	}
+
+	if (class_name_str.is_empty() || !has_global_class) {
+		return "";
+	}
+
+	if (r_base_type) *r_base_type = base_type.is_empty() ? String("Node") : base_type;
+	if (r_icon_path) *r_icon_path = String();
+	if (r_is_abstract) *r_is_abstract = is_abstract;
+	if (r_is_tool) *r_is_tool = has_tool;
+
+	return class_name_str;
+}
+
 void CSharpScript::resolve_mono_class() {
 	mono_class = nullptr;
 	mono_image = nullptr;
@@ -392,8 +502,9 @@ void CSharpScript::resolve_mono_class() {
 			}
 			exported_members_valid = true;
 			is_tool_class = mono_script_meta::class_has_attribute(mono_class, "ToolAttribute");
-			printf("[Mono] resolve_mono_class: class '%s' has %d exported members, is_tool=%d\n",
-					cname, exported_properties.size(), is_tool_class ? 1 : 0);
+			is_global_class = mono_script_meta::class_has_attribute(mono_class, "GlobalClassAttribute");
+			printf("[Mono] resolve_mono_class: class '%s' has %d exported members, is_tool=%d, is_global=%d\n",
+					cname, exported_properties.size(), is_tool_class ? 1 : 0, is_global_class ? 1 : 0);
 			fflush(stdout);
 		}
 	} else {
@@ -432,6 +543,7 @@ Error CSharpScript::reload(bool p_keep_state) {
 	exported_properties.clear();
 	exported_members_valid = false;
 	is_tool_class = false;
+	is_global_class = false;
 
 	if (path.is_empty()) {
 		source_valid = true;

@@ -35,6 +35,10 @@ class CSharpScript : public Script {
 	bool exported_members_valid = false;
 	// P1: [Tool] attribute cache (true = script runs in editor).
 	bool is_tool_class = false;
+	// P2: [GlobalClass] attribute cache.
+	// When true, get_global_name() returns the class_name so the script appears
+	// in the "Add Node" dialog and class database.
+	bool is_global_class = false;
 
 	void resolve_mono_class();
 	MonoMethod *get_method(const StringName &p_method, int p_argcount = -1);
@@ -45,14 +49,13 @@ public:
 	void set_class_name(const String &p_name) { class_name = p_name; }
 	bool can_instantiate() const override;
 	Ref<Script> get_base_script() const override { return Ref<Script>(); }
-	StringName get_global_name() const override { return StringName(); }
 	bool inherits_script(const Ref<Script> &p_script) const override { return false; }
 	StringName get_instance_base_type() const override { return native_base_name; }
 	ScriptInstance *instance_create(Object *p_this) override;
 	PlaceHolderScriptInstance *placeholder_instance_create(Object *p_this) override;
 	bool has_source_code() const override { return true; }
 	String get_source_code() const override { return source; }
-	void set_source_code(const String &p_code) override { source = p_code; mono_class = nullptr; mono_image = nullptr; method_cache.clear(); mono_class_valid = false; exported_properties.clear(); exported_members_valid = false; is_tool_class = false; }
+	void set_source_code(const String &p_code) override { source = p_code; mono_class = nullptr; mono_image = nullptr; method_cache.clear(); mono_class_valid = false; exported_properties.clear(); exported_members_valid = false; is_tool_class = false; is_global_class = false; }
 	Error reload(bool p_keep_state = false) override;
 	bool has_script_signal(const StringName &p_signal) const override { return false; }
 	void get_script_signal_list(List<MethodInfo> *r_signals) const override {}
@@ -67,6 +70,8 @@ public:
 	const Variant get_rpc_config() const override { return Variant(); }
 	void get_members(HashSet<StringName> *p_members) override {}
 	bool is_tool() const override { return is_tool_class; }
+	// P2: Return class name when [GlobalClass] attribute is present.
+	StringName get_global_name() const override { return is_global_class ? StringName(class_name) : StringName(); }
 	bool is_valid() const override { return source_valid; }
 	bool is_abstract() const override { return false; }
 	ScriptLanguage *get_language() const override;
@@ -158,8 +163,8 @@ public:
 	// A1: 读 text_editor/behavior/indent 设置，供 make_template 替换 _TS_ 占位符。
 	// 非 editor 或非 TOOLS 构建回退为 "\t"（与旧 mono 1963b2f 一致）。
 	String _get_indentation() const;
-	bool handles_global_class_type(const String &p_type) const override { return false; }
-	String get_global_class_name(const String &p_path, String *r_base_type, String *r_icon_path, bool *r_is_abstract, bool *r_is_tool) const override { return ""; }
+	bool handles_global_class_type(const String &p_type) const override { return p_type == "CSharpScript"; }
+	String get_global_class_name(const String &p_path, String *r_base_type, String *r_icon_path, bool *r_is_abstract, bool *r_is_tool) const override;
 
 	void auto_indent_code(String &p_code, int p_from_line, int p_to_line) const override {}
 	void add_global_constant(const StringName &p_variable, const Variant &p_value) override {}

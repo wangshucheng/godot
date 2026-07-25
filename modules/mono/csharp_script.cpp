@@ -4,6 +4,7 @@
 #include "mono_gc_bridge.h"
 #include "mono_variant.h"
 #include "utils/path_utils.h"
+#include "utils/mono_script_metadata.h"
 #include "core/object/object.h"
 #include "core/object/script_language.h"
 #include "core/os/os.h"
@@ -208,6 +209,36 @@ Variant CSharpScript::callp(const StringName &p_method, const Variant **p_args, 
 	return Variant();
 }
 
+// P1: Return [Export]-marked members as PropertyInfo list for Inspector display.
+// Names are kept as C# PascalCase (matching how set/get handle them).
+// Usage flags: PROPERTY_USAGE_EDITOR (visible in Inspector) | PROPERTY_USAGE_STORAGE (serialized).
+void CSharpScript::get_script_property_list(List<PropertyInfo> *r_list) const {
+	if (!exported_members_valid) {
+		return;
+	}
+	for (const PropertyInfo &pi : exported_properties) {
+		r_list->push_back(pi);
+	}
+}
+
+// P1: Return the default value for an exported member.
+// Constructs the type's default Variant (0 for INT, 0.0 for FLOAT, "" for STRING, etc.).
+// This is used by Inspector "Revert" and scene serialization for first-time save.
+bool CSharpScript::get_property_default_value(const StringName &p_property, Variant &r_value) const {
+	if (!exported_members_valid) {
+		return false;
+	}
+	for (const PropertyInfo &pi : exported_properties) {
+		if (pi.name == p_property) {
+			// Construct default Variant for this type (0 args = default constructor).
+			Callable::CallError ce;
+			Variant::construct(pi.type, r_value, nullptr, 0, ce);
+			return ce.error == Callable::CallError::CALL_OK;
+		}
+	}
+	return false;
+}
+
 String CSharpScript::_parse_base_class() const {
 	if (source.is_empty()) return "Node";
 
@@ -345,6 +376,25 @@ void CSharpScript::resolve_mono_class() {
 			mono_class_valid = true;
 			printf("[Mono] resolve_mono_class: class '%s' resolved successfully\n", cname);
 			fflush(stdout);
+
+			// P1: Collect [Export] members and check [Tool] attribute.
+			// Convert to PropertyInfo immediately to avoid Mono header dependency in csharp_script.h.
+			List<mono_script_meta::ExportedMember> members;
+			mono_script_meta::collect_exported_members(mono_class, members);
+			exported_properties.clear();
+			for (const mono_script_meta::ExportedMember &m : members) {
+				PropertyInfo pi;
+				pi.type = m.type;
+				pi.name = m.name;
+				pi.hint = PROPERTY_HINT_NONE;
+				pi.usage = PROPERTY_USAGE_EDITOR | PROPERTY_USAGE_STORAGE;
+				exported_properties.push_back(pi);
+			}
+			exported_members_valid = true;
+			is_tool_class = mono_script_meta::class_has_attribute(mono_class, "ToolAttribute");
+			printf("[Mono] resolve_mono_class: class '%s' has %d exported members, is_tool=%d\n",
+					cname, exported_properties.size(), is_tool_class ? 1 : 0);
+			fflush(stdout);
 		}
 	} else {
 		printf("[Mono] resolve_mono_class: class '%s' NOT FOUND in any assembly\n", cname);
@@ -379,6 +429,9 @@ Error CSharpScript::reload(bool p_keep_state) {
 	mono_class = nullptr;
 	mono_image = nullptr;
 	method_cache.clear();
+	exported_properties.clear();
+	exported_members_valid = false;
+	is_tool_class = false;
 
 	if (path.is_empty()) {
 		source_valid = true;
@@ -874,6 +927,13 @@ Variant::Type CSharpInstance::get_property_type(const StringName &p_name, bool *
 		}
 	}
 	return Variant::NIL;
+}
+
+// P1: Forward to script's exported member list so Inspector can display [Export] properties.
+void CSharpInstance::get_property_list(List<PropertyInfo> *p_properties) const {
+	if (script.is_valid()) {
+		script->get_script_property_list(p_properties);
+	}
 }
 
 void CSharpInstance::get_method_list(List<MethodInfo> *r_list) const {

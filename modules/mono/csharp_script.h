@@ -28,6 +28,14 @@ class CSharpScript : public Script {
 	MonoImage *mono_image = nullptr;
 	HashMap<StringName, MonoMethod *> method_cache;
 
+	// P1: [Export] member cache as PropertyInfo list (no Mono header dependency).
+	// Collected in resolve_mono_class via mono_script_meta::collect_exported_members,
+	// then converted to PropertyInfo for Inspector display.
+	List<PropertyInfo> exported_properties;
+	bool exported_members_valid = false;
+	// P1: [Tool] attribute cache (true = script runs in editor).
+	bool is_tool_class = false;
+
 	void resolve_mono_class();
 	MonoMethod *get_method(const StringName &p_method, int p_argcount = -1);
 	String _parse_base_class() const;
@@ -44,21 +52,21 @@ public:
 	PlaceHolderScriptInstance *placeholder_instance_create(Object *p_this) override;
 	bool has_source_code() const override { return true; }
 	String get_source_code() const override { return source; }
-	void set_source_code(const String &p_code) override { source = p_code; mono_class = nullptr; mono_image = nullptr; method_cache.clear(); mono_class_valid = false; }
+	void set_source_code(const String &p_code) override { source = p_code; mono_class = nullptr; mono_image = nullptr; method_cache.clear(); mono_class_valid = false; exported_properties.clear(); exported_members_valid = false; is_tool_class = false; }
 	Error reload(bool p_keep_state = false) override;
 	bool has_script_signal(const StringName &p_signal) const override { return false; }
 	void get_script_signal_list(List<MethodInfo> *r_signals) const override {}
-	bool get_property_default_value(const StringName &p_property, Variant &r_value) const override { return false; }
+	bool get_property_default_value(const StringName &p_property, Variant &r_value) const override;
 	void get_script_method_list(List<MethodInfo> *r_list) const override;
 	bool has_method(const StringName &p_method) const override;
 	int get_script_method_argument_count(const StringName &p_method, bool *r_is_valid = nullptr) const override;
 	MethodInfo get_method_info(const StringName &p_method) const override { return MethodInfo(); }
 	Variant callp(const StringName &p_method, const Variant **p_args, int p_argcount, Callable::CallError &r_error) override;
-	void get_script_property_list(List<PropertyInfo> *r_list) const override {}
+	void get_script_property_list(List<PropertyInfo> *r_list) const override;
 	int get_member_line(const StringName &p_member) const override { return -1; }
 	const Variant get_rpc_config() const override { return Variant(); }
 	void get_members(HashSet<StringName> *p_members) override {}
-	bool is_tool() const override { return false; }
+	bool is_tool() const override { return is_tool_class; }
 	bool is_valid() const override { return source_valid; }
 	bool is_abstract() const override { return false; }
 	ScriptLanguage *get_language() const override;
@@ -88,7 +96,7 @@ public:
 	Object *get_owner() override { return owner; }
 	bool set(const StringName &p_name, const Variant &p_value) override;
 	bool get(const StringName &p_name, Variant &r_ret) const override;
-	void get_property_list(List<PropertyInfo> *p_properties) const override {}
+	void get_property_list(List<PropertyInfo> *p_properties) const override;
 	Variant::Type get_property_type(const StringName &p_name, bool *r_is_valid) const override;
 	void validate_property(PropertyInfo &p_property) const override {}
 	bool property_can_revert(const StringName &p_name) const override { return false; }

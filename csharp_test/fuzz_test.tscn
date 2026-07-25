@@ -1,0 +1,48 @@
+[gd_scene load_steps=12 format=3 uid="uid://fuzzp5test11"]
+
+[ext_resource type="Script" path="res://fuzz/Fuzz01NullRef.cs" id="1"]
+[ext_resource type="Script" path="res://fuzz/Fuzz02DivZero.cs" id="2"]
+[ext_resource type="Script" path="res://fuzz/Fuzz03StackOverflow.cs" id="3"]
+[ext_resource type="Script" path="res://fuzz/Fuzz04InfiniteLoop.cs" id="4"]
+[ext_resource type="Script" path="res://fuzz/Fuzz05RecursiveStackBlowup.cs" id="5"]
+[ext_resource type="Script" path="res://fuzz/Fuzz06AsyncException.cs" id="6"]
+[ext_resource type="Script" path="res://fuzz/Fuzz07StaticCtorException.cs" id="7"]
+[ext_resource type="Script" path="res://fuzz/Fuzz08PropertyGetterException.cs" id="8"]
+[ext_resource type="Script" path="res://fuzz/Fuzz09MethodArgException.cs" id="9"]
+[ext_resource type="Script" path="res://fuzz/Fuzz10SignalCallbackException.cs" id="10"]
+[ext_resource type="Script" path="res://fuzz/FuzzQuit.cs" id="11"]
+
+[node name="FuzzRoot" type="Node"]
+
+[node name="Fuzz01" type="Node" parent="."]
+script = ExtResource("1")
+
+[node name="Fuzz02" type="Node" parent="."]
+script = ExtResource("2")
+
+[node name="Fuzz03" type="Node" parent="."]
+script = ExtResource("3")
+
+[node name="Fuzz04" type="Node" parent="."]
+script = ExtResource("4")
+
+[node name="Fuzz05" type="Node" parent="."]
+script = ExtResource("5")
+
+[node name="Fuzz06" type="Node" parent="."]
+script = ExtResource("6")
+
+[node name="Fuzz07" type="Node" parent="."]
+script = ExtResource("7")
+
+[node name="Fuzz08" type="Node" parent="."]
+script = ExtResource("8")
+
+[node name="Fuzz09" type="Node" parent="."]
+script = ExtResource("9")
+
+[node name="Fuzz10" type="Node" parent="."]
+script = ExtResource("10")
+
+[node name="FuzzQuit" type="Node" parent="."]
+script = ExtResource("11")

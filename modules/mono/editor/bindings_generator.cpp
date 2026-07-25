@@ -1,5 +1,7 @@
 #include "bindings_generator.h"
 
+#ifdef TOOLS_ENABLED
+
 #include "core/object/class_db.h"
 #include "core/object/object.h"
 #include "core/io/file_access.h"
@@ -583,3 +585,5 @@ bool BindingsGenerator::generate(const String &p_output_path) {
 	       generated_count, (int)output.utf8().length());
 	return true;
 }
+
+#endif // TOOLS_ENABLED

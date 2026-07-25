@@ -7,14 +7,16 @@
 #include "utils/mono_script_metadata.h"
 #include "core/object/object.h"
 #include "core/object/script_language.h"
-#include "core/os/os.h"
+#include "core/config/engine.h"
 #include "core/io/file_access.h"
 #include "core/io/dir_access.h"
 #include "core/io/resource_loader.h"
 #include "core/io/resource_saver.h"
 #include "core/io/resource.h"
 #include "core/config/project_settings.h"
-#include "core/config/engine.h"
+// P6: Time::get_ticks_msec() for build request cooldown.
+#include "core/os/time.h"
+#include "core/os/os.h"
 #include <cstring>
 #include "scene/main/node.h"
 #include <mono/metadata/object.h>
@@ -908,6 +910,10 @@ MonoObject *CSharpInstance::invoke_method(MonoMethod *p_method, const Variant **
 			   exc_name ? exc_name : "?",
 			   msg_utf8 ? msg_utf8 : "?");
 		if (msg_utf8) mono_free(msg_utf8);
+		// P5 [REV-#11]: Clear pending exception state to prevent downstream
+		// mono_runtime_invoke calls from observing a stale exception (which
+		// can cascade into editor instability under [Tool] script fuzz).
+		mono_runtime_set_pending_exception(nullptr, false);
 		r_error.error = Callable::CallError::CALL_ERROR_INVALID_METHOD;
 		r_result = Variant();
 		return nullptr;
@@ -1383,6 +1389,11 @@ void CSharpLanguage::init() {
 #endif
 
 #ifdef TOOLS_ENABLED
+	// P7: Register debugger settings so they appear in Project Settings → Dotnet.
+	// Read back in mono_host.cpp before mono_jit_init_version.
+	GLOBAL_DEF("dotnet/debugger/enabled", false);
+	GLOBAL_DEF("dotnet/debugger/port", 55555);
+
 	if (Engine::get_singleton() && Engine::get_singleton()->is_editor_hint()) {
 		if (!scripts_assembly) {
 			printf("[Mono] No scripts assembly loaded, triggering initial build...\n");
@@ -1456,9 +1467,44 @@ void CSharpLanguage::frame() {
 
 #ifdef TOOLS_ENABLED
 	if (build_pending && Engine::get_singleton() && Engine::get_singleton()->is_editor_hint()) {
+		printf("[Mono] P6: frame() consuming build_pending, calling build_project()\n");
+		fflush(stdout);
 		build_pending = false;
 		build_project();
 	}
+#endif
+}
+
+// P6: EditorFileSystem::filesystem_changed handler.
+// Simplified strategy (spec §4.P6.2): any filesystem change in a project
+// that contains .cs files triggers request_build(). The build_pending flag
+// already deduplicates concurrent requests (setting it twice is a no-op),
+// and dotnet build's own incremental compilation makes empty-change builds
+// cheap (<1s). The 500ms cooldown below guards against signal bursts where
+// EditorFileSystem fires filesystem_changed multiple times in rapid
+// succession (write + stat + rename from external IDEs).
+// Phase2 verification: force scons rebuild by content change.
+void CSharpLanguage::_on_filesystem_changed() {
+#ifdef TOOLS_ENABLED
+	printf("[Mono] P6: _on_filesystem_changed invoked (t=%llu ms)\n",
+			(unsigned long long)Time::get_singleton()->get_ticks_msec());
+	fflush(stdout);
+	if (!Engine::get_singleton() || !Engine::get_singleton()->is_editor_hint()) {
+		printf("[Mono] P6: skipping (not editor hint)\n");
+		fflush(stdout);
+		return;
+	}
+	uint64_t now = Time::get_singleton()->get_ticks_msec();
+	if (now - last_build_request_ms < BUILD_COOLDOWN_MS) {
+		printf("[Mono] P6: skipping (cooldown, last=%llu now=%llu)\n",
+				(unsigned long long)last_build_request_ms, (unsigned long long)now);
+		fflush(stdout);
+		return;
+	}
+	last_build_request_ms = now;
+	printf("[Mono] P6: calling request_build()\n");
+	fflush(stdout);
+	request_build();
 #endif
 }
 
@@ -1478,6 +1524,28 @@ void CSharpLanguage::reload_all_scripts() {
 
 void CSharpLanguage::reload_scripts(const Array &p_scripts, bool p_soft_reload) {
 	reload_all_scripts();
+}
+
+// P5: Reload a single [Tool] script in-place. Called by the editor when
+// the user explicitly reloads a tool script. We do NOT implement GDScript's
+// StateBackup mechanism — instance state is lost on reload (v1 tradeoff
+// documented in spec §4.P5.2).
+void CSharpLanguage::reload_tool_script(const Ref<Script> &p_script, bool p_soft_reload) {
+#ifdef TOOLS_ENABLED
+	if (p_script.is_null()) {
+		return;
+	}
+	p_script->reload(p_soft_reload);
+	// After reload, tool script instances need their method/property caches
+	// rebuilt. reload_all_pending_scripts() iterates the script cache and
+	// re-resolves mono_class for any script flagged dirty.
+	reload_all_pending_scripts();
+	// P5 [REV-#11]: Clear pending exception state in case reload() triggered
+	// mono_runtime_invoke (e.g., static constructor re-execution) and left
+	// an unobserved exception behind. Without this, the next mono_runtime_invoke
+	// call may observe a stale exception and cascade into editor instability.
+	mono_runtime_set_pending_exception(nullptr, false);
+#endif
 }
 
 void CSharpLanguage::get_recognized_extensions(List<String> *p_extensions) const {

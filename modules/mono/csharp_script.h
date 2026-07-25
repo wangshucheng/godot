@@ -131,6 +131,12 @@ class CSharpLanguage : public ScriptLanguage {
 	HashMap<String, MonoAssembly *> loaded_assemblies;
 	MonoAssembly *scripts_assembly = nullptr;
 	bool build_pending = false;
+	// P6: Cooldown timestamp (msec) to debounce filesystem_changed bursts.
+	// EditorFileSystem may fire the signal several times in rapid succession
+	// when an external IDE saves a .cs file (write + stat + rename). The
+	// cooldown coalesces these into a single build request.
+	uint64_t last_build_request_ms = 0;
+	static constexpr uint64_t BUILD_COOLDOWN_MS = 500;
 
 public:
 	static CSharpLanguage *get_singleton() { return singleton; }
@@ -143,6 +149,9 @@ public:
 	void ensure_project_file();
 	bool build_project();
 	void request_build() { build_pending = true; }
+	// P6: EditorFileSystem::filesystem_changed handler — request a build
+	// subject to a 500ms cooldown (spec §4.P6.3).
+	void _on_filesystem_changed();
 	String get_project_csproj_path() const;
 	String get_project_sln_path() const;
 	String get_mono_assemblies_dir() const;
@@ -189,7 +198,8 @@ public:
 
 	void reload_all_scripts() override;
 	void reload_scripts(const Array &p_scripts, bool p_soft_reload) override;
-	void reload_tool_script(const Ref<Script> &p_script, bool p_soft_reload) override {}
+	// P5: Reload a single [Tool] script — implemented in csharp_script.cpp.
+	void reload_tool_script(const Ref<Script> &p_script, bool p_soft_reload) override;
 	void get_recognized_extensions(List<String> *p_extensions) const override;
 	void get_public_functions(List<MethodInfo> *p_functions) const override {}
 	void get_public_constants(List<Pair<String, Variant>> *p_constants) const override {}

@@ -256,6 +256,43 @@ Error MonoHost::initialize() {
 	fflush(stdout);
 #endif
 
+#if defined(TOOLS_ENABLED) && !defined(WEB_ENABLED)
+	// P7: External IDE attach debugger (sdb agent).
+	// Must be called BEFORE mono_jit_init_version. When enabled, launches a
+	// dt_socket server on 127.0.0.1:<port> that Rider/VS/VSCode can attach to.
+	// Default off — enable via ProjectSettings dotnet/debugger/enabled=true
+	// (dotnet/debugger/port defaults to 55555). The env var
+	// GODOT_MONO_DEBUGGER_PORT overrides the port for quick CLI use without
+	// touching project settings. Editor process stays off by default; the
+	// setting is primarily intended for the in-editor Play mode (which runs
+	// in the editor process under TOOLS_ENABLED).
+	{
+		bool dbg_enabled = false;
+		int dbg_port = 55555;
+		if (ProjectSettings::get_singleton()) {
+			dbg_enabled = (bool)ProjectSettings::get_singleton()->get_setting("dotnet/debugger/enabled", false);
+			dbg_port = (int)ProjectSettings::get_singleton()->get_setting("dotnet/debugger/port", 55555);
+		}
+		// Env var override: GODOT_MONO_DEBUGGER_PORT=<port> forces enabled.
+		const char *env_port = getenv("GODOT_MONO_DEBUGGER_PORT");
+		if (env_port && env_port[0] != '\0') {
+			int parsed = atoi(env_port);
+			if (parsed > 0 && parsed < 65536) {
+				dbg_enabled = true;
+				dbg_port = parsed;
+			}
+		}
+		if (dbg_enabled) {
+			String opt = "--debugger-agent=transport=dt_socket,server=y,suspend=n,address=127.0.0.1:" + itos(dbg_port);
+			CharString opt_utf8 = opt.utf8();
+			char *opt_argv[] = { opt_utf8.ptrw() };
+			printf("[Mono] P7: Enabling sdb debugger agent on 127.0.0.1:%d (suspend=n)\n", dbg_port);
+			fflush(stdout);
+			mono_jit_parse_options(1, opt_argv);
+		}
+	}
+#endif // TOOLS_ENABLED && !WEB_ENABLED
+
 #if defined(MONO_AOT_MODE) && defined(MONO_INTERP_MODE)
 	// ========================================
 	// Hybrid AOT + Interpreter mode (WASM)

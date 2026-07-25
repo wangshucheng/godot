@@ -398,3 +398,119 @@ godot-mono-wasm/modules/mono/glue/GodotSharp/bin/Release/GodotSharp.dll
 
 project_memory.md L13 约束：
 > GodotSharp.dll must be the newly compiled Debug version (34816 bytes); old Release version (34304 bytes) causes signature mismatches
+
+---
+
+## 九、第三阶段任务执行回填（2026-07-26）
+
+> **执行时间**：2026-07-26
+> **执行范围**：§5.1 中 S 级 2 项 + A 级 2 项（必做与应优先任务）
+> **执行结论**：**S+A 级任务全部完成并通过验证**；B 级 1 项维持可选延后
+
+### 9.1 S 级任务执行结果
+
+#### S1：提交第二阶段代码到 git（双树同步）— ✅ 完成
+
+**godot4.7_mono 树提交**（按 Git 最小原则拆分为 3 个原子提交）：
+
+| 提交哈希 | 类型 | 说明 |
+|---|---|---|
+| `69b702ad6c` | feat | P5/P6/P7 phase 2 — tool reload + fs watcher + sdb debugger（5 个核心文件：`csharp_script.cpp`/`.h`、`bindings_generator.cpp`、`mono_host.cpp`、`register_types.cpp` + 10 个 fuzz 测试脚本 + `fuzz_test.tscn` + `run_fuzz_test.ps1`） |
+| `9245054692` | docs | phase 2/3 review reports + spec v1.2 revision log |
+| `9b89a15107` | chore | add `*.bak` to .gitignore + cleanup residual backup files |
+
+**godot-mono-wasm 树提交**（通过 `sync_to_godot.py` 同步）：
+
+| 提交哈希 | 类型 | 说明 |
+|---|---|---|
+| `ceb675d` | sync | P5/P6/P7 phase 2 from build tree（5 个核心文件同步） |
+| `9364fe5` | chore | add `*.bak` to .gitignore + cleanup residual backup files |
+
+**验收证据**：
+- `godot4.7_mono` 树 `git status --short`：mono 模块相关文件全部已提交；剩余未跟踪文件仅为构建产物（`bin/`、`.godot/`、`.mono/`）与验证日志（`.err`/`.marker`），属于运行时产物不应提交
+- `godot-mono-wasm` 树 `git status --short`：输出为空，工作区完全 clean
+- 两树 `git log --oneline` 均可见 P5/P6/P7 提交记录，可追溯
+
+#### S2：修复 P5 文档-代码偏差 — ✅ 完成（采用选项 A）
+
+**实施内容**：在 `reload_tool_script` 中补齐 `mono_runtime_set_pending_exception(nullptr, false)` 调用（`csharp_script.cpp:1547`）：
+
+```cpp
+void CSharpLanguage::reload_tool_script(const Ref<Script> &p_script, bool p_soft_reload) {
+#ifdef TOOLS_ENABLED
+    if (p_script.is_null()) {
+        return;
+    }
+    p_script->reload(p_soft_reload);
+    reload_all_pending_scripts();
+    // P5 [REV-#11]: Clear pending exception state in case reload() triggered
+    // mono_runtime_invoke (e.g., static constructor re-execution) and left
+    // an unobserved exception behind. Without this, the next mono_runtime_invoke
+    // call may observe a stale exception and cascade into editor instability.
+    mono_runtime_set_pending_exception(nullptr, false);
+#endif
+}
+```
+
+**同步文档修正**（`review_2026-07-25_phase2.md` §2.2 与 §3.2）：
+- 明确异常清理**仅直接覆盖 2 处**（`invoke_method` + `reload_tool_script`）
+- `notification`/`callp` 等其他路径通过 `invoke_method` 间接覆盖（非"全覆盖"）
+
+**验收证据**：
+- `grep mono_runtime_set_pending_exception modules/mono/csharp_script.cpp`（两树均执行）输出 2 处：
+  - `csharp_script.cpp:916`（`invoke_method` 异常处理分支）
+  - `csharp_script.cpp:1547`（`reload_tool_script` reload 后清理）
+- `run_fuzz_test.ps1` 执行结果：10/10 `[FUZZ] START` 标记全部出现，编辑器稳定运行未崩溃（Fuzz01NullRef ~ Fuzz10SignalCallbackException + FuzzQuit 全 PASS）
+- 文档与代码一致，无过度声称
+
+### 9.2 A 级任务执行结果
+
+#### A1：清理 SCsub.bak + .gitignore 规则 — ✅ 完成
+
+**实施内容**：
+1. 删除两树中所有 `.bak` 备份文件（共 15 个，含 `godot4.7_mono/modules/mono/SCsub.bak` 等）
+2. `godot4.7_mono/.gitignore`：新增 `*.bak` 规则
+3. `godot-mono-wasm/.gitignore`：新增 `*.bak` 规则
+
+**验收证据**：
+- 两树 `git status` 中均无 `.bak` 文件
+- 两树 `.gitignore` 均包含 `*.bak` 条目
+- 提交记录：`9b89a15107`（godot4.7_mono）/ `9364fe5`（godot-mono-wasm）
+
+#### A2：清理 godot-mono-wasm GodotSharp.dll Release 残留 — ✅ 完成
+
+**实施内容**：
+1. 删除 `godot-mono-wasm/modules/mono/glue/GodotSharp/bin/Release/` 目录（含 34304 bytes 过时 Release 版本）
+2. `godot-mono-wasm/.gitignore`：新增 `modules/mono/glue/GodotSharp/bin/` 规则，防止后续构建产物误提交
+
+**验收证据**：
+- `godot-mono-wasm/modules/mono/glue/GodotSharp/bin/Release/` 目录已不存在
+- `godot-mono-wasm/.gitignore` 包含 `modules/mono/glue/GodotSharp/bin/` 条目
+- 符合 `project_memory.md` L13 硬约束（GodotSharp.dll 必须为 Debug 版本 34816 bytes）
+- 提交记录：`9364fe5`（godot-mono-wasm）
+
+### 9.3 B 级任务状态
+
+#### B1：集成 WASM clang++ workaround 进 SCsub — ⏸️ 维持可选延后
+
+**未执行原因**：
+- B 级任务在 §5.1 标注为"可选"
+- 选项 A（在 godot 主 SCsub 中加 `-O0`）属于 godot 引擎主 SCsub 改动，非 mono 模块范围，需与上游 Godot 协调
+- 选项 B（文档化构建流程）受"NEVER proactively create documentation files"约束，且 workaround 散落在 `rebuild_wasm_workaround.ps1` / `rebuild_wasm_phase2.ps1` / `check_wasm_mono_objs.ps1` 三个脚本中已可运行
+- clang++ 崩溃发生在 `scene/resources/style_box_flat.cpp`（非 mono 模块），属 emcc 工具链 bug，待 emcc 升级后自动消失
+
+**建议**：维持可选延后；若用户反馈 WASM 构建可重复性问题强烈，再优先处理。
+
+### 9.4 第三阶段评审关闭结论
+
+- **S 级 2 项**：✅ 全部完成（代码提交 + 双树同步 + P5 偏差修复）
+- **A 级 2 项**：✅ 全部完成（.bak 清理 + GodotSharp.dll Release 清理）
+- **B 级 1 项**：⏸️ 维持可选延后（WASM clang++ workaround，待 emcc 工具链修复）
+- **C 级 3 项**：⏸️ 维持延后（P2 typedef 重构 / P4 异步化 / A2 代码补全，按 v2 节奏推进）
+
+**第二阶段交付缺陷（§二 3 个 P0 级问题）全部修复**：
+1. ✅ 代码未提交 → 已按 Git 最小原则拆分提交到双树
+2. ✅ 双树不同步 → 已通过 `sync_to_godot.py` 同步并提交
+3. ✅ 文档过度声称 → 已补齐代码调用并修正文档描述
+
+**第三阶段评审完毕**。后续按 v2 节奏推进 C 级任务（P2 重构、P4 异步化、A2 代码补全）。

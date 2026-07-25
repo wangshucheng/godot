@@ -1,6 +1,8 @@
 using Godot;
 
-// P1 验证脚本：[Export] 属性 + Inspector 显示
+// P1/P2 验证脚本：[Export] 属性 + Inspector 显示 + [GlobalClass] 全局类
+// [GlobalClass] 使脚本出现在"添加节点"对话框中
+// [Tool] 使脚本在编辑器中运行（验证 is_tool() 返回 true）
 // 挂载到 Node 上，Inspector 应显示以下可编辑属性：
 //   - Speed (int, 默认 0)
 //   - Health (float, 默认 0)
@@ -8,7 +10,7 @@ using Godot;
 //   - IsActive (bool, 默认 false)
 //   - StartPosition (Vector2, 默认 (0,0))
 //   - Tint (Color, 默认 黑色)
-// [Tool] 使脚本在编辑器中运行（验证 is_tool() 返回 true）
+[GlobalClass]
 [Tool]
 public partial class ExportTest : Node
 {

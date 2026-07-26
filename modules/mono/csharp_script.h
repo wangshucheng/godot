@@ -138,6 +138,22 @@ class CSharpLanguage : public ScriptLanguage {
 	uint64_t last_build_request_ms = 0;
 	static constexpr uint64_t BUILD_COOLDOWN_MS = 500;
 
+	// P0-1 fix: hot-reload use-after-free prevention.
+	// Previously reload_all_scripts()/build_project() called
+	// mono_assembly_close() on the old scripts_assembly to evict Mono's
+	// path-keyed image cache (so the next open() would see the freshly
+	// compiled IL). But close() releases the image while CSharpScript and
+	// CSharpInstance still hold raw MonoClass*/MonoObject* pointers into it
+	// → UAF on the next has_method/get_method/sgen GC scan.
+	//
+	// Fix (report P0-1 方案 A, "永不 close"): hot reload now copies the new
+	// dll to a versioned temp path (ProjectScripts.rev{N}.dll) and opens
+	// that, bypassing Mono's path-keyed cache without closing the old image.
+	// Old assemblies accumulate in `opened_assemblies` and are released as a
+	// batch in finish() (editor shutdown — safe, no live references by then).
+	uint64_t assembly_rev = 0;
+	List<MonoAssembly *> opened_assemblies;
+
 	// P2 v2: Global class metadata cache (class_name → info).
 	// Populated by refresh_global_classes() by iterating the scripts assembly
 	// TypeDef table (spec §4.P2.2). Replaces the v1 text-based scan in
@@ -164,6 +180,12 @@ public:
 	// build_project paths). Safe to call when scripts_assembly is null — clears
 	// the cache and marks it invalid, forcing get_global_class_name fallback.
 	void refresh_global_classes();
+	// P0-1 fix: open `p_dll_path` via a versioned temp copy so Mono's path-keyed
+	// image cache doesn't return the stale pre-rebuild image. The original path
+	// is copied to `<path>.rev{N}.dll` and that copy is opened. Returns null on
+	// copy failure (caller may fall back to opening the original path directly,
+	// accepting the stale-cache risk for cold start where there is no cache yet).
+	MonoAssembly *open_versioned_assembly(const String &p_dll_path);
 
 	void ensure_project_file();
 	bool build_project();

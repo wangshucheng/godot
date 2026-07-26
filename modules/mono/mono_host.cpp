@@ -9,6 +9,10 @@
 #include "core/io/file_access.h"
 #include "core/error/error_macros.h"
 #include "core/config/project_settings.h"
+// P1-#7 fix: use Path::get_csharp_project_name() for unified assembly name
+// resolution (was hardcoded "CSharpTest" fallback, diverged from the export
+// plugin's sanitized name → runtime couldn't find the PCK-embedded DLL).
+#include "utils/path_utils.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -146,10 +150,12 @@ Error MonoHost::initialize() {
 
 	// Extract project assembly from PCK to MEMFS (for hot updates)
 	{
-		String project_name = "CSharpTest";
-		if (ProjectSettings::get_singleton()) {
-			project_name = ProjectSettings::get_singleton()->get_setting("dotnet/project/assembly_name", "CSharpTest");
-		}
+		// P1-#7 fix: was hardcoded "CSharpTest" fallback + unsanitized direct
+		// read, which diverged from the export plugin's sanitized name when
+		// dotnet/project/assembly_name was unset (default config). The export
+		// plugin writes the DLL under Path::get_csharp_project_name(); the
+		// runtime must read it back with the SAME resolution to find it.
+		String project_name = Path::get_csharp_project_name();
 		String res_path = "res://.mono/assemblies/" + project_name + ".dll";
 		String memfs_path = ".mono/assemblies/" + project_name + ".dll";
 		Ref<FileAccess> src = FileAccess::open(res_path, FileAccess::READ);

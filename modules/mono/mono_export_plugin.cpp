@@ -11,17 +11,15 @@
 // Single source of truth in utils/path_utils.cpp (migrated from csharp_script.cpp).
 
 void MonoExportPlugin::_export_begin(const HashSet<String> &p_features, bool p_debug, const String &p_path, int p_flags) {
-	// M12: get the assembly name from project settings and sanitize it.
-	// Previously this was hardcoded to "CSharpTest", which broke any project
-	// whose dotnet/project/assembly_name differed from the test project.
-	String raw_name;
-	if (ProjectSettings::get_singleton()) {
-		raw_name = ProjectSettings::get_singleton()->get_setting("dotnet/project/assembly_name", String());
-	}
-	String project_name = Path::sanitize_project_name(raw_name);
-	if (project_name != raw_name) {
-		print_line("[Mono Export] Assembly name sanitized: '" + raw_name + "' → '" + project_name + "'");
-	}
+	// P1-#7 fix: was reading `dotnet/project/assembly_name` directly with no
+	// fallback, then sanitizing. When the setting is missing, the export
+	// plugin emitted the DLL under "GodotProject" (sanitize fallback) while
+	// the runtime (mono_host.cpp) looked it up under a different name →
+	// runtime DLL not found. Unify both sides on Path::get_csharp_project_name()
+	// which: reads dotnet/project/assembly_name → falls back to
+	// application/config/name → then sanitizes. The export/runtime pair must
+	// agree byte-for-byte on the .dll filename.
+	String project_name = Path::get_csharp_project_name();
 
 	// Get the project resource path
 	String project_path = ProjectSettings::get_singleton()->get_resource_path();

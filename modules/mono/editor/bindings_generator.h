@@ -4,6 +4,12 @@
 #include "core/string/string_name.h"
 #include "core/templates/list.h"
 
+// P0-2 fix: entire editor/bindings_generator.cpp is #ifdef TOOLS_ENABLED.
+// Declaring the class unconditionally made the symbol unresolved at link
+// time in non-TOOLS builds (export templates / WASM) only — compile passed.
+// Guarding the declaration surfaces the mismatch at compile time instead.
+#ifdef TOOLS_ENABLED
+
 // BindingsGenerator: generates C# wrapper classes from Godot's ClassDB metadata.
 //
 // Usage: godot --generate-csharp-bindings [--output=path]
@@ -48,3 +54,5 @@ private:
 	// Check if a method should be generated (skip private, virtual, deprecated).
 	static bool should_generate_method(const String &p_class_name, const String &p_method_name);
 };
+
+#endif // TOOLS_ENABLED

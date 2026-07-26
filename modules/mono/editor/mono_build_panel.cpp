@@ -61,24 +61,29 @@ void MonoBuildPanel::append_output(const String &p_text) {
 	}
 
 	// Split into lines so we can highlight error lines.
-	// BBCode is enabled on the RichTextLabel, so we escape XML special chars
-	// and wrap error lines in [color=red]...[/color].
+	//
+	// P1-#6 fix: do NOT call xml_escape(). RichTextLabel::add_text() adds
+	// text verbatim — it does not parse BBCode or decode XML entities, so
+	// escaping produces visible "&lt;" / "&gt;" literals in the build output.
+	// C# compiler diagnostics are full of generics (`List<int>`) and XML doc
+	// tags (`<summary>`), which were being shown as "&lt;summary&gt;" before.
+	// BBCode parsing only happens via append_text()/parse_bbcode(), not
+	// add_text(), so passing the raw line is safe — color is applied by the
+	// surrounding push_color()/pop() pair.
 	Vector<String> lines = p_text.split("\n", false);
 	for (int i = 0; i < lines.size(); i++) {
-		String line = lines[i];
-		// Escape BBCode/XML special characters.
-		String escaped = line.xml_escape(true);
+		const String &line = lines[i];
 
 		if (line.contains(": error ")) {
 			output->push_color(Color(1.0f, 0.3f, 0.3f));
-			output->add_text(escaped);
+			output->add_text(line);
 			output->pop();
 		} else if (line.contains(": warning ")) {
 			output->push_color(Color(1.0f, 0.8f, 0.4f));
-			output->add_text(escaped);
+			output->add_text(line);
 			output->pop();
 		} else {
-			output->add_text(escaped);
+			output->add_text(line);
 		}
 		output->add_newline();
 	}

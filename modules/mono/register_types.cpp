@@ -116,8 +116,14 @@ void initialize_mono_module(ModuleInitializationLevel p_level) {
 	}
 
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SCENE) {
+		// P0-2 fix: BindingsGenerator is entirely #ifdef TOOLS_ENABLED in
+		// editor/bindings_generator.cpp (commit 69b702ad6c). Without this
+		// guard the call resolves to an undefined symbol at link time in
+		// export templates / WASM, breaking non-TOOLS builds.
+#ifdef TOOLS_ENABLED
 		// Handle BindingsGenerator command-line args (--generate-csharp-bindings)
 		BindingsGenerator::handle_cmdline_args(OS::get_singleton()->get_cmdline_args());
+#endif
 
 		if (mono_host) {
 			List<String> cmdline_args = OS::get_singleton()->get_cmdline_args();

@@ -169,9 +169,17 @@ Variant::Type mono_type_to_variant_type(MonoType *p_type) {
 			// We cache the Godot.Object class pointer at first use.
 			static MonoClass *godot_object_class = nullptr;
 			if (!godot_object_class) {
-				MonoImage *img = mono_assembly_get_image(
-						MonoHost::get_singleton()->get_godotsharp_assembly());
-				godot_object_class = mono_class_from_name(img, "Godot", "Object");
+				// P1-#1 fix: load_godotsharp() failure is non-fatal (host still
+				// initializes). get_godotsharp_assembly() returns nullptr in
+				// that case → mono_assembly_get_image(nullptr) crashes. Guard.
+				MonoAssembly *gs_asm = MonoHost::get_singleton()->get_godotsharp_assembly();
+				if (!gs_asm) {
+					return Variant::NIL;
+				}
+				MonoImage *img = mono_assembly_get_image(gs_asm);
+				if (img) {
+					godot_object_class = mono_class_from_name(img, "Godot", "Object");
+				}
 			}
 			if (godot_object_class && mono_class_is_subclass_of(klass, godot_object_class, false)) {
 				return Variant::OBJECT;
@@ -196,9 +204,15 @@ void collect_exported_members(MonoClass *p_class, List<ExportedMember> &r_out) {
 	// Cache the Godot.Object class to know when to stop walking up.
 	static MonoClass *godot_object_class = nullptr;
 	if (!godot_object_class) {
-		MonoImage *img = mono_assembly_get_image(
-				MonoHost::get_singleton()->get_godotsharp_assembly());
-		godot_object_class = mono_class_from_name(img, "Godot", "Object");
+		// P1-#1 fix: guard against GodotSharp.dll load failure (see above).
+		MonoAssembly *gs_asm = MonoHost::get_singleton()->get_godotsharp_assembly();
+		if (!gs_asm) {
+			return; // cannot walk hierarchy without Godot.Object anchor
+		}
+		MonoImage *img = mono_assembly_get_image(gs_asm);
+		if (img) {
+			godot_object_class = mono_class_from_name(img, "Godot", "Object");
+		}
 	}
 
 	// Track seen names to deduplicate (first occurrence wins, which is the
@@ -239,6 +253,14 @@ void collect_exported_members(MonoClass *p_class, List<ExportedMember> &r_out) {
 
 			MonoType *ftype = mono_field_get_type(field);
 			Variant::Type vtype = mono_type_to_variant_type(ftype);
+
+			// P1-#2 fix: skip unsupported types. NIL means the type mapper
+			// couldn't map this MonoType to a Variant type (custom struct,
+			// unsupported array, etc.). Including it would add a bad entry to
+			// the Inspector with STORAGE|EDITOR usage that can't be edited.
+			if (vtype == Variant::NIL) {
+				continue;
+			}
 
 			ExportedMember m;
 			m.name = name;
@@ -306,80 +328,123 @@ void collect_exported_members(MonoClass *p_class, List<ExportedMember> &r_out) {
 
 // ---------------------------------------------------------------------------
 // collect_signals: find [Signal]-marked nested delegates, build MethodInfo
+//
+// P1-#3 fix: walk up the class hierarchy (along mono_class_get_parent) to
+// collect signals declared in C# base classes too. Without this, only
+// signals declared directly on p_class appeared in the signal panel — any
+// [Signal] delegate declared in a base C# class was invisible. Behavior
+// mirrors collect_exported_members: stop at Godot.Object (exclusive),
+// deduplicate by signal name (first occurrence wins, i.e. the most-derived
+// class override takes precedence).
 // ---------------------------------------------------------------------------
 void collect_signals(MonoClass *p_class, List<MethodInfo> &r_out) {
 	if (!p_class) {
 		return;
 	}
 
-	// Iterate nested types.
-	void *iter = nullptr;
-	MonoClass *nested = nullptr;
-	while ((nested = mono_class_get_nested_types(p_class, &iter)) != nullptr) {
-		// Must be a delegate: parent class is MulticastDelegate.
-		MonoClass *parent = mono_class_get_parent(nested);
-		if (!parent) {
-			continue;
+	// Cache the Godot.Object class to know when to stop walking up.
+	static MonoClass *godot_object_class = nullptr;
+	if (!godot_object_class) {
+		// P1-#1 fix: guard against GodotSharp.dll load failure (see
+		// mono_type_to_variant_type for the same pattern). Without this,
+		// mono_assembly_get_image(nullptr) would crash on editor startup
+		// when GodotSharp.dll failed to load.
+		MonoAssembly *gs_asm = MonoHost::get_singleton()->get_godotsharp_assembly();
+		if (!gs_asm) {
+			return; // cannot walk hierarchy without Godot.Object anchor
 		}
-		const char *parent_name = mono_class_get_name(parent);
-		if (!parent_name || strcmp(parent_name, "MulticastDelegate") != 0) {
-			continue;
+		MonoImage *img = mono_assembly_get_image(gs_asm);
+		if (img) {
+			godot_object_class = mono_class_from_name(img, "Godot", "Object");
 		}
+	}
 
-		// Must have [Signal] attribute at class level.
-		if (!class_has_attribute(nested, "SignalAttribute")) {
-			continue;
-		}
+	// Track seen names to deduplicate (first occurrence wins, which is the
+	// most-derived class since we walk bottom-up).
+	HashSet<StringName> seen;
 
-		// Delegate name must end with "EventHandler" (convention: <SignalName>EventHandler).
-		const char *delegate_name = mono_class_get_name(nested);
-		if (!delegate_name) {
-			continue;
-		}
-		String dname = String::utf8(delegate_name);
-		if (!dname.ends_with("EventHandler")) {
-			continue;
-		}
-		// Extract signal name: remove "EventHandler" suffix.
-		String signal_name = dname.substr(0, dname.length() - String("EventHandler").length());
-
-		// Find the Invoke method and build MethodInfo from its signature.
-		void *method_iter = nullptr;
-		MonoMethod *method = nullptr;
-		while ((method = mono_class_get_methods(nested, &method_iter)) != nullptr) {
-			const char *mname = mono_method_get_name(method);
-			if (!mname || strcmp(mname, "Invoke") != 0) {
+	MonoClass *klass = p_class;
+	while (klass) {
+		// Iterate nested types of the current class in the hierarchy.
+		void *iter = nullptr;
+		MonoClass *nested = nullptr;
+		while ((nested = mono_class_get_nested_types(klass, &iter)) != nullptr) {
+			// Must be a delegate: parent class is MulticastDelegate.
+			MonoClass *parent = mono_class_get_parent(nested);
+			if (!parent) {
+				continue;
+			}
+			const char *parent_name = mono_class_get_name(parent);
+			if (!parent_name || strcmp(parent_name, "MulticastDelegate") != 0) {
 				continue;
 			}
 
-			MonoMethodSignature *sig = mono_method_signature(method);
-			if (!sig) {
-				break;
+			// Must have [Signal] attribute at class level.
+			if (!class_has_attribute(nested, "SignalAttribute")) {
+				continue;
 			}
 
-			MethodInfo mi;
-			mi.name = StringName(signal_name);
-			mi.return_val.type = Variant::NIL; // Signals must return void → NIL in Godot.
+			// Delegate name must end with "EventHandler" (convention: <SignalName>EventHandler).
+			const char *delegate_name = mono_class_get_name(nested);
+			if (!delegate_name) {
+				continue;
+			}
+			String dname = String::utf8(delegate_name);
+			if (!dname.ends_with("EventHandler")) {
+				continue;
+			}
+			// Extract signal name: remove "EventHandler" suffix.
+			String signal_name = dname.substr(0, dname.length() - String("EventHandler").length());
+			StringName signal_sn = StringName(signal_name);
+			if (seen.has(signal_sn)) {
+				continue;
+			}
+			seen.insert(signal_sn);
 
-			// Build parameter list.
-			uint32_t param_count = mono_signature_get_param_count(sig);
-			void *param_iter = nullptr;
-			MonoType *param_type = nullptr;
-			for (uint32_t i = 0; i < param_count; i++) {
-				param_type = mono_signature_get_params(sig, &param_iter);
-				if (!param_type) {
+			// Find the Invoke method and build MethodInfo from its signature.
+			void *method_iter = nullptr;
+			MonoMethod *method = nullptr;
+			while ((method = mono_class_get_methods(nested, &method_iter)) != nullptr) {
+				const char *mname = mono_method_get_name(method);
+				if (!mname || strcmp(mname, "Invoke") != 0) {
+					continue;
+				}
+
+				MonoMethodSignature *sig = mono_method_signature(method);
+				if (!sig) {
 					break;
 				}
 
-				PropertyInfo pi;
-				pi.type = mono_type_to_variant_type(param_type);
-				pi.name = "arg" + String::num_int64(i); // Placeholder; real names need mono_parameter_get_name
-				mi.arguments.push_back(pi);
-			}
+				MethodInfo mi;
+				mi.name = signal_sn;
+				mi.return_val.type = Variant::NIL; // Signals must return void → NIL in Godot.
 
-			r_out.push_back(mi);
-			break; // Only one Invoke method per delegate.
+				// Build parameter list.
+				uint32_t param_count = mono_signature_get_param_count(sig);
+				void *param_iter = nullptr;
+				MonoType *param_type = nullptr;
+				for (uint32_t i = 0; i < param_count; i++) {
+					param_type = mono_signature_get_params(sig, &param_iter);
+					if (!param_type) {
+						break;
+					}
+
+					PropertyInfo pi;
+					pi.type = mono_type_to_variant_type(param_type);
+					pi.name = "arg" + String::num_int64(i); // Placeholder; real names need mono_parameter_get_name
+					mi.arguments.push_back(pi);
+				}
+
+				r_out.push_back(mi);
+				break; // Only one Invoke method per delegate.
+			}
 		}
+
+		// Walk up to parent class. Stop at Godot.Object (exclusive).
+		if (klass == godot_object_class) {
+			break;
+		}
+		klass = mono_class_get_parent(klass);
 	}
 }
 

@@ -2,7 +2,8 @@ res://audio_test.tscn::de343e30d991a4929c4f632810f19223::1783781637::res://.godo
 res://base_test.tscn::2367abad21ce6266b1e4793aeb366059::1783781615::res://.godot/exported/133200997/export-f0e6c41274da0c4049e25eab121a9bdc-base_test.scn
 res://desktop_hotreload_test.tscn::9fa13d3297fa0795e70404ac9a9a13c9::1783781649::res://.godot/exported/133200997/export-2544b46dd4d32268ec8f6e6edabc6927-desktop_hotreload_test.scn
 res://fs_test.tscn::e652eef5a904d12b20b71a044bd136eb::1783781639::res://.godot/exported/133200997/export-b8eadedbd367e05641c97129ab8028b3-fs_test.scn
-res://main.tscn::4dfdfeca1dfa56f6e34f416c7d557a20::1783646884::res://.godot/exported/133200997/export-3070c538c03ee49b7677ff960a3f5195-main.scn
+res://main.tscn::5dab4af0cfb63b5a64d4a28126a4b899::1784980213::res://.godot/exported/133200997/export-3070c538c03ee49b7677ff960a3f5195-main.scn
 res://save_test.tscn::c6c8af617cd42179cc60a875e2251500::1783781639::res://.godot/exported/133200997/export-1bfe8b637398ebebad579359d12f27f0-save_test.scn
 res://scene_test.tscn::0d5e630bf4189dfc632c31d7a283833c::1783781616::res://.godot/exported/133200997/export-5cd904a0e262f8c0567a1fcbf8bd4271-scene_test.scn
 res://ui_test.tscn::90494be23eb50a3856429db663c0b16d::1783781621::res://.godot/exported/133200997/export-e1360d0878830763b0a94eb1f5b397e0-ui_test.scn
+res://fuzz_test.tscn::18910d6df1b06e7e4b1fcee304793ea9::1784996278::res://.godot/exported/133200997/export-b57735ddfeeb5139083e5d9cd88ed440-fuzz_test.scn

@@ -1,5 +1,5 @@
 78098b89c88a74ebe8c20117b8754620
-::res://::1785003359
+::res://::1785027880
 audio_test.tscn::PackedScene::-1::1783781637::0::1::::<><><>0<>0<><>::
 base_test.tscn::PackedScene::-1::1783781615::0::1::::<><><>0<>0<><>::
 build_csharp_test2.log::TextFile::-1::1784982379::0::1::::<><><>0<>0<><>::
@@ -10,11 +10,12 @@ ExportTest.cs::CSharpScript::5022124815199208594::1785003034::0::1::::ExportTest
 export_presets.cfg::TextFile::-1::1784945280::0::1::::<><><>0<>0<><>::
 fs_test.tscn::PackedScene::-1::1783781639::0::1::::<><><>0<>0<><>::
 fuzz_test.tscn::PackedScene::393795178001874826::1784996278::0::1::::<><><>0<>0<><>::res://fuzz/Fuzz01NullRef.cs<>res://fuzz/Fuzz02DivZero.cs<>res://fuzz/Fuzz03StackOverflow.cs<>res://fuzz/Fuzz04InfiniteLoop.cs<>res://fuzz/Fuzz05RecursiveStackBlowup.cs<>res://fuzz/Fuzz06AsyncException.cs<>res://fuzz/Fuzz07StaticCtorException.cs<>res://fuzz/Fuzz08PropertyGetterException.cs<>res://fuzz/Fuzz09MethodArgException.cs<>res://fuzz/Fuzz10SignalCallbackException.cs<>res://fuzz/FuzzQuit.cs
-fuzz_test_output.log::TextFile::-1::1784996316::0::1::::<><><>0<>0<><>::
+fuzz_test_output.log::TextFile::-1::1785005629::0::1::::<><><>0<>0<><>::
 Game2048.cs::CSharpScript::7879747084588162018::1784817354::0::1::::<><><>0<>0<><>::
 main.tscn::PackedScene::29557857426::1784980213::0::1::::<><><>0<>0<><>::res://Test.cs<>res://ExportTest.cs
+p2_typedef_test.log::TextFile::-1::1785027885::0::1::::<><><>0<>0<><>::
 p6_verify.log::TextFile::-1::1785002970::0::1::::<><><>0<>0<><>::
-p7_verify.log::TextFile::-1::1785003357::0::1::::<><><>0<>0<><>::
+p7_verify.log::TextFile::-1::1785003373::0::1::::<><><>0<>0<><>::
 ProjectScripts.deps.json::JSON::-1::1784494283::0::1::::<><><>0<>0<><>::
 quick_p6_test.log::TextFile::-1::1785001099::0::1::::<><><>0<>0<><>::
 save_test.tscn::PackedScene::-1::1783781639::0::1::::<><><>0<>0<><>::

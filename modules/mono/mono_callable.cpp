@@ -80,17 +80,62 @@ void CallableCustomMono::call(const Variant **p_arguments, int p_argcount, Varia
 	MonoObject *exc = nullptr;
 	MonoObject *result = nullptr;
 
-	// mono_runtime_delegate_invoke expects void** params where each element
-	// is a pointer to the argument value (pointer to MonoObject* for ref types)
+	// 2026-07-27 rework: the delegate is now the ORIGINAL managed delegate
+	// (Godot.Callable.From passes it through unwrapped). Box each argument
+	// with the EXACT type from the delegate's Invoke signature — Variant::INT
+	// would otherwise arrive as Int64 and mono_runtime_delegate_invoke would
+	// throw a type mismatch for e.g. Action<int> (found by csharp_test 24e).
 	if (p_argcount == 0) {
 		result = mono_runtime_delegate_invoke((MonoObject *)delegate, nullptr, &exc);
 	} else {
-		// Use alloca for stack allocation of params array
+		enum { MAX_CALL_ARGS = 16 };
+		MonoMethodSignature *sig = (invoke_method && param_count == p_argcount && p_argcount <= MAX_CALL_ARGS)
+				? mono_method_signature(invoke_method)
+				: nullptr;
+
 		void **params = (void **)alloca(sizeof(void *) * p_argcount);
-		MonoObject **args = (MonoObject **)alloca(sizeof(MonoObject *) * p_argcount);
-		for (int i = 0; i < p_argcount; i++) {
-			args[i] = variant_to_mono_object(domain, *p_arguments[i]);
-			params[i] = &args[i];
+		MonoObject **obj_args = (MonoObject **)alloca(sizeof(MonoObject *) * p_argcount);
+		uint64_t *storage = (uint64_t *)alloca(sizeof(uint64_t) * p_argcount);
+
+		void *sig_iter = nullptr;
+		bool types_ok = sig != nullptr;
+		for (int i = 0; types_ok && i < p_argcount; i++) {
+			MonoType *pt = mono_signature_get_params(sig, &sig_iter);
+			const Variant &v = *p_arguments[i];
+			switch (pt ? mono_type_get_type(pt) : MONO_TYPE_OBJECT) {
+				case MONO_TYPE_BOOLEAN: { bool b = (bool)v; storage[i] = 0; memcpy(&storage[i], &b, sizeof(b)); params[i] = &storage[i]; break; }
+				case MONO_TYPE_I1: { int8_t b = (int8_t)(int64_t)v; storage[i] = 0; memcpy(&storage[i], &b, sizeof(b)); params[i] = &storage[i]; break; }
+				case MONO_TYPE_U1: { uint8_t b = (uint8_t)(int64_t)v; storage[i] = 0; memcpy(&storage[i], &b, sizeof(b)); params[i] = &storage[i]; break; }
+				case MONO_TYPE_I2: { int16_t b = (int16_t)(int64_t)v; storage[i] = 0; memcpy(&storage[i], &b, sizeof(b)); params[i] = &storage[i]; break; }
+				case MONO_TYPE_U2: { uint16_t b = (uint16_t)(int64_t)v; storage[i] = 0; memcpy(&storage[i], &b, sizeof(b)); params[i] = &storage[i]; break; }
+				case MONO_TYPE_I4: { int32_t b = (int32_t)(int64_t)v; storage[i] = 0; memcpy(&storage[i], &b, sizeof(b)); params[i] = &storage[i]; break; }
+				case MONO_TYPE_U4: { uint32_t b = (uint32_t)(int64_t)v; storage[i] = 0; memcpy(&storage[i], &b, sizeof(b)); params[i] = &storage[i]; break; }
+				case MONO_TYPE_I8: { int64_t b = (int64_t)v; memcpy(&storage[i], &b, sizeof(b)); params[i] = &storage[i]; break; }
+				case MONO_TYPE_U8: { uint64_t b = (uint64_t)(int64_t)v; memcpy(&storage[i], &b, sizeof(b)); params[i] = &storage[i]; break; }
+				case MONO_TYPE_R4: { float b = (float)(double)v; storage[i] = 0; memcpy(&storage[i], &b, sizeof(b)); params[i] = &storage[i]; break; }
+				case MONO_TYPE_R8: { double b = (double)v; memcpy(&storage[i], &b, sizeof(b)); params[i] = &storage[i]; break; }
+				case MONO_TYPE_STRING:
+				case MONO_TYPE_CLASS:
+				case MONO_TYPE_OBJECT:
+				case MONO_TYPE_SZARRAY:
+				case MONO_TYPE_ARRAY:
+				case MONO_TYPE_VALUETYPE:
+					obj_args[i] = variant_to_mono_object(domain, v);
+					params[i] = &obj_args[i];
+					break;
+				default:
+					types_ok = false;
+					break;
+			}
+		}
+
+		if (!types_ok) {
+			// Fallback: signature unavailable or unsupported param type —
+			// box everything as objects (previous behavior).
+			for (int i = 0; i < p_argcount; i++) {
+				obj_args[i] = variant_to_mono_object(domain, *p_arguments[i]);
+				params[i] = &obj_args[i];
+			}
 		}
 		result = mono_runtime_delegate_invoke((MonoObject *)delegate, params, &exc);
 	}

@@ -1,0 +1,4 @@
+ERROR: Error calling from signal 'FuzzTriggered' to callable: '_csharp_delegate': Method not found.
+   at: Object::emit_signalp (core\object\object.cpp:1310)
+ERROR: Error calling from signal 'FuzzTriggered' to callable: '_csharp_delegate': Method not found.
+   at: Object::emit_signalp (core\object\object.cpp:1310)

@@ -11,7 +11,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="GodotSharp">
-      <HintPath>..\bin\editor\windows\GodotSharp\Api\Debug\GodotSharp.dll</HintPath>
+      <HintPath>..\bin\GodotSharp\Api\Debug\GodotSharp.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>

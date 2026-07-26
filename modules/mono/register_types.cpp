@@ -1,5 +1,6 @@
 #include "register_types.h"
 #include "mono_host.h"
+#include "mono_icalls.h"
 #include "csharp_script.h"
 #include "mono_bridge.h"
 #include "mono_variant.h"
@@ -60,6 +61,7 @@ static void _editor_init() {
 void initialize_mono_module(ModuleInitializationLevel p_level) {
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SERVERS) {
 		GDREGISTER_CLASS(CSharpScript);
+		GDREGISTER_CLASS(TestSignalReceiver);
 
 		mono_host = memnew(MonoHost);
 		Error err = mono_host->initialize();

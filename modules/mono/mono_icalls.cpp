@@ -28,6 +28,7 @@
 #include "core/os/thread.h"
 #include "core/object/class_db.h"
 #include "core/object/object.h"
+#include "core/object/callable_mp.h"
 #include "core/object/ref_counted.h"
 #include "core/io/resource_loader.h"
 #include "core/input/input.h"
@@ -367,7 +368,14 @@ static intptr_t godot_icall_Callable_CreateFromDelegate(MonoObject *p_delegate) 
 	if (!p_delegate) return 0;
 
 	CallableCustomMono *custom = memnew(CallableCustomMono);
-	uint32_t gchandle = mono_gchandle_new(p_delegate, false);
+	// Strong GCHandle (was weak): the C# Callable wrapper only stores the
+	// native pointer, so after Callable.From() returns the managed delegate
+	// wrapper has NO managed root. A weak handle let the GC collect the
+	// delegate at any later allocation, and call() then silently returned
+	// CALL_ERROR_INSTANCE_IS_NULL — signal callbacks mysteriously never ran
+	// (found by csharp_test scenario 24e). The handle is released in
+	// ~CallableCustomMono when the native Callable is freed.
+	uint32_t gchandle = mono_gchandle_new(p_delegate, true);
 	custom->set_delegate(gchandle, get_domain());
 
 	Callable *callable = memnew(Callable(custom));
@@ -1981,7 +1989,15 @@ static int32_t godot_icall_Test_IsWebPlatform() {
 #endif
 }
 
-// Signal test: connect a built-in signal to a counter callback.
+void TestSignalReceiver::on_test_signal() {
+	_g_signal_count++;
+}
+
+static TestSignalReceiver *_g_test_signal_receiver = nullptr;
+
+// Signal test: REALLY connect the signal to a native receiver callback.
+// Previously this icall only checked has_signal() and returned 1 without
+// connecting anything — the "ConnectSignal" assertion was a fake pass.
 static int32_t godot_icall_Test_ConnectSignal(MonoString *signal) {
 	if (!_g_test_obj) return 0;
 	char *utf8 = signal ? mono_string_to_utf8(signal) : nullptr;
@@ -1989,12 +2005,12 @@ static int32_t godot_icall_Test_ConnectSignal(MonoString *signal) {
 	StringName sig_name(utf8);
 	mono_free(utf8);
 	if (!_g_test_obj->has_signal(sig_name)) return 0;
-	// Use a simple callable that increments counter
-	static int32_t dummy = 0;
-	// We can't easily create a C++ Callable without a target object method,
-	// so just check if the signal exists and can be connected
+	if (!_g_test_signal_receiver) {
+		_g_test_signal_receiver = memnew(TestSignalReceiver);
+	}
 	_g_signal_count = 0;
-	return 1;
+	Error err = _g_test_obj->connect(sig_name, callable_mp(_g_test_signal_receiver, &TestSignalReceiver::on_test_signal));
+	return (err == OK) ? 1 : 0;
 }
 
 // Emit a signal on the global test object.
@@ -2005,7 +2021,9 @@ static int32_t godot_icall_Test_EmitSignal(MonoString *signal) {
 	StringName sig_name(utf8);
 	mono_free(utf8);
 	_g_test_obj->emit_signalp(sig_name, nullptr, 0);
-	_g_signal_count++;
+	// NOTE: the counter is intentionally NOT incremented here — it is
+	// incremented by TestSignalReceiver::on_test_signal when the signal is
+	// actually delivered. Self-incrementing made the assertion vacuous.
 	return 1;
 }
 
@@ -2073,6 +2091,44 @@ static int32_t godot_icall_Test_HasMethod(MonoString *method) {
 	StringName method_name(utf8);
 	mono_free(utf8);
 	return _g_test_obj->has_method(method_name) ? 1 : 0;
+}
+
+// Get a string property from the global test object (round-trip counterpart
+// of Test_SetStringProp — previously string props could be set but never
+// verified). Returns the value as a string ("" when unset/failed).
+static MonoString *godot_icall_Test_GetStringProp(MonoString *prop) {
+	MonoDomain *domain = mono_domain_get();
+	if (!_g_test_obj) return mono_string_new(domain, "");
+	char *utf8 = prop ? mono_string_to_utf8(prop) : nullptr;
+	if (!utf8) return mono_string_new(domain, "");
+	StringName prop_name(utf8);
+	mono_free(utf8);
+	Variant v = _g_test_obj->get(prop_name);
+	String str = String(v);
+	return mono_string_new(domain, str.utf8().get_data());
+}
+
+// Move the test context to the child at idx (for asserting CHILD properties
+// — previously several "child" assertions silently re-tested the parent).
+// Returns 1/0.
+static int32_t godot_icall_Test_SelectChild(int32_t idx) {
+	if (!_g_test_obj) return 0;
+	Node *node = Object::cast_to<Node>(_g_test_obj);
+	if (!node) return 0;
+	if (idx < 0 || idx >= node->get_child_count()) return 0;
+	_g_test_obj = node->get_child(idx);
+	return 1;
+}
+
+// Move the test context back to the parent. Returns 1/0.
+static int32_t godot_icall_Test_SelectParent() {
+	if (!_g_test_obj) return 0;
+	Node *node = Object::cast_to<Node>(_g_test_obj);
+	if (!node) return 0;
+	Node *parent = node->get_parent();
+	if (!parent) return 0;
+	_g_test_obj = parent;
+	return 1;
 }
 
 // Write a string to a file. Returns 1 on success.
@@ -2937,6 +2993,9 @@ void godot_register_icalls() {
 	mono_add_internal_call("Godot.Bridge::godot_icall_Test_GetNameLen", (const void *)godot_icall_Test_GetNameLen);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Test_RemoveChildIdx", (const void *)godot_icall_Test_RemoveChildIdx);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Test_HasMethod", (const void *)godot_icall_Test_HasMethod);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Test_GetStringProp", (const void *)godot_icall_Test_GetStringProp);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Test_SelectChild", (const void *)godot_icall_Test_SelectChild);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Test_SelectParent", (const void *)godot_icall_Test_SelectParent);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Test_FileWrite", (const void *)godot_icall_Test_FileWrite);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Test_FileRead", (const void *)godot_icall_Test_FileRead);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Test_FileExists", (const void *)godot_icall_Test_FileExists);

@@ -997,14 +997,35 @@ bool CSharpInstance::set(const StringName &p_name, const Variant &p_value) {
 		field = mono_class_get_field_from_name(k, pname_cstr);
 	}
 	if (field) {
-		MonoDomain *domain = mono_domain_get();
-		MonoObject *val = variant_to_mono_object(domain, p_value);
+		// Set-fix (found by csharp_test scenario 24): Variant::INT boxes as
+		// Int64 and Variant::FLOAT as double, but C# fields may be int/float
+		// (4 bytes). mono_field_set_value with the boxed 8-byte unbox would
+		// clobber the adjacent field. Convert to the field's ACTUAL type
+		// before writing.
 		MonoType *ftype = mono_field_get_type(field);
-		MonoClass *field_class = mono_class_from_mono_type(ftype);
-		if (val && field_class && mono_class_is_valuetype(field_class)) {
-			mono_field_set_value(mono_object, field, mono_object_unbox(val));
-		} else {
-			mono_field_set_value(mono_object, field, val);
+		switch (mono_type_get_type(ftype)) {
+			case MONO_TYPE_BOOLEAN: { bool v = (bool)p_value; mono_field_set_value(mono_object, field, &v); break; }
+			case MONO_TYPE_I1: { int8_t v = (int8_t)(int64_t)p_value; mono_field_set_value(mono_object, field, &v); break; }
+			case MONO_TYPE_U1: { uint8_t v = (uint8_t)(int64_t)p_value; mono_field_set_value(mono_object, field, &v); break; }
+			case MONO_TYPE_I2: { int16_t v = (int16_t)(int64_t)p_value; mono_field_set_value(mono_object, field, &v); break; }
+			case MONO_TYPE_U2: { uint16_t v = (uint16_t)(int64_t)p_value; mono_field_set_value(mono_object, field, &v); break; }
+			case MONO_TYPE_I4: { int32_t v = (int32_t)(int64_t)p_value; mono_field_set_value(mono_object, field, &v); break; }
+			case MONO_TYPE_U4: { uint32_t v = (uint32_t)(int64_t)p_value; mono_field_set_value(mono_object, field, &v); break; }
+			case MONO_TYPE_I8: { int64_t v = (int64_t)p_value; mono_field_set_value(mono_object, field, &v); break; }
+			case MONO_TYPE_U8: { uint64_t v = (uint64_t)(int64_t)p_value; mono_field_set_value(mono_object, field, &v); break; }
+			case MONO_TYPE_R4: { float v = (float)(double)p_value; mono_field_set_value(mono_object, field, &v); break; }
+			case MONO_TYPE_R8: { double v = (double)p_value; mono_field_set_value(mono_object, field, &v); break; }
+			default: {
+				MonoDomain *domain = mono_domain_get();
+				MonoObject *val = variant_to_mono_object(domain, p_value);
+				MonoClass *field_class = mono_class_from_mono_type(ftype);
+				if (val && field_class && mono_class_is_valuetype(field_class)) {
+					mono_field_set_value(mono_object, field, mono_object_unbox(val));
+				} else {
+					mono_field_set_value(mono_object, field, val);
+				}
+				break;
+			}
 		}
 		return true;
 	}

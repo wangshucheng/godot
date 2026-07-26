@@ -394,6 +394,15 @@ namespace Godot {
         internal static extern int godot_icall_Test_HasMethod(string method);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern string godot_icall_Test_GetStringProp(string prop);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_SelectChild(int idx);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_SelectParent();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern int godot_icall_Test_FileWrite(string path, string content);
 
         [MethodImpl(MethodImplOptions.InternalCall)]

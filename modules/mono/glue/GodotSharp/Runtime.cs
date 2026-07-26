@@ -444,6 +444,20 @@ namespace Godot {
         public static int TestHasMethod(string method) {
             return Bridge.godot_icall_Test_HasMethod(method);
         }
+        // Round-trip counterpart of TestSetStringProp: actually READS the
+        // string property back (previously string props were write-only in
+        // the test API, so "set" assertions were unverifiable).
+        public static string TestGetStringProp(string prop) {
+            return Bridge.godot_icall_Test_GetStringProp(prop);
+        }
+        // Move the test context to the child at idx, so child properties can
+        // be asserted on the actual child (not silently on the parent).
+        public static int TestSelectChild(int idx) {
+            return Bridge.godot_icall_Test_SelectChild(idx);
+        }
+        public static int TestSelectParent() {
+            return Bridge.godot_icall_Test_SelectParent();
+        }
         public static int TestFileWrite(string path, string content) {
             return Bridge.godot_icall_Test_FileWrite(path, content);
         }

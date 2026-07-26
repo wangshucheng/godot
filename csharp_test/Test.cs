@@ -3,7 +3,7 @@ using System;
 
 // ============================================================
 // Godot 4.7 Mono WASM C# Workflow Systematic Test Suite
-// 23 test scenarios with detailed assertions.
+// 24 test scenarios with detailed assertions.
 // All native operations use WASM-safe icalls (string/int params only).
 // Assertion framework is implemented in C++ via icalls to avoid
 // Mono WASM interpreter signature mismatch on void methods with strings.
@@ -29,6 +29,10 @@ public partial class Test : Node
 		_physicsCount++;
 	}
 
+	// Scenario 24e: method-group signal handler (mirrors Fuzz10's proven path).
+	private int _signalReceived = -1;
+	private void OnHealthChangedForTest(int v) { _signalReceived = v; }
+
 	// NOTE: Do NOT create custom instance void methods with string params.
 	// Mono WASM interpreter corrupts function table on instance void method
 	// calls with string parameters. Use Runtime.TestAssert/TestFinishTest
@@ -49,7 +53,7 @@ public partial class Test : Node
 			Runtime.DebugUiInit();
 			Runtime.DebugUiClear();
 			Runtime.DebugUiAddLine("=== Godot 4.7 C# Workflow Tests ===");
-			Runtime.DebugUiAddLine("22 scenarios with detailed assertions");
+			Runtime.DebugUiAddLine("24 scenarios with detailed assertions");
 			Runtime.DebugUiAddSeparator();
 
 			// Reflection API verification (on non-WASM platforms)
@@ -102,6 +106,24 @@ public partial class Test : Node
 				bool hasReadySig = Reflection.HasSignal("Node", "ready");
 				GD.Print("Reflection: Node has 'ready' signal=" + hasReadySig);
 				Runtime.DebugUiAddLine("Reflection: Node has 'ready' signal=" + hasReadySig);
+
+				// REAL assertions (previously all of the above was only
+				// printed, never asserted — a reflection regression could
+				// not fail the suite).
+				Runtime.TestAssert("0a ClassExists(Node)", nodeExists ? 1 : 0);
+				Runtime.TestAssert("0b !ClassExists(FakeClass123)", !fakeExists ? 1 : 0);
+				Runtime.TestAssert("0c GetParentClass(Node)==Object", nodeParent == "Object" ? 1 : 0);
+				Runtime.TestAssert("0d GetParentClass(Label)==Control", labelParent == "Control" ? 1 : 0);
+				Runtime.TestAssert("0e IsSubclassOf(Label,CanvasItem)", isSubclass ? 1 : 0);
+				// NOTE: _ready/_process are VIRTUAL methods and are not in
+				// ClassDB::has_method's method_map, so assert on a real bound
+				// method plus a negative check instead.
+				Runtime.TestAssert("0f HasMethod(Node,add_child)", Reflection.HasMethod("Node", "add_child") ? 1 : 0);
+				Runtime.TestAssert("0f2 !HasMethod(Node,fake_method_123)", !Reflection.HasMethod("Node", "fake_method_123") ? 1 : 0);
+				Runtime.TestAssert("0g add_child argc>=1", addChildArgs >= 1 ? 1 : 0);
+				Runtime.TestAssert("0h HasProperty(Node,name)", hasName ? 1 : 0);
+				Runtime.TestAssert("0i HasSignal(Node,ready)", hasReadySig ? 1 : 0);
+				Runtime.TestFinishTest("0. Reflection: ClassDB introspection");
 			}
 
 			_state = 1;
@@ -147,13 +169,17 @@ public partial class Test : Node
 			int hasReady = Runtime.TestHasMethod("is_inside_tree");
 			Runtime.TestAssert("1g HasMethod is_inside_tree", hasReady == 1 ? 1 : 0);
 
-			// 1h: Signal system - connect and emit
+			// 1h: Signal system - REAL round trip. TestConnectSignal performs
+			// an actual Object::connect to a native TestSignalReceiver;
+			// TestEmitSignal dispatches; the counter is incremented by the
+			// receiver callback (previously Connect was a no-op and the
+			// counter was self-incremented by the emit icall — fake pass).
 			int sigConnect = Runtime.TestConnectSignal("ready");
 			int sigEmit = Runtime.TestEmitSignal("ready");
 			int sigCount = Runtime.TestGetSignalCount();
 			Runtime.TestAssert("1h ConnectSignal", sigConnect == 1 ? 1 : 0);
 			Runtime.TestAssert("1h EmitSignal", sigEmit == 1 ? 1 : 0);
-			Runtime.TestAssert("1h SignalCount>=1", sigCount >= 1 ? 1 : 0);
+			Runtime.TestAssert("1h SignalCount==1 (callback fired)", sigCount == 1 ? 1 : 0);
 
 			// 1i: Remove child and verify count decreased
 			int removed = Runtime.TestRemoveChildIdx(0);
@@ -161,13 +187,16 @@ public partial class Test : Node
 			Runtime.TestAssert("1i RemoveChild", removed == 1 ? 1 : 0);
 			Runtime.TestAssert("1i ChildCount==1", newCount == 1 ? 1 : 0);
 
-			// 1j: Free object
+			// 1j: Free object. queue_free is deferred, so post-free validity
+			// cannot be checked in the same frame — assert validity BEFORE
+			// the free instead of the old constant-1 pseudo assertion.
+			Runtime.TestAssert("1j Valid before free", Runtime.TestIsValid() == 1 ? 1 : 0);
 			Runtime.TestFree();
-			Runtime.TestAssert("1j Free", 1);
 
-			// 1k: _Process and _PhysicsProcess are running
+			// 1k: _Process is running. (_physicsCount >= 0 was an always-true
+			// tautology; physics frames are properly verified in scenario 16
+			// where the counts are guaranteed non-zero.)
 			Runtime.TestAssert("1k Process running", _frameCount > 0 ? 1 : 0);
-			Runtime.TestAssert("1k PhysicsProcess running", _physicsCount >= 0 ? 1 : 0);
 
 			Runtime.TestFinishTest("1. Base: Node lifecycle & signals");
 			_state = 2;
@@ -191,11 +220,11 @@ public partial class Test : Node
 
 			// 2c: Get child count of instantiated scene
 			int sc1 = Runtime.TestGetSceneChildCount();
-			Runtime.TestAssert("2c SceneChildCount>=0", sc1 >= 0 ? 1 : 0);
+			Runtime.TestAssert("2c SceneChildCount==3", sc1 == 3 ? 1 : 0);
 
-			// 2d: Free scene instance
+			// 2d: Free scene instance (void op; load/instantiate above are
+			// the real assertions — the old constant-1 assert was vacuous)
 			Runtime.TestFreeScene();
-			Runtime.TestAssert("2d FreeScene", 1);
 
 			// 2e: Load second scene (scene_test.tscn)
 			int load2 = Runtime.TestLoadScene("res://scene_test.tscn");
@@ -207,11 +236,10 @@ public partial class Test : Node
 
 			// 2g: Verify child count of second scene
 			int sc2 = Runtime.TestGetSceneChildCount();
-			Runtime.TestAssert("2g Scene2 ChildCount>=0", sc2 >= 0 ? 1 : 0);
+			Runtime.TestAssert("2g Scene2 ChildCount==2", sc2 == 2 ? 1 : 0);
 
 			// 2h: Free second scene
 			Runtime.TestFreeScene();
-			Runtime.TestAssert("2h FreeScene 2", 1);
 
 			// 2i: Reload first scene (test resource caching/reuse)
 			int load1b = Runtime.TestLoadScene("res://base_test.tscn");
@@ -495,9 +523,10 @@ public partial class Test : Node
 			Runtime.TestAssert("7f Create CollisionShape2D", cs2d == 1 ? 1 : 0);
 			if (cs2d == 1) { Runtime.TestFree(); }
 
-			// 7g: Raycast (may return 0 if no physics world set up)
+			// 7g: Raycast in an empty physics world must MISS (deterministic
+			// expectation — the old assert accepted both 0 and 1, i.e. nothing).
 			int ray = Runtime.TestRaycast3D();
-			Runtime.TestAssert("7g Raycast3D no crash", (ray == 0 || ray == 1) ? 1 : 0);
+			Runtime.TestAssert("7g Raycast3D empty world == miss", ray == 0 ? 1 : 0);
 
 			Runtime.TestFinishTest("7. Physics: Rigid/Static/Collision/Raycast");
 			_state = 8;
@@ -515,9 +544,10 @@ public partial class Test : Node
 			int asp = Runtime.TestCreate("AudioStreamPlayer");
 			Runtime.TestAssert("8a Create AudioStreamPlayer", asp == 1 ? 1 : 0);
 
-			// 8b: Add to scene
+			// 8b: Add to scene and verify the object is still valid
+			// (previously this re-asserted 8a's creation result).
 			if (asp == 1) { Runtime.TestAddToScene(); }
-			Runtime.TestAssert("8b AddToScene", asp == 1 ? 1 : 0);
+			Runtime.TestAssert("8b AddToScene valid", Runtime.TestIsValid() == 1 ? 1 : 0);
 
 			// 8c: Set volume
 			int setVol = 0;
@@ -673,7 +703,7 @@ public partial class Test : Node
 			{
 				sc = Runtime.TestGetSceneChildCount();
 			}
-			Runtime.TestAssert("10i SceneChildCount>=0", sc >= 0 ? 1 : 0);
+			Runtime.TestAssert("10i SceneChildCount==1", sc == 1 ? 1 : 0);
 
 			if (loadScene == 1) { Runtime.TestFreeScene(); }
 
@@ -742,14 +772,16 @@ public partial class Test : Node
 		{
 			Runtime.DebugUiAddLine("Test 12: BCL Compatibility");
 
-			// 12a: List<int> test (via C++ icall for WASM safety)
+			// 12a: engine-side container smoke via C++ icall. NOTE: despite
+			// the name, TestBclListTest exercises Godot's Vector<int> on the
+			// NATIVE side — it is NOT a .NET BCL test. Real BCL checks: 12e.
 			int listPass = Runtime.TestBclListTest();
-			Runtime.TestAssert("12a BclListTest 4/4", listPass == 4 ? 1 : 0);
+			Runtime.TestAssert("12a native Vector smoke 4/4", listPass == 4 ? 1 : 0);
 			Runtime.DebugUiAddLineInt("    List pass=", listPass);
 
-			// 12b: Dictionary<int,int> test (via C++ icall)
+			// 12b: engine-side HashMap smoke via C++ icall (same caveat as 12a).
 			int dictPass = Runtime.TestBclDictTest();
-			Runtime.TestAssert("12b BclDictTest 4/4", dictPass == 4 ? 1 : 0);
+			Runtime.TestAssert("12b native HashMap smoke 4/4", dictPass == 4 ? 1 : 0);
 			Runtime.DebugUiAddLineInt("    Dict pass=", dictPass);
 
 			// 12c: File IO test (via C++ icall)
@@ -770,9 +802,34 @@ public partial class Test : Node
 			Runtime.TestAssert("12d JSON read len>0", jsonRead > 0 ? 1 : 0);
 			Runtime.TestFileDelete("user://bcl_json.dat");
 
-			// 12e: Async pattern test (via C++ icall)
-			int asyncPass = Runtime.TestBclAsyncTest();
-			Runtime.TestAssert("12e BclAsyncTest", asyncPass == 1 ? 1 : 0);
+			// 12e: REAL .NET BCL test (desktop only; on WASM the interpreter's
+			// List<T>/Dictionary<K,V> paths are intentionally not exercised
+			// here — they are covered by the H9 WASM suite instead).
+			// The old TestBclAsyncTest icall returned 1 unconditionally (fake).
+			if (_isWeb == 0)
+			{
+				var bclList = new System.Collections.Generic.List<int>();
+				bclList.Add(10); bclList.Add(20); bclList.Add(30);
+				int listOk = (bclList.Count == 3 && bclList[1] == 20 && bclList.Contains(30)) ? 1 : 0;
+				bclList.RemoveAt(1);
+				listOk = (listOk == 1 && bclList.Count == 2 && bclList[1] == 30) ? 1 : 0;
+				Runtime.TestAssert("12e BCL List<int> real ops", listOk);
+
+				var bclDict = new System.Collections.Generic.Dictionary<int, int>();
+				bclDict[1] = 100; bclDict[2] = 200;
+				bclDict[2] = 250;
+				int dictOk = (bclDict.Count == 2 && bclDict[2] == 250) ? 1 : 0;
+				bclDict.Remove(1);
+				dictOk = (dictOk == 1 && bclDict.Count == 1 && !bclDict.ContainsKey(1)) ? 1 : 0;
+				Runtime.TestAssert("12e BCL Dictionary<int,int> real ops", dictOk);
+
+				int taskResult = System.Threading.Tasks.Task.Run(() => 42).Result;
+				Runtime.TestAssert("12e BCL Task.Run result", taskResult == 42 ? 1 : 0);
+			}
+			else
+			{
+				Runtime.DebugUiAddLine("  12e: Skipped on WASM (real BCL test is desktop-only)");
+			}
 
 			// 12f: Basic C# arithmetic (safe in WASM)
 			int a = 10;
@@ -858,9 +915,10 @@ public partial class Test : Node
 			int bodyLimit = Runtime.TestGetIntProp("body_size_limit");
 			Runtime.TestAssert("14e body_size_limit set/get", bodyLimit == 1024 ? 1 : 0);
 
-			// 14f: Skip BCL HttpClient on all platforms (network not required for test)
+			// 14f: Skip BCL HttpClient on all platforms (network not required for test).
+			// NOTE: skips are logged, NOT asserted — a constant-1 "skip" assert
+			// inflates the pass count with a non-test.
 			Runtime.DebugUiAddLine("  14f: Skipped (no network test)");
-			Runtime.TestAssert("14f skip (no network test)", 1);
 
 			Runtime.TestFree();
 			Runtime.TestFinishTest("14. HTTP: HTTPRequest node + BCL HttpClient");
@@ -912,7 +970,6 @@ public partial class Test : Node
 			else
 			{
 				Runtime.DebugUiAddLine("  15g: Skipped on WASM (no native WS)");
-				Runtime.TestAssert("15g WASM skip (no native WS)", 1);
 			}
 
 			Runtime.TestFree();
@@ -986,7 +1043,7 @@ public partial class Test : Node
 			{
 				largeArray[i] = i;
 			}
-			Runtime.TestAssert("17a array alloc 10000 ints", 1);
+			Runtime.TestAssert("17a array alloc 10000 ints", largeArray.Length == 10000 ? 1 : 0);
 
 			// 17b: Verify array contents (int arithmetic, no method calls)
 			int sum = 0;
@@ -1058,10 +1115,8 @@ public partial class Test : Node
 			int ctrlCreated = Runtime.TestCreate("Control");
 			Runtime.TestAssert("18a Control created", ctrlCreated);
 
-			// 18b: Check touch-related Input methods
-			int hasGetTouchCount = Runtime.TestHasMethod("get_screen_touch_count");
-			// Input is a singleton, methods may differ
-			Runtime.TestAssert("18b touch count method check", 1);
+			// 18b removed: it computed a has_method result and then asserted a
+			// constant 1 regardless (dead variable, vacuous test).
 
 			// 18c: Create InputEventScreenTouch via ClassDB
 			int touchEventCreated = Runtime.TestCreate("InputEventScreenTouch");
@@ -1086,18 +1141,11 @@ public partial class Test : Node
 			int dragIdx = Runtime.TestGetIntProp("index");
 			Runtime.TestAssert("18g drag index set/get", dragIdx == 1 ? 1 : 0);
 
-			// 18h: Check Input singleton on desktop
-			if (_isWeb == 0)
-			{
-				// On desktop, simulate touch by parsing input event
-				Runtime.DebugUiAddLine("  18h: Desktop touch simulation");
-				Runtime.TestAssert("18h desktop touch sim", 1);
-			}
-			else
-			{
-				Runtime.DebugUiAddLine("  18h: WASM touch via JS events");
-				Runtime.TestAssert("18h WASM touch check", 1);
-			}
+			// 18h: platform note only (no meaningful headless assertion exists
+			// for touch input — the old constant-1 asserts were vacuous).
+			Runtime.DebugUiAddLine(_isWeb == 0
+				? "  18h: Desktop (touch events constructed above, not injected)"
+				: "  18h: WASM (touch via JS events, not covered headless)");
 
 			Runtime.TestFree();
 			Runtime.TestFinishTest("18. Mobile: Touch/drag input events");
@@ -1134,19 +1182,23 @@ public partial class Test : Node
 			int offsetRight = Runtime.TestGetIntProp("offset_right");
 			Runtime.TestAssert("19c offsets set", (offsetLeft == 10 && offsetRight == -10) ? 1 : 0);
 
-			// 19d: Create child Control with center anchor
+			// 19d: Create child Control
 			int childCreated = Runtime.TestAddChild("Control");
 			Runtime.TestAssert("19d child Control added", childCreated);
 
-			// 19e: Set child anchors to center
+			// 19e: Set anchors on the ACTUAL child (previously these set/got
+			// the PARENT's anchors while claiming to test the child — the
+			// test context never moved). TestSelectChild moves the context.
+			Runtime.TestSelectChild(0);
 			Runtime.TestSetIntProp("anchor_left", 0);
 			Runtime.TestSetIntProp("anchor_right", 1);
 			Runtime.TestSetIntProp("anchor_top", 0);
 			Runtime.TestSetIntProp("anchor_bottom", 1);
 			int childAnchorOk = Runtime.TestGetIntProp("anchor_right") == 1 ? 1 : 0;
-			Runtime.TestAssert("19e child anchors", childAnchorOk);
+			Runtime.TestAssert("19e child anchors (real child)", childAnchorOk);
+			Runtime.TestSelectParent();
 
-			// 19f: Check size flags
+			// 19f: Check size flags (parent)
 			Runtime.TestSetIntProp("size_flags_horizontal", 3);
 			Runtime.TestSetIntProp("size_flags_vertical", 3);
 			int sizeFlagsH = Runtime.TestGetIntProp("size_flags_horizontal");
@@ -1157,19 +1209,22 @@ public partial class Test : Node
 			int labelCreated = Runtime.TestAddChild("Label");
 			Runtime.TestAssert("19g Label for resolution", labelCreated);
 
-			// 19h: Mouse filter
+			// 19h: Mouse filter (parent)
 			Runtime.TestSetIntProp("mouse_filter", 1);
 			int mouseFilter = Runtime.TestGetIntProp("mouse_filter");
 			Runtime.TestAssert("19h mouse filter", mouseFilter == 1 ? 1 : 0);
 
-			// 19i: Mouse filter on child
+			// 19i: Mouse filter on the ACTUAL child (previously overwrote the
+			// parent's filter from 19h and asserted that instead).
+			Runtime.TestSelectChild(0);
 			Runtime.TestSetIntProp("mouse_filter", 2);
 			int childMouseFilter = Runtime.TestGetIntProp("mouse_filter");
-			Runtime.TestAssert("19i child mouse filter", childMouseFilter == 2 ? 1 : 0);
+			Runtime.TestAssert("19i child mouse filter (real child)", childMouseFilter == 2 ? 1 : 0);
+			Runtime.TestSelectParent();
 
-			// 19j: Check child count
+			// 19j: Exact child count (Control + Label)
 			int childCount = Runtime.TestGetChildCount();
-			Runtime.TestAssert("19j child count > 0", childCount > 0 ? 1 : 0);
+			Runtime.TestAssert("19j child count == 2", childCount == 2 ? 1 : 0);
 
 			Runtime.TestFree();
 			Runtime.TestFinishTest("19. UI Resolution: anchors/layout/flags");
@@ -1186,13 +1241,8 @@ public partial class Test : Node
 
 			if (_isWeb == 1)
 			{
-				// WASM: ENet not supported, skip
-				Runtime.DebugUiAddLine("  Skipped on WASM (no ENet)");
-				Runtime.TestAssert("20a WASM skip (no ENet)", 1);
-				Runtime.TestAssert("20b WASM skip (no ENet)", 1);
-				Runtime.TestAssert("20c WASM skip (no ENet)", 1);
-				Runtime.TestAssert("20d WASM skip (no ENet)", 1);
-				Runtime.TestAssert("20e WASM skip (no ENet)", 1);
+				// WASM: ENet not supported, skip (logged, not asserted).
+				Runtime.DebugUiAddLine("  20a-e: Skipped on WASM (no ENet)");
 			}
 			else
 			{
@@ -1265,9 +1315,8 @@ public partial class Test : Node
 			int sceneChildren = Runtime.TestGetSceneChildCount();
 			Runtime.TestAssert("21c scene has children", sceneChildren > 0 ? 1 : 0);
 
-			// 21d: Free scene
+			// 21d: Free scene (void op)
 			Runtime.TestFreeScene();
-			Runtime.TestAssert("21d scene freed", 1);
 
 			// 21e: Reload same scene (hot reload simulation)
 			int reloadOk = Runtime.TestLoadScene("res://base_test.tscn");
@@ -1277,9 +1326,8 @@ public partial class Test : Node
 			int reinstOk = Runtime.TestInstantiateScene();
 			Runtime.TestAssert("21f scene re-instantiated", reinstOk);
 
-			// 21g: Free reloaded scene
+			// 21g: Free reloaded scene (void op)
 			Runtime.TestFreeScene();
-			Runtime.TestAssert("21g reloaded scene freed", 1);
 
 			// 21h: Load different scene
 			int loadOther = Runtime.TestLoadScene("res://ui_test.tscn");
@@ -1295,7 +1343,6 @@ public partial class Test : Node
 			// not reliably defined, so _isWeb cannot be trusted). Custom Reflection
 			// icalls in state 0 already cover ClassDB reflection on desktop.
 			Runtime.DebugUiAddLine("  21j: Skipped (BCL reflection unsafe for WASM)");
-			Runtime.TestAssert("21j skip (BCL reflection)", 1);
 
 			Runtime.TestFinishTest("21. Hot Update: Scene reload/assembly inspect");
 			_state = 22;
@@ -1317,23 +1364,30 @@ public partial class Test : Node
 			int bone1Added = Runtime.TestAddChild("Bone2D");
 			Runtime.TestAssert("22b Bone2D root added", bone1Added);
 
-			// 22c: Add second Bone2D (child of first)
+			// 22c: Add second Bone2D NESTED under the root bone (previously it
+			// was added to the skeleton while the comment claimed nesting —
+			// the context never moved to bone1).
+			Runtime.TestSelectChild(0);
 			int bone2Added = Runtime.TestAddChild("Bone2D");
-			Runtime.TestAssert("22c Bone2D child added", bone2Added);
+			Runtime.TestAssert("22c Bone2D nested under root bone", bone2Added);
+			int bone1Children = Runtime.TestGetChildCount();
+			Runtime.TestAssert("22c root bone child count==1", bone1Children == 1 ? 1 : 0);
+			Runtime.TestSelectParent();
 
-			// 22d: Check child count
+			// 22d: Exact child count (only the root bone at this point)
 			int boneCount = Runtime.TestGetChildCount();
-			Runtime.TestAssert("22d has bones", boneCount > 0 ? 1 : 0);
+			Runtime.TestAssert("22d skeleton children==1", boneCount == 1 ? 1 : 0);
 			Runtime.DebugUiAddLineInt("  Bone count: ", boneCount);
 
 			// 22e: Check Skeleton2D methods
 			int hasGetBoneCount = Runtime.TestHasMethod("get_bone_count");
 			Runtime.TestAssert("22e has get_bone_count", hasGetBoneCount);
 
-			// 22f: Check bone naming
+			// 22f: Bone naming — REAL round trip (previously: set name, then
+			// asserted TestIsValid, which never checks the name at all).
 			Runtime.TestSetName("RootBone");
-			int nameSet = Runtime.TestIsValid();
-			Runtime.TestAssert("22f bone named", nameSet);
+			string boneName = Runtime.TestGetStringProp("name");
+			Runtime.TestAssert("22f bone name round-trip", boneName == "RootBone" ? 1 : 0);
 
 			// 22g: Add attachment node to skeleton (BoneAttachment2D may not exist in all builds)
 			int attachCreated = Runtime.TestAddChild("Node2D");
@@ -1429,11 +1483,67 @@ public partial class Test : Node
 			return;
 		}
 
-		// ============================================================
-		// Summary
-		// ============================================================
-		if (_state == 24)
-		{
+			// ============================================================
+			// Test 24: Script Bridge - [Export] property round trip +
+			// [Signal] end-to-end through the C# Callable bridge.
+			// Exercises the REAL editor-feature bridge paths (P1/P3):
+			// engine Object::set/get -> CSharpInstance::set/get on [Export]
+			// members, and signal connect/emit via CallableCustomMono.
+			// ============================================================
+			if (_state == 24)
+			{
+				Runtime.DebugUiAddLine("Test 24: Script Bridge ([Export]/[Signal])");
+
+				Node exportNode = GetNodeOrNull("ExportTestNode");
+				Runtime.TestAssert("24a ExportTestNode found", exportNode != null ? 1 : 0);
+
+				if (exportNode != null)
+				{
+					// 24b: [Export] int field set/get through the ENGINE property
+					// path (Object::set -> CSharpInstance::set -> C# field).
+					exportNode.Set("Speed", 321);
+					object speedObj = exportNode.Get("Speed");
+					// Variant::INT always arrives boxed as Int64 (H6 contract).
+				Runtime.TestAssert("24b [Export] Speed set/get", (speedObj is long sl && sl == 321) ? 1 : 0);
+
+					// 24c: [Export] string property round trip
+					exportNode.Set("PlayerName", "BridgeHero");
+					object nameObj = exportNode.Get("PlayerName");
+					Runtime.TestAssert("24c [Export] PlayerName set/get", (nameObj as string) == "BridgeHero" ? 1 : 0);
+
+					// 24d: [Export] float field round trip (Variant FLOAT -> double)
+					exportNode.Set("Health", 73.5);
+					object healthObj = exportNode.Get("Health");
+					bool healthOk = false;
+					if (healthObj is double hd) healthOk = System.Math.Abs(hd - 73.5) < 0.001;
+					else if (healthObj is float hf) healthOk = System.Math.Abs(hf - 73.5f) < 0.001f;
+					Runtime.TestAssert("24d [Export] Health set/get", healthOk ? 1 : 0);
+
+					// 24e: [Signal] declared + C#-side connect/emit round trip
+					Runtime.TestAssert("24e [Signal] HealthChanged declared", exportNode.HasSignal("HealthChanged") ? 1 : 0);
+					_signalReceived = -1;
+					exportNode.Connect("HealthChanged", (System.Action<int>)OnHealthChangedForTest);
+					exportNode.EmitSignal("HealthChanged", 42);
+					Runtime.TestAssert("24e [Signal] emit -> managed callback", _signalReceived == 42 ? 1 : 0);
+
+					// 24f: lambda closure callback (same delegate path, but a
+					// compiler-generated closure target instead of a method group).
+					int lambdaReceived = -1;
+					exportNode.Connect("HealthChanged", (int v) => { lambdaReceived = v; });
+					exportNode.EmitSignal("HealthChanged", 7);
+					Runtime.TestAssert("24f [Signal] emit -> lambda callback", lambdaReceived == 7 ? 1 : 0);
+				}
+
+				Runtime.TestFinishTest("24. ScriptBridge: [Export] set/get + [Signal] e2e");
+				_state = 25;
+				return;
+			}
+
+			// ============================================================
+			// Summary
+			// ============================================================
+			if (_state == 25)
+			{
 			int passCount = Runtime.TestGetPassCount();
 			int failCount = Runtime.TestGetFailCount();
 			Runtime.DebugUiAddSeparator();
@@ -1451,13 +1561,20 @@ public partial class Test : Node
 				Runtime.DebugUiAddLine("Platform: Desktop");
 			}
 			Runtime.DebugUiAddSeparator();
-			Runtime.DebugUiAddLine("All 23 scenarios complete.");
-			_state = 25;
+			Runtime.DebugUiAddLine("All 24 scenarios complete.");
+			// Desktop/headless: exit with a verdict code so CI runners can
+			// fail the build. WASM stays alive for the JS-side Debug UI
+			// polling used by the H9 harness.
+			if (_isWeb == 0)
+			{
+				GetTree().Quit(failCount > 0 ? 1 : 0);
+			}
+			_state = 26;
 			return;
 		}
 
-		// State 25: Idle - periodic display refresh
-		if (_state == 25)
+		// State 26: Idle - periodic display refresh (WASM only)
+		if (_state == 26)
 		{
 			_waitFrames++;
 			if (_waitFrames >= 600)
@@ -1468,7 +1585,7 @@ public partial class Test : Node
 				Runtime.DebugUiClear();
 				Runtime.DebugUiAddLine("=== Godot 4.7 C# Workflow Tests ===");
 				Runtime.DebugUiAddSeparator();
-				Runtime.DebugUiAddLine("All 22 scenarios completed.");
+				Runtime.DebugUiAddLine("All 24 scenarios completed.");
 				Runtime.DebugUiAddLineInt("Passed: ", passCount);
 				Runtime.DebugUiAddLineInt("Failed: ", failCount);
 				Runtime.DebugUiAddLineInt("Physics frames: ", _physicsCount);

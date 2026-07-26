@@ -1,8 +1,20 @@
 # P5 fuzz test runner — runs fuzz_test.tscn headlessly and verifies [FUZZ] markers.
 $ErrorActionPreference = "Stop"
 
-$editor = "C:\Users\Administrator\AppData\Roaming\TRAE SOLO CN\ModularData\ai-agent\work-mode-projects\6a47fad25801ac16b9570799\godot4.7_mono\bin\editor\windows\godot.windows.editor.x86_64.mono.console.exe"
-$project = "C:\Users\Administrator\AppData\Roaming\TRAE SOLO CN\ModularData\ai-agent\work-mode-projects\6a47fad25801ac16b9570799\godot4.7_mono\csharp_test"
+$root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$project = Join-Path $root "csharp_test"
+
+# Auto-pick the newest available editor console binary (previously hardcoded
+# to the stale bin/editor/windows copy — which could test an OLD build).
+$candidates = @(
+    (Join-Path $root "bin\godot.windows.editor.x86_64.mono.console.exe"),
+    (Join-Path $root "bin\editor\windows\godot.windows.editor.x86_64.mono.console.exe")
+) | Where-Object { Test-Path $_ }
+if ($candidates.Count -eq 0) {
+    Write-Host "FAIL: no editor binary found"
+    exit 1
+}
+$editor = $candidates | Sort-Object { (Get-Item $_).LastWriteTime } -Descending | Select-Object -First 1
 $logFile = Join-Path $project "fuzz_test_output.log"
 $errFile = Join-Path $project "fuzz_test_output.err"
 

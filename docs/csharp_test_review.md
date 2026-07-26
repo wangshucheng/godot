@@ -100,7 +100,7 @@ powershell -File run_fuzz_test.ps1          # 10/10 PASS，Fuzz10 回调现真�
 
 ## 五、注意事项
 
-1. **H9 WASM 基线需重建**：Test.cs 大幅改动（场景 0/24 新增、断言收紧、skip 不计数）+ 委托调用路径重写。WASM 端需重跑 H9 并重新计数断言基线（原 205/205 已失效）；新封送路径在 WASM 解释器下尚未验证，属下一轮 WASM 测试的必查项。
+1. **H9 WASM 基线（2026-07-27 已重建）**：WASM 端已重验通过——混合 AOT 模板 + 无头 Chromium（playwright）下 **24/24 场景 PASS**（场景 0 为桌面限定），含场景 24 的 [Export]/[Signal] 端到端（7 断言），新委托封送路径在 WASM 解释器下工作正常。运行方式：`python run_web_test.py`（HTTP 服务 + playwright，自动判定）。web 模板构建命令：`scons platform=web target=template_release mono_wasm=yes threads=no -j4`（**threads=no 必需**——预编译 Mono 静态库无 atomics；也可用 `build_web_template.ps1`）。
 2. **dotnet build 增量陷阱**：MSBuild 多次跳过 CoreCompile（源码 mtime 新于 dll 仍判"最新"），排查期间造成两轮假构建。改 glue 后若不放心，删 `modules/mono/glue/GodotSharp/obj` 再构建。
 3. **csharp_test 运行依赖**：编辑器二进制（`bin/` 下最新 console exe）、`bin/GodotSharp/Api/Debug/GodotSharp.dll`（glue 构建产物）、`.mono/assemblies/CSharpTest.dll`（项目构建产物）三者需同时最新；`CSharpTest.csproj` 的 HintPath 已指向 `bin/GodotSharp`（原指向 bin/editor/windows 旧副本）。
 4. N1 版本化程序集机制在本次测试中首次实际生效（`.mono/assemblies/CSharpTest.dll.rev1.dll`）。

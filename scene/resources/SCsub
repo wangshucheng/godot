@@ -24,7 +24,21 @@ env.scene_sources += thirdparty_obj
 
 scene_obj = []
 
-env.add_source_files(scene_obj, "*.cpp")
+# [GodotExt] Workaround: clang++ 23 (emscripten) crashes compiling
+# style_box_flat.cpp at -Os on wasm32 (frontend signal, emcc toolchain bug —
+# see docs/review_2026-07-26_h9_wasm.md). Build this single file at -O0 on
+# web (-O0 appended after -Os; clang honors the last -O flag). The file must
+# be excluded BEFORE add_source_files() — env.Object() registers targets in
+# the scons DAG at call time, so filtering the resulting list is too late.
+if env["platform"] == "web":
+    env.add_source_files(scene_obj, [f for f in env.Glob("*.cpp") if "style_box_flat" not in str(f)])
+    env_sbf = env.Clone()
+    env_sbf.Append(CCFLAGS=["-O0"])
+    sbf_obj = env_sbf.Object("style_box_flat.cpp")
+    env.scene_sources += sbf_obj
+else:
+    env.add_source_files(scene_obj, "*.cpp")
+
 env.scene_sources += scene_obj
 
 # Needed to force rebuilding the scene files when the thirdparty code is updated.

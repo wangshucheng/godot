@@ -3,7 +3,19 @@ from misc.utility.scons_hints import *
 
 Import("env")
 
-env.add_source_files(env.servers_sources, "*.cpp")
+# [GodotExt] Workaround: clang++ 23 (emscripten) crashes compiling
+# rendering_server.cpp at -Os on wasm32 (same frontend bug as
+# scene/resources/style_box_flat.cpp — see docs/review_2026-07-26_h9_wasm.md).
+# Build this single file at -O0 on web (-O0 appended after -Os; clang honors
+# the last -O flag). Excluded BEFORE add_source_files because env.Object()
+# registers targets in the scons DAG at call time.
+if env["platform"] == "web":
+    env.add_source_files(env.servers_sources, [f for f in env.Glob("*.cpp") if not str(f).endswith("rendering_server.cpp")])
+    env_rs = env.Clone()
+    env_rs.Append(CCFLAGS=["-O0"])
+    env.servers_sources += env_rs.Object("rendering_server.cpp")
+else:
+    env.add_source_files(env.servers_sources, "*.cpp")
 
 SConscript("dummy/SCsub")
 SConscript("renderer_rd/SCsub")

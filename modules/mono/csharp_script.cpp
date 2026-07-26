@@ -24,6 +24,9 @@
 #include <mono/metadata/debug-helpers.h>
 #include <mono/metadata/class.h>
 #include <mono/metadata/attrdefs.h>
+// P2 v2: mono_image_get_table_rows + MONO_TABLE_TYPEDEF for typedef iteration.
+#include <mono/metadata/image.h>
+#include <mono/metadata/blob.h>
 #include <cstdio>
 #include <cstring>
 
@@ -331,6 +334,11 @@ String CSharpScript::_parse_namespace() const {
 // r_icon_path: currently empty (IconPath attribute parsing not implemented)
 // r_is_abstract: true if class has "abstract" modifier
 // r_is_tool: true if class has [Tool] attribute (text-based scan)
+//
+// P2 v2: When the scripts assembly is loaded and global_class_cache is valid,
+// prefer the AOT-accurate IL metadata cache over the text-based .cs file scan.
+// The text scan is retained as a fallback for the window before the assembly
+// is loaded (e.g., editor startup scan of res:// before first build).
 String CSharpLanguage::get_global_class_name(const String &p_path, String *r_base_type, String *r_icon_path, bool *r_is_abstract, bool *r_is_tool) const {
 	if (p_path.get_extension().to_lower() != "cs") {
 		return "";
@@ -344,6 +352,24 @@ String CSharpLanguage::get_global_class_name(const String &p_path, String *r_bas
 		return "";
 	}
 
+	// P2 v2: prefer typedef cache when valid (AOT-accurate, no file IO).
+	// The cache key is the class name, which under Godot's file_name==class_name
+	// convention (spec §0.2.5) equals the .cs basename without extension.
+	if (global_classes_valid) {
+		String candidate = p_path.get_file().get_basename();
+		const GlobalClassInfo *info = global_class_cache.getptr(candidate);
+		if (info) {
+			if (r_base_type) *r_base_type = info->base_type;
+			if (r_icon_path) *r_icon_path = "";
+			if (r_is_abstract) *r_is_abstract = info->is_abstract;
+			if (r_is_tool) *r_is_tool = info->is_tool;
+			return candidate;
+		}
+		// Cache valid but class not registered → not a global class.
+		return "";
+	}
+
+	// Fallback: text-based scan (assembly not yet loaded, e.g. editor startup).
 	Ref<FileAccess> f = FileAccess::open(p_path, FileAccess::READ);
 	if (f.is_null()) {
 		return "";
@@ -1333,6 +1359,10 @@ MonoAssembly *CSharpLanguage::load_scripts_assembly() {
 			if (scripts_assembly) {
 				printf("[Mono] Loaded scripts assembly: %s\n", path.utf8().get_data());
 				fflush(stdout);
+				// P2 v2: rebuild global class cache from the freshly loaded
+				// assembly's TypeDef table. Subsequent get_global_class_name()
+				// calls will hit the cache instead of doing text-based .cs scan.
+				refresh_global_classes();
 				return scripts_assembly;
 			}
 		}
@@ -1453,6 +1483,82 @@ void CSharpLanguage::reload_all_pending_scripts() {
 		printf("[Mono] Reloaded %d pending scripts.\n", reloaded_count);
 		fflush(stdout);
 	}
+}
+
+// P2 v2: Rebuild global_class_cache by iterating the scripts assembly TypeDef table.
+// Replaces v1 text-based .cs file scanning with AOT-accurate IL metadata reads.
+// Filter rules:
+//   - Skip non-public types (Godot global classes are always public top-level types).
+//   - Skip compiler-generated types (name starts with '<' — closures/async state machines).
+//   - Require [GlobalClass] attribute (mono_script_meta::class_has_attribute, AOT-safe).
+// Metadata extracted per class:
+//   - base_type = mono_class_get_name(mono_class_get_parent(klass)); falls back to "Node".
+//   - is_abstract = MONO_TYPE_ATTR_ABSTRACT flag.
+//   - is_tool = [Tool] attribute presence.
+// Spec ref: §4.P2.2 (typedef iteration + path lookup HashMap).
+void CSharpLanguage::refresh_global_classes() {
+	global_class_cache.clear();
+	global_classes_valid = false;
+
+	if (!scripts_assembly) {
+		return;
+	}
+	MonoImage *image = mono_assembly_get_image(scripts_assembly);
+	if (!image) {
+		return;
+	}
+
+	int num_typedefs = mono_image_get_table_rows(image, MONO_TABLE_TYPEDEF);
+	int registered = 0;
+
+	for (int i = 1; i <= num_typedefs; i++) {
+		uint32_t token = (MONO_TABLE_TYPEDEF << 24) | (uint32_t)i;
+		MonoClass *klass = mono_class_get(image, token);
+		if (!klass) {
+			continue;
+		}
+
+		// Skip non-public types — Godot global classes are always public.
+		uint32_t flags = mono_class_get_flags(klass);
+		if (!(flags & MONO_TYPE_ATTR_PUBLIC)) {
+			continue;
+		}
+
+		const char *cname = mono_class_get_name(klass);
+		if (!cname || !cname[0] || cname[0] == '<') {
+			// Skip anonymous/compiler-generated types (closures, async state machines).
+			continue;
+		}
+
+		// Require [GlobalClass] attribute (AOT-safe via mono_custom_attrs_from_class).
+		if (!mono_script_meta::class_has_attribute(klass, "GlobalClassAttribute")) {
+			continue;
+		}
+
+		GlobalClassInfo info;
+		info.is_tool = mono_script_meta::class_has_attribute(klass, "ToolAttribute");
+		info.is_abstract = (flags & MONO_TYPE_ATTR_ABSTRACT) != 0;
+
+		MonoClass *parent = mono_class_get_parent(klass);
+		if (parent) {
+			const char *pname = mono_class_get_name(parent);
+			if (pname && pname[0]) {
+				info.base_type = String(pname);
+			}
+		}
+		if (info.base_type.is_empty()) {
+			// Godot default base when no : Base is declared (mirrors _parse_base_class).
+			info.base_type = "Node";
+		}
+
+		global_class_cache[String(cname)] = info;
+		registered++;
+	}
+
+	global_classes_valid = true;
+	printf("[Mono] P2 refresh_global_classes: %d typedefs scanned, %d global classes registered\n",
+			num_typedefs, registered);
+	fflush(stdout);
 }
 
 void CSharpLanguage::frame() {
@@ -1899,6 +2005,11 @@ bool CSharpLanguage::build_project() {
 			if (panel) {
 				panel->append_output(load_msg);
 			}
+
+			// P2 v2: rebuild global class cache from the new assembly's TypeDef
+			// table. Subsequent editor scans of res:// for global classes will
+			// hit the cache instead of re-parsing every .cs file.
+			refresh_global_classes();
 
 			reload_all_pending_scripts();
 			if (panel) {

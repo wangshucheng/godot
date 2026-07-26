@@ -514,3 +514,101 @@ void CSharpLanguage::reload_tool_script(const Ref<Script> &p_script, bool p_soft
 3. ✅ 文档过度声称 → 已补齐代码调用并修正文档描述
 
 **第三阶段评审完毕**。后续按 v2 节奏推进 C 级任务（P2 重构、P4 异步化、A2 代码补全）。
+
+---
+
+## 十、C 级任务执行：P2 typedef 重构（2026-07-26）
+
+> **执行时间**：2026-07-26
+> **执行范围**：将 P2 [GlobalClass] 全局类识别从 v1 文本扫描重构为 v2 typedef 表迭代 + 元数据缓存
+> **执行结论**：✅ 完成，编译通过 + 运行时验证 3/3 PASS
+
+### 10.1 重构动机
+
+v1 文本扫描（`csharp_script.cpp:334-435` 的 `get_global_class_name`）的已知缺陷：
+1. **准确性差**：块注释 `/* */` 与字符串字面量内的 `[GlobalClass]`/`class ` 可能误识别
+2. **无缓存**：每次调用都重新打开 `.cs` 文件解析，大型项目（>1000 文件）性能差
+3. **元数据缺失**：文本扫描只能推断 `is_tool`/`is_abstract`/`base_type`，无法读取真实 IL 元数据
+4. **spec 合规性**：未按 spec §4.P2.2 要求使用 `mono_image_get_table_info(image, MONO_TABLE_TYPEDEF)` 迭代 + 路径反查 HashMap
+
+### 10.2 实施内容
+
+**新增字段与方法**（[csharp_script.h](file:///C:\Users\Administrator\AppData\Roaming\TRAE SOLO CN\ModularData\ai-agent\work-mode-projects\6a47fad25801ac16b9570799\godot4.7_mono\modules\mono\csharp_script.h#L141-L166)）：
+
+```cpp
+struct GlobalClassInfo {
+    String base_type;
+    bool is_abstract = false;
+    bool is_tool = false;
+};
+HashMap<String, GlobalClassInfo> global_class_cache;
+bool global_classes_valid = false;
+
+void refresh_global_classes();
+```
+
+**`refresh_global_classes()` 实现**（[csharp_script.cpp:1461-1535](file:///C:\Users\Administrator\AppData\Roaming\TRAE SOLO CN\ModularData\ai-agent\work-mode-projects\6a47fad25801ac16b9570799\godot4.7_mono\modules\mono\csharp_script.cpp#L1461-L1535)）：
+
+迭代 scripts assembly 的 TypeDef 表，对每个 public 顶层类型检查 `[GlobalClass]` 属性（AOT-safe via `mono_script_meta::class_has_attribute`），通过后从 IL 元数据读取 `base_type`（`mono_class_get_name(mono_class_get_parent(klass))`）、`is_abstract`（`MONO_TYPE_ATTR_ABSTRACT` flag）、`is_tool`（`[Tool]` 属性），填充 `global_class_cache`。
+
+过滤规则：
+- 跳过非 public 类型（Godot 全局类总是 public 顶层类型）
+- 跳过编译器生成类型（名称以 `<` 开头，如闭包/异步状态机）
+- 必须有 `[GlobalClass]` 属性
+
+**`get_global_class_name()` 重构**（[csharp_script.cpp:355-370](file:///C:\Users\Administrator\AppData\Roaming\TRAE SOLO CN\ModularData\ai-agent\work-mode-projects\6a47fad25801ac16b9570799\godot4.7_mono\modules\mono\csharp_script.cpp#L355-L370)）：
+
+新增 typedef cache 优先路径：当 `global_classes_valid` 为 true 时，从 `global_class_cache.getptr(candidate)` 命中则直接返回 IL 元数据（无文件 IO）；未命中则返回 `""`（cache 已知该类不是全局类）。文本扫描保留为 fallback，覆盖 assembly 加载前的窗口期（编辑器启动首次扫描 res://）。
+
+cache key 为类名，依据 Godot `file_name == class_name` 约定（spec §0.2.5），等于 `.cs` basename 去扩展名。
+
+**触发点接入**（3 处）：
+
+| 位置 | 说明 |
+|---|---|
+| `load_scripts_assembly()` 末尾 | 覆盖 `init()` + `reload_all_scripts()` + `reload_scripts()` 路径 |
+| `build_project()` 中 `mono_domain_assembly_open` 成功后 | 覆盖热重载构建路径 |
+| `refresh_global_classes()` 内部 `scripts_assembly == nullptr` 检查 | 安全清理 cache 并标记 invalid，强制 fallback |
+
+### 10.3 验证证据
+
+**编译**：`scons platform=windows target=editor -j4` PASS（无错误，仅链接器 LNK4217/LNK4286 警告，与本次改动无关，是 Mono 静态库的已知问题）。
+
+**运行时验证**（`run_p2_typedef_test.ps1`，3/3 PASS）：
+
+```
+[Mono] Loaded scripts assembly: ...CSharpTest.dll
+[Mono] P2 refresh_global_classes: 23 typedefs scanned, 1 global classes registered
+[Mono] resolve_mono_class: class 'ExportTest' resolved successfully
+[Mono] resolve_mono_class: class 'ExportTest' has 6 exported members, 1 signals, is_tool=1, is_global=1
+```
+
+| 验证项 | 结果 |
+|---|---|
+| `refresh_global_classes` 日志输出 | ✅ PASS（23 typedefs scanned, 1 global classes registered） |
+| ExportTest 解析为全局类（is_global=1） | ✅ PASS |
+| scripts assembly 加载 | ✅ PASS |
+
+**测试场景**：csharp_test 项目含 23 个 TypeDef（含 GodotSharp 内部类型 + 项目脚本），其中 1 个 `[GlobalClass]` 标记的 ExportTest 被精确识别。文本扫描不再被触发（cache valid 时直接命中）。
+
+### 10.4 与 v1 文本扫描对比
+
+| 维度 | v1 文本扫描 | v2 typedef 迭代 |
+|---|---|---|
+| 准确性 | 注释/字符串内误识别 | IL 元数据精确读取 |
+| 性能 | 每次调用打开文件 | cache 命中 O(1) |
+| base_type | 文本推断（split `:` / `,`） | `mono_class_get_parent` 精确 |
+| is_tool | 文本扫描 `[Tool]` | `class_has_attribute` 精确 |
+| is_abstract | 文本扫描 `abstract` 关键字 | `MONO_TYPE_ATTR_ABSTRACT` flag 精确 |
+| 启动期 | 立即可用 | 需 assembly 加载完成（fallback 兜底） |
+
+### 10.5 双树同步
+
+- `godot4.7_mono` 树：本次改动
+- `godot-mono-wasm` 树：通过 `sync_to_godot.py` 同步 2 个文件（`csharp_script.cpp` + `csharp_script.h`）
+
+### 10.6 后续建议
+
+- v1 文本扫描作为 fallback 保留，不删除 —— assembly 加载前需要它扫描 res://
+- 若长期运行无 fallback 命中，可考虑移除 v1 代码（YAGNI 原则下暂保留）
+- 其他 C 级任务（P4 异步化、A2 代码补全）按 v2 节奏推进

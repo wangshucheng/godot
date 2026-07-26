@@ -138,6 +138,20 @@ class CSharpLanguage : public ScriptLanguage {
 	uint64_t last_build_request_ms = 0;
 	static constexpr uint64_t BUILD_COOLDOWN_MS = 500;
 
+	// P2 v2: Global class metadata cache (class_name → info).
+	// Populated by refresh_global_classes() by iterating the scripts assembly
+	// TypeDef table (spec §4.P2.2). Replaces the v1 text-based scan in
+	// get_global_class_name() with AOT-accurate IL metadata; the text scan is
+	// retained as a fallback for the window before the assembly is loaded
+	// (e.g., editor startup scan of res:// before first build).
+	struct GlobalClassInfo {
+		String base_type;
+		bool is_abstract = false;
+		bool is_tool = false;
+	};
+	HashMap<String, GlobalClassInfo> global_class_cache;
+	bool global_classes_valid = false;
+
 public:
 	static CSharpLanguage *get_singleton() { return singleton; }
 	void set_language_index(int p_idx) { lang_idx = p_idx; }
@@ -145,6 +159,11 @@ public:
 	MonoAssembly *load_scripts_assembly();
 	MonoAssembly *get_scripts_assembly() const { return scripts_assembly; }
 	void reload_all_pending_scripts();
+	// P2 v2: Rebuild global_class_cache from scripts_assembly TypeDef table.
+	// Called after load_scripts_assembly() succeeds (covers init / hot reload /
+	// build_project paths). Safe to call when scripts_assembly is null — clears
+	// the cache and marks it invalid, forcing get_global_class_name fallback.
+	void refresh_global_classes();
 
 	void ensure_project_file();
 	bool build_project();

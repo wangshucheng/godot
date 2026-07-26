@@ -17,6 +17,7 @@
 // P6: Time::get_ticks_msec() for build request cooldown.
 #include "core/os/time.h"
 #include "core/os/os.h"
+#include "core/string/print_string.h"
 #include <cstring>
 #include "scene/main/node.h"
 #include <mono/metadata/object.h>
@@ -824,21 +825,31 @@ MonoMethod *CSharpInstance::find_method(const StringName &p_method, int p_argcou
 		}
 	}
 
+	// N3 fix: resolve against the OBJECT's own class hierarchy FIRST.
+	// After a hot reload (P0-1 versioned assembly), CSharpScript::mono_class
+	// points at the NEW image while a pre-existing instance's mono_object is
+	// still an instance of the OLD image's class. mono_runtime_invoke() with
+	// a MonoMethod* from a different image than the object's class throws or
+	// crashes on the class-identity check. Resolving on the object's own
+	// class keeps old instances running their old (consistent) code; new
+	// instances created after the reload have objects of the new class and
+	// therefore resolve the new methods. script->get_method() remains as a
+	// fallback for the rare case the method isn't found on the object class.
 	MonoClass *klass = mono_object_get_class(mono_object);
 	StringName key = StringName(method_name);
 	if (p_argcount >= 0) {
 		key = StringName(method_name + ":" + itos(p_argcount));
 	}
 
-	if (script.is_valid() && script->mono_class) {
-		MonoMethod *m = script->get_method(StringName(method_name), p_argcount);
-		if (m) return m;
-	}
-
 	CharString mname_utf8 = method_name.utf8();
 	const char *mname_cstr = mname_utf8.get_data();
 	for (MonoClass *k = klass; k; k = mono_class_get_parent(k)) {
 		MonoMethod *m = mono_class_get_method_from_name(k, mname_cstr, p_argcount);
+		if (m) return m;
+	}
+
+	if (script.is_valid() && script->mono_class) {
+		MonoMethod *m = script->get_method(StringName(method_name), p_argcount);
 		if (m) return m;
 	}
 
@@ -1308,36 +1319,66 @@ CSharpLanguage::~CSharpLanguage() { singleton = nullptr; }
 // This helper copies `p_dll_path` to `<p_dll_path>.rev{N}.dll` (a fresh path
 // that has never been opened, so no cache entry exists) and opens the copy.
 // The original dll on disk is never touched by Mono, so `dotnet build` can
-// safely overwrite it on the next hot reload. Old copies accumulate on disk
-// and are cleaned up by finish() (editor shutdown) — acceptable leak for the
-// duration of an editing session.
+// safely overwrite it on the next hot reload.
+//
+// N5 fix: the versioned copy is EDITOR-ONLY (TOOLS_ENABLED). Exported games
+// load the scripts assembly exactly once, so Mono's path-keyed cache can
+// never go stale — they open the original path directly.
+// N1 fix: temp copies are tracked in `opened_rev_paths` and deleted at the
+// NEXT editor startup by cleanup_stale_rev_files() — the files stay locked
+// by Mono for the whole session, so they cannot be deleted at shutdown.
 MonoAssembly *CSharpLanguage::open_versioned_assembly(const String &p_dll_path) {
 	if (!MonoHost::get_singleton() || !MonoHost::get_singleton()->get_domain()) {
 		return nullptr;
 	}
 
+#ifndef TOOLS_ENABLED
+	return mono_domain_assembly_open(MonoHost::get_singleton()->get_domain(), p_dll_path.utf8().get_data());
+#else
 	assembly_rev++;
 	String rev_path = p_dll_path + ".rev" + itos(assembly_rev) + ".dll";
 
 	Error err = DirAccess::copy_absolute(p_dll_path, rev_path);
 	if (err != OK) {
-		printf("[Mono] P0-1: versioned copy FAILED (err=%d, src=%s, dst=%s) — falling back to direct open (stale-cache risk)\n",
-				(int)err, p_dll_path.utf8().get_data(), rev_path.utf8().get_data());
-		fflush(stdout);
 		// Fallback: open the original path directly. For cold start (first
 		// load_scripts_assembly call) there is no cache yet, so this is safe.
 		// For hot reload this risks loading stale IL, but it's better than
 		// crashing — the user will be prompted to restart the editor.
+		WARN_PRINT("[Mono] Versioned assembly copy failed (err=" + itos((int)err) + "), falling back to direct open: " + p_dll_path);
 		return mono_domain_assembly_open(MonoHost::get_singleton()->get_domain(), p_dll_path.utf8().get_data());
 	}
 
 	MonoAssembly *asm_ptr = mono_domain_assembly_open(MonoHost::get_singleton()->get_domain(), rev_path.utf8().get_data());
 	if (asm_ptr) {
-		printf("[Mono] P0-1: opened versioned assembly rev=%llu (%s)\n",
-				(unsigned long long)assembly_rev, rev_path.utf8().get_data());
-		fflush(stdout);
+		opened_rev_paths.push_back(rev_path);
+		print_verbose("[Mono] Opened versioned assembly rev=" + itos(assembly_rev) + " (" + rev_path + ")");
 	}
 	return asm_ptr;
+#endif
+}
+
+// N1 fix: delete `.rev{N}.dll` temp copies left behind by previous editor
+// sessions. Must run at STARTUP (before Mono opens anything): the files are
+// locked by Mono for the entire session that created them, so they cannot be
+// deleted at shutdown — least of all on Windows.
+void CSharpLanguage::cleanup_stale_rev_files() {
+#ifdef TOOLS_ENABLED
+	String assemblies_dir = get_mono_assemblies_dir();
+	Ref<DirAccess> da = DirAccess::open(assemblies_dir);
+	if (da.is_null()) {
+		return;
+	}
+	da->list_dir_begin();
+	String fname = da->get_next();
+	while (!fname.is_empty()) {
+		if (!da->current_is_dir() && fname.contains(".rev") && fname.ends_with(".dll")) {
+			da->remove(fname);
+		}
+		fname = da->get_next();
+	}
+	da->list_dir_end();
+	opened_rev_paths.clear();
+#endif
 }
 
 MonoAssembly *CSharpLanguage::load_scripts_assembly() {
@@ -1428,6 +1469,9 @@ MonoAssembly *CSharpLanguage::load_scripts_assembly() {
 
 void CSharpLanguage::init() {
 	ensure_project_file();
+	// N1 fix: delete .rev{N}.dll temp copies left by previous editor sessions
+	// (files are locked by Mono all session, so cleanup happens at startup).
+	cleanup_stale_rev_files();
 	load_scripts_assembly();
 
 #ifdef MONO_AOT_MODE
@@ -1490,18 +1534,15 @@ void CSharpLanguage::init() {
 }
 
 void CSharpLanguage::finish() {
-	// P0-1 fix: release all opened assemblies at language shutdown.
-	// During the editing session we intentionally leak old assemblies (each
-	// hot reload opens a new versioned copy without closing the previous one)
-	// to avoid UAF on CSharpScript/CSharpInstance raw pointers. At finish()
-	// the editor is tearing down — all script resources have been freed, so
-	// it's now safe to close every assembly we accumulated.
-	for (MonoAssembly *asm_ptr : opened_assemblies) {
-		if (asm_ptr) {
-			mono_assembly_close(asm_ptr);
-		}
-	}
+	// N2 fix: do NOT mono_assembly_close() the opened assemblies here. The
+	// whole point of the P0-1 "never close" strategy is that CSharpScript /
+	// CSharpInstance may still hold raw MonoClass*/MonoObject* pointers into
+	// those images during teardown, and the sgen heap may still contain
+	// managed objects of those classes — closing at finish() would
+	// re-introduce the exact UAF we set out to remove, for zero benefit:
+	// the process is exiting and the OS reclaims everything anyway.
 	opened_assemblies.clear();
+	opened_rev_paths.clear();
 	scripts_assembly = nullptr;
 	loaded_assemblies.clear();
 	global_class_cache.clear();
@@ -1548,9 +1589,7 @@ void CSharpLanguage::reload_all_pending_scripts() {
 			// resolve_mono_class() re-runs against the freshly opened
 			// assembly's image and picks up new IL (changed method bodies,
 			// new [Export] members, removed signals, etc.).
-			printf("[Mono] P0-1: force-reloading script: %s (was mono_class_valid=%d, mono_class=%p)\n",
-				   cs_script->get_path().utf8().get_data(), (int)cs_script->mono_class_valid, cs_script->mono_class);
-			fflush(stdout);
+			print_verbose("[Mono] Hot-reloading script: " + cs_script->get_path());
 			cs_script->reload();
 			reloaded_count++;
 		}
@@ -1649,8 +1688,7 @@ void CSharpLanguage::frame() {
 
 #ifdef TOOLS_ENABLED
 	if (build_pending && Engine::get_singleton() && Engine::get_singleton()->is_editor_hint()) {
-		printf("[Mono] P6: frame() consuming build_pending, calling build_project()\n");
-		fflush(stdout);
+		print_verbose("[Mono] frame() consuming build_pending, calling build_project()");
 		build_pending = false;
 		build_project();
 	}
@@ -1668,24 +1706,15 @@ void CSharpLanguage::frame() {
 // Phase2 verification: force scons rebuild by content change.
 void CSharpLanguage::_on_filesystem_changed() {
 #ifdef TOOLS_ENABLED
-	printf("[Mono] P6: _on_filesystem_changed invoked (t=%llu ms)\n",
-			(unsigned long long)Time::get_singleton()->get_ticks_msec());
-	fflush(stdout);
 	if (!Engine::get_singleton() || !Engine::get_singleton()->is_editor_hint()) {
-		printf("[Mono] P6: skipping (not editor hint)\n");
-		fflush(stdout);
 		return;
 	}
 	uint64_t now = Time::get_singleton()->get_ticks_msec();
 	if (now - last_build_request_ms < BUILD_COOLDOWN_MS) {
-		printf("[Mono] P6: skipping (cooldown, last=%llu now=%llu)\n",
-				(unsigned long long)last_build_request_ms, (unsigned long long)now);
-		fflush(stdout);
 		return;
 	}
 	last_build_request_ms = now;
-	printf("[Mono] P6: calling request_build()\n");
-	fflush(stdout);
+	print_verbose("[Mono] filesystem_changed → request_build()");
 	request_build();
 #endif
 }
@@ -1697,10 +1726,9 @@ void CSharpLanguage::reload_all_scripts() {
 	// sgen GC scan. Instead, clear the pointer so load_scripts_assembly() does
 	// not early-return, and open a fresh versioned copy (bypasses Mono's
 	// path-keyed image cache without releasing the old image). Old assemblies
-	// accumulate in `opened_assemblies` and are released in finish().
+	// accumulate in `opened_assemblies` and are NEVER closed (see N2 fix).
 	if (scripts_assembly) {
-		printf("[Mono] Hot reload: clearing scripts_assembly pointer (old image kept alive, rev leak accepted)\n");
-		fflush(stdout);
+		print_verbose("[Mono] Hot reload: reloading scripts assembly (old image kept alive)");
 		scripts_assembly = nullptr;
 		global_classes_valid = false;
 	}
@@ -1720,6 +1748,13 @@ void CSharpLanguage::reload_tool_script(const Ref<Script> &p_script, bool p_soft
 	if (p_script.is_null()) {
 		return;
 	}
+	// P1-#5 fix: trigger an actual rebuild FIRST. reload() below only
+	// re-resolves the class against the ALREADY LOADED (old) assembly —
+	// without a dotnet build + assembly reload, source changes never take
+	// effect and "reload tool script" was a no-op. request_build() is
+	// consumed by frame() → build_project(), which reloads the assembly and
+	// then reloads every script (reload_all_pending_scripts).
+	request_build();
 	p_script->reload(p_soft_reload);
 	// After reload, tool script instances need their method/property caches
 	// rebuilt. reload_all_pending_scripts() iterates the script cache and

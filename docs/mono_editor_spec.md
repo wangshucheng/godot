@@ -32,7 +32,7 @@
 2. **值类型读取**：C++ 读 Mono 字段一律 `mono_field_get_value_object`（装箱读取），禁止 `mono_field_get_value`（>8 字节值类型在 WASM 解释器下栈溢出，`csharp_script.cpp:842` 的 H2 修复）。
 3. **虚方法调用**：调用托管方法时跳过「声明类 != 脚本类且为 virtual」的方法（WASM 解释器虚派发签名 bug，`csharp_script.cpp:941-949`）。
 4. **静态方法调用规避**：`mono_runtime_invoke` 调 C# 静态方法在 WASM 解释器下有签名不匹配问题——运行时路径必须用实例方法（参照 `MonoHost::register_sync_context` 模式）。**B 级功能全部为编辑器功能，编辑器只在桌面 JIT 运行**，因此 B 级在 `#ifdef TOOLS_ENABLED` 内允许使用静态方法调用，但必须保证导出的游戏二进制中相关代码被完全裁剪。
-5. **editor 隔离**：当前模块 SCsub 不做条件编译（`SCsub:21-35`，已核实所有源文件无条件列入 `mono_sources`，包括 `mono_export_plugin.cpp` 与 `editor/bindings_generator.cpp`），editor-only 代码一律用 `#ifdef TOOLS_ENABLED` 包裹，运行时入口再叠加 `Engine::get_singleton()->is_editor_hint()` 判断（参照 `ensure_project_file`，`csharp_script.cpp:1431-1434`）。**[REV-2026-07-25-#01]** 本约定与 §1.2 一致：新增 editor 源文件（如 `code_completion.cpp`、`mono_build_panel.cpp`）直接追加到 `mono_sources`，**不在 SCsub 层加 `if env["tools"]:` 分支**；TOOL 裁剪由 C++ 内部 `#ifdef TOOLS_ENABLED` 全权负责，确保 SCsub 简洁一致。
+5. **editor 隔离**：当前模块 SCsub 不做条件编译（`SCsub:21-35`，已核实所有源文件无条件列入 `mono_sources`，包括 `mono_export_plugin.cpp` 与 `editor/bindings_generator.cpp`），editor-only 代码一律用 `#ifdef TOOLS_ENABLED` 包裹，运行时入口再叠加 `Engine::get_singleton()->is_editor_hint()` 判断（参照 `ensure_project_file`，`csharp_script.cpp:1431-1434`）。**[REV-2026-07-25-#01]** 本约定与 §1.2 一致：新增 editor 源文件（如 `mono_build_panel.cpp`）直接追加到 `mono_sources`，**不在 SCsub 层加 `if env["tools"]:` 分支**；TOOL 裁剪由 C++ 内部 `#ifdef TOOLS_ENABLED` 全权负责，确保 SCsub 简洁一致。
 6. **AOT 兼容**：glue 新增的 C# 类型必须加入 `modules/mono/glue/linker.xml` 的 preserve 清单，并在涉及反射调用的类上加 `[Preserve(AllMembers = true)]`（参照 `Godot.Bridge` 和 `Runtime`）。
 
 ### 0.3 术语
@@ -50,10 +50,9 @@
 
 ```python
 mono_sources += [
-    "editor/code_completion.cpp",        # A2，内部 #ifdef TOOLS_ENABLED 全包裹
     "editor/semver.cpp",                 # A4，可选
     "editor/mono_build_panel.cpp",       # P4，内部 #ifdef TOOLS_ENABLED 全包裹
-    "mono_script_metadata.cpp",          # B0 共享基础设施（特性读取）
+    "utils/mono_script_metadata.cpp",    # B0 共享基础设施（特性读取）
     "utils/naming_utils.cpp",            # A3
     "utils/string_utils.cpp",            # A3
 ]
@@ -69,6 +68,8 @@ mono_sources += [
 # 主 SCsub 中无条件 SConscript（script_templates/SCsub 内部自行判断 tools）
 SConscript("editor/script_templates/SCsub")
 ```
+
+> **实施回填（2026-07-26）**：实际实现与上文存在有意偏差——`SCsub:580` 采用 `if env.editor_build: SConscript("editor/script_templates/SCsub")`（与 GDScript 模块的实际模式一致，理由记录在 SCsub:571-579 注释中）。功能等价，以代码为准。
 
   `script_templates/SCsub` 内部用 `if env["tools"]:` 包裹 `make_templates` 调用，确保非编辑器构建不生成 `templates.gen.h`（已核对 `godot4.7_mono/modules/gdscript/editor/script_templates/SCsub` 是此模式，可作为参考）。
 
@@ -87,7 +88,9 @@ SConscript("editor/script_templates/SCsub")
 **实现**：
 
 1. 按 §1.2 接入 `templates.gen.h`。
-2. 模板适配：旧模板中的 `using _BINDINGS_NAMESPACE_;` 对当前 glue 同样成立（命名空间即 `Godot`），`partial class` 语法当前亦可正常使用（当前不依赖源生成器，partial 无害）。**保留模板原文，不做内容修改**；仅 `EditorPlugin/plugin.cs` 依赖 `[Tool]` 特性——在 P5 完成前该模板生成 `[Tool]` 但不生效（可接受，注释说明），或暂缓该模板至 P5。决定：**全部 9 个一次搬入**。
+2. 模板适配：旧模板中的 `using _BINDINGS_NAMESPACE_;` 对当前 glue 同样成立（命名空间即 `Godot`），`partial class` 语法当前亦可正常使用（当前不依赖源生成器，partial 无害）。**保留模板原文，不做内容修改**。
+
+> **实施回填（2026-07-26）**：经终审（`docs/review_2026-07-26_final.md` P1-#8），9 个模板中 6 个引用了当前 glue 不存在的类/API（EditorPlugin、EditorScript、EditorScenePostImport、VisualShaderNodeCustom 基类缺失；Input 动作 API、Mathf、泛型集合等缺失），生成即编译失败。已**收窄为 2 个可编译模板**（`Node/default.cs`、`Object/empty.cs`），其余 6 个已从源码树删除（git 历史可查）；恢复它们需先补齐 glue 对应能力。
 3. 修改 `get_built_in_templates`：TOOLS 下遍历 `TEMPLATES[]`，`TEMPLATES[i].inherit == p_object` 时 append（照搬旧实现逻辑）；保留现有 2 个内联模板中 id=0 的 `Empty` 作为 Object 兜底（旧 Object/empty 与之重复，去重后直接用旧模板）。
 4. 修改 `make_template`（`csharp_script.cpp:1305-1313`）：在现有替换基础上追加：
 
@@ -211,7 +214,7 @@ namespace Godot {
 
 当前 `linker.xml` 已有 33 个类型（`GodotSharp` 27 + `HelloMono` 2 + `mscorlib` 25），新增上述 4 个特性类型后总数 37 个。
 
-### 3.2 C++ 特性读取器（`mono_script_metadata.{h,cpp}`，新文件）
+### 3.2 C++ 特性读取器（`utils/mono_script_metadata.{h,cpp}`，新文件）
 
 不用 icall、不走 C# 反射——C++ 直接读 Mono 元数据（编辑器与运行时同一代码路径，行为一致）：
 
@@ -326,7 +329,7 @@ bool class_has_attribute(MonoClass *p_class, const char *p_attr_name);
    - 路径反查：维护 `HashMap<String class_name, String script_path>`，来源是 `ResourceCache` 中已加载的 CSharpScript + 首次全量扫描 `res://**/*.cs`（用 `ResourceLoader::get_recognized_extensions_for_type` 过滤），按文件名匹配类名（与 `_parse_base_class` 一致的命名约定：文件名==类名）。**[REV-2026-07-25-#06]** 已知限制：
      - C# **不强制**文件名==类名：一个 .cs 文件可含多个类（partial class 拆分、内部类）；文件名也可与类名不同（如 `MyNode.v2.cs` 含 `MyNode` 类）
      - v1 在文档中明确说明此限制：「C# 类必须定义在与类名同名的 .cs 文件中，否则全局类注册失败」
-     - v2 计划：用 `mono_image_get_table_info(image, MONO_TABLE_TYPEDEF)` 迭代 + `MonoMethod* debug_info` 查源文件路径（需 .pdb 支持），解除文件名约束
+     - ~~v2 计划~~ **已完成（2026-07-26，提交 `3547fcff27`）**：`refresh_global_classes()` 用 typedef 表迭代 + `global_class_cache` 缓存（实际 API 为 `mono_image_get_table_rows`）。pdb 反查路径仍未做，文件名==类名约定保持
    - 调 `ScriptServer::add_global_class(name, base, "C#", path, icon)`；刷新前用 `ScriptServer::remove_global_class_by_path` 清理旧条目。
 3. 触发时机：`build_project()` 成功后（`csharp_script.cpp:1528-1601` 的程序集重载点）、`reload_all_scripts()` 后、编辑器启动 `init()` 完成程序集加载后各一次。
 4. `CSharpLanguage::get_global_class_name(const String &p_path)`：查上面的 path→class 映射，返回 class name（编辑器显示图标/类型需要）。
@@ -412,7 +415,9 @@ bool class_has_attribute(MonoClass *p_class, const char *p_attr_name);
 
 **实现**：
 
-1. `MonoHost::initialize()`（`mono_host.cpp`）在非 WEB + TOOLS 构建下，读取编辑器设置 `dotnet/debugger/enabled`（默认 false）与 `dotnet/debugger/port`（默认 55555），开启时：
+1. `MonoHost::initialize()`（`mono_host.cpp`）在非 WEB + TOOLS 构建下，读取**项目设置**（ProjectSettings）`dotnet/debugger/enabled`（默认 false）与 `dotnet/debugger/port`（默认 55555），并支持环境变量 `GODOT_MONO_DEBUGGER_PORT` 强制覆盖，开启时：
+
+> **实施回填（2026-07-26）**：原文为「编辑器设置」，实现实际使用 ProjectSettings（`mono_host.cpp:272-274`）。语义差异：ProjectSettings 随 project.godot 进版本库，EditorSettings 为每用户全局；因整个代码块被 `#if defined(TOOLS_ENABLED) && !defined(WEB_ENABLED)` 裁剪，导出游戏不受影响，以实现为准。
 
 ```cpp
 // 必须在 mono_jit_init 之前

@@ -1,8 +1,9 @@
 # modules/mono 深度对比：当前实现 vs 提交 1963b2f（上游官方 .NET 模块）
 
 > **更新说明（2026-07-25）**：基于本报告已立项 `docs/mono_editor_spec.md` 实施 A 级 + B 级 P1-P7。
-> 当前状态：spec 已完成评审修订（见 `docs/review_2026-07-25.md` 与 `docs/revision_log_2026-07-25.md`），未开始编码。
 > 本文档作为基线分析保持不变，仅在 §3 和 §4 补充实施状态标注与一致性修订（[REV-2026-07-25-#13/14/15]）。
+>
+> **状态更新（2026-07-26）**：A 级（A2 已降级除外）+ B0 + B 级 P1–P7 **已全部实施完成**，P2 已迭代至 v2（typedef 表迭代）。后续评审与修复记录见 `docs/review_2026-07-25_phase2.md`、`docs/review_2026-07-26_phase3.md`、`docs/review_2026-07-26_final.md`、`docs/review_2026-07-26_fix_round.md`。
 
 ## 0. 对比基线与总体结论
 

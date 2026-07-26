@@ -31,6 +31,7 @@
 #include <process.h>
 #include <time.h>
 #include <wchar.h>
+#include <string.h>
 
 // Each __imp_xxx is a function pointer that the Mono static lib calls
 // indirectly. We define it as a void* initialized to the CRT function address.
@@ -59,6 +60,12 @@ void* __imp_system      = (void*)system;
 void* __imp__wsystem    = (void*)_wsystem;
 void* __imp__getch      = (void*)_getch;
 void* __imp__resetstkoflw = (void*)_resetstkoflw;
+
+// String functions (referenced by sgen-bridge.obj / sgen-new-bridge.obj and
+// oldnames.lib(strdup.obi) — without these the final link fails with
+// LNK2019 unresolved __imp_strdup).
+void* __imp_strdup      = (void*)_strdup;
+void* __imp__strdup     = (void*)_strdup;   // oldnames.lib double-decorated variant
 
 // C99 math functions (float versions may be missing from static UCRT)
 // For doubles that exist in static UCRT, the __imp_ thunk still needs defining.

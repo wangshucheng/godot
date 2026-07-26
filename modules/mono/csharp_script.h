@@ -149,10 +149,17 @@ class CSharpLanguage : public ScriptLanguage {
 	// Fix (report P0-1 方案 A, "永不 close"): hot reload now copies the new
 	// dll to a versioned temp path (ProjectScripts.rev{N}.dll) and opens
 	// that, bypassing Mono's path-keyed cache without closing the old image.
-	// Old assemblies accumulate in `opened_assemblies` and are released as a
-	// batch in finish() (editor shutdown — safe, no live references by then).
+	// N2 update: old assemblies accumulate in `opened_assemblies` and are
+	// NEVER closed (not even in finish()) — closing any of them while
+	// scripts/instances may still hold raw pointers into the image
+	// re-introduces the UAF this design avoids. Process exit reclaims all.
 	uint64_t assembly_rev = 0;
 	List<MonoAssembly *> opened_assemblies;
+	// N1: versioned temp copies created by open_versioned_assembly (editor
+	// only). Cleaned at the NEXT editor startup by cleanup_stale_rev_files()
+	// — the files stay locked by Mono for the whole session, so they cannot
+	// be deleted at shutdown.
+	List<String> opened_rev_paths;
 
 	// P2 v2: Global class metadata cache (class_name → info).
 	// Populated by refresh_global_classes() by iterating the scripts assembly
@@ -186,6 +193,10 @@ public:
 	// copy failure (caller may fall back to opening the original path directly,
 	// accepting the stale-cache risk for cold start where there is no cache yet).
 	MonoAssembly *open_versioned_assembly(const String &p_dll_path);
+	// N1: delete .rev{N}.dll temp copies left by previous editor sessions.
+	// Called from init() (startup — files are Mono-locked all session, so
+	// they can only be deleted before Mono opens anything).
+	void cleanup_stale_rev_files();
 
 	void ensure_project_file();
 	bool build_project();

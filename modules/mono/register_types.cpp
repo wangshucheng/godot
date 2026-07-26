@@ -33,17 +33,6 @@ static CSharpLanguage *csharp_lang = nullptr;
 static MonoBuildPanel *mono_build_panel = nullptr;
 
 static void _editor_init() {
-	// File-based marker to confirm _editor_init is actually called.
-	// printf may be swallowed by Godot's print handler at this point.
-	{
-		FILE *f = fopen("csharp_test_p6_editor_init.marker", "w");
-		if (f) {
-			fprintf(f, "_editor_init called at %llu ms\n",
-					(unsigned long long)(OS::get_singleton() ? OS::get_singleton()->get_ticks_msec() : 0));
-			fclose(f);
-		}
-	}
-
 	Ref<MonoExportPlugin> mono_export;
 	mono_export.instantiate();
 	EditorExport::get_singleton()->add_export_plugin(mono_export);
@@ -58,30 +47,12 @@ static void _editor_init() {
 	// build. _on_filesystem_changed applies a 500ms cooldown and calls
 	// request_build(); the actual build runs on the next frame() tick.
 	// callable_mp avoids the need for ClassDB binding of the method.
-	printf("[Mono] P6: _editor_init invoked\n");
-	fflush(stdout);
 	CSharpLanguage *csl = CSharpLanguage::get_singleton();
 	EditorFileSystem *efs = EditorFileSystem::get_singleton();
-	printf("[Mono] P6: CSharpLanguage::get_singleton() = %p\n", (void *)csl);
-	fflush(stdout);
-	printf("[Mono] P6: EditorFileSystem::get_singleton() = %p\n", (void *)efs);
-	fflush(stdout);
 	if (csl && efs) {
-		Callable cb = callable_mp(csl, &CSharpLanguage::_on_filesystem_changed);
-		Error ce = efs->connect("filesystem_changed", cb);
-		printf("[Mono] P6: connect('filesystem_changed', ...) returned %d, callable=%s, target=%p\n",
-				(int)ce, cb.is_valid() ? "valid" : "invalid", (void *)cb.get_object());
-		fflush(stdout);
-		// Write connection result to marker file
-		FILE *f2 = fopen("csharp_test_p6_connect_result.marker", "w");
-		if (f2) {
-			fprintf(f2, "connect returned %d, csl=%p, efs=%p\n",
-					(int)ce, (void *)csl, (void *)efs);
-			fclose(f2);
-		}
+		efs->connect("filesystem_changed", callable_mp(csl, &CSharpLanguage::_on_filesystem_changed));
 	} else {
-		printf("[Mono] P6: WARNING — skipping signal connect (singleton missing)\n");
-		fflush(stdout);
+		WARN_PRINT("[Mono] P6: skipping filesystem_changed connect (singleton missing)");
 	}
 }
 #endif
@@ -105,12 +76,7 @@ void initialize_mono_module(ModuleInitializationLevel p_level) {
 		csharp_lang->init();
 
 #ifdef TOOLS_ENABLED
-		printf("[Mono] P6: register_types TOOLS_ENABLED block, calling add_init_callback\n");
-		fflush(stdout);
 		EditorNode::add_init_callback(_editor_init);
-#else
-		printf("[Mono] P6: register_types TOOLS_ENABLED NOT defined (skipping _editor_init)\n");
-		fflush(stdout);
 #endif
 		return;
 	}

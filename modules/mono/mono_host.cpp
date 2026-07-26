@@ -344,13 +344,15 @@ Error MonoHost::initialize() {
 	mono_aot_init();
 	mono_aot_register_modules();
 
-	// H9 fix (problem 3): Probe AOT module table integrity before any
-	// mono_class_init call (which triggers module loading and would abort
-	// if a registered AOT module's dependency is missing). The probe loads
-	// mscorlib's Object class — the most fundamental type. If this succeeds,
-	// the AOT module table + MEMFS BCL layout is consistent. If it fails,
-	// we log a diagnostic and continue (Hybrid AOT falls back to interpreter
-	// for missing modules, rather than aborting the whole runtime).
+	// H9 fix (problem 3): corlib sanity check after AOT module registration.
+	// NOTE: This probe only verifies that mscorlib's System.Object resolves —
+	// it does NOT exercise facade/module dependency resolution. The actual
+	// H9 failure mode (System → System.Runtime facade missing) is prevented
+	// by the AOT module table pruning (mono_aot_modules.cpp) and the
+	// Facades/ MEMFS embedding (SCsub), not by this probe. If even this
+	// probe fails, the BCL layout is catastrophically broken; we log and
+	// force INTERP_LLVMONLY (already the active mode in this branch — the
+	// call is a harmless no-op kept to document intent).
 	printf("[Mono] H9: Probing AOT module table integrity (mono_class_from_name Object)...\n");
 	fflush(stdout);
 	MonoClass *probe_object = mono_class_from_name(mono_get_corlib(), "System", "Object");

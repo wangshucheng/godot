@@ -53,79 +53,45 @@
   var Zlib = null; // 已废弃，保留引用避免下游报错
 
   // ============================================================
-  // 模块 0: WebAssembly 诊断 + polyfill
+  // 模块 0: WebAssembly polyfill
   // 关键问题: devtool 的 WXWebAssembly.instantiate(path) 只接受主包内裸文件名
   //   拒绝所有 wxfile: / http: 路径。104MB WASM 无法放进 4MB 主包。
-  // 唯一出路: devtool JS 上下文是否提供原生 V8 WebAssembly (接受 ArrayBuffer)?
+  // 出路: 探测原生 V8 WebAssembly（接受 ArrayBuffer），用于 WASM 走 CDN/分包的场景。
   // ============================================================
-  console.log('[WeChat Diag] === WebAssembly Environment Diagnostic ===');
 
-  // 诊断 1: WXWebAssembly
+  // 探测 1: WXWebAssembly（微信提供的 WASM 接口，只接受文件路径）
   var _WXWA = null;
   try {
-    if (typeof WXWebAssembly !== 'undefined') {
-      _WXWA = WXWebAssembly;
-      console.log('[WeChat Diag] WXWebAssembly type: ' + typeof _WXWA);
-      console.log('[WeChat Diag] WXWebAssembly keys: ' + (_WXWA ? Object.keys(_WXWA).join(',') : 'null'));
-      console.log('[WeChat Diag] WXWebAssembly.instantiate type: ' + typeof (_WXWA && _WXWA.instantiate));
-      console.log('[WeChat Diag] WXWebWA.compile type: ' + typeof (_WXWA && _WXWA.compile));
-      console.log('[WeChat Diag] WXWebWA.validate type: ' + typeof (_WXWA && _WXWA.validate));
-    } else {
-      console.log('[WeChat Diag] WXWebAssembly: UNDEFINED');
-    }
-  } catch (e) {
-    console.log('[WeChat Diag] WXWebAssembly access error: ' + e.message);
-  }
+    if (typeof WXWebAssembly !== 'undefined') _WXWA = WXWebAssembly;
+  } catch (e) {}
 
-  // 诊断 2: 原生 WebAssembly (V8 提供，接受 ArrayBuffer)
-  // 关键: 微信小游戏上下文可能不提供原生 WebAssembly，只有 WXWebAssembly
+  // 探测 2: 原生 WebAssembly（V8 提供，接受 ArrayBuffer）
+  // 微信小游戏上下文可能只有 WXWebAssembly，没有原生 WebAssembly。
   var _nativeWA = null;
   try {
-    var waType = typeof WebAssembly;
-    console.log('[WeChat Diag] global WebAssembly type: ' + waType);
-    if (waType !== 'undefined' && WebAssembly) {
-      console.log('[WeChat Diag] WebAssembly keys: ' + Object.keys(WebAssembly).join(','));
-      console.log('[WeChat Diag] WebAssembly.instantiate type: ' + typeof WebAssembly.instantiate);
-      console.log('[WeChat Diag] WebAssembly.compile type: ' + typeof WebAssembly.compile);
-      console.log('[WeChat Diag] WebAssembly.Memory type: ' + typeof WebAssembly.Memory);
-      console.log('[WeChat Diag] WebAssembly.Table type: ' + typeof WebAssembly.Table);
-      // 检查 instantiate 是否接受 ArrayBuffer (标准 V8 WebAssembly 接受)
-      // WXWebAssembly.instantiate 只接受 string path
-      var instStr = (WebAssembly.instantiate && WebAssembly.instantiate.toString) ? WebAssembly.instantiate.toString() : 'unknown';
-      console.log('[WeChat Diag] WebAssembly.instantiate signature: ' + instStr.substring(0, 200));
-      // 如果 instantiate 存在且不是 WXWebAssembly (不同对象)，视为原生
-      if (typeof WebAssembly.instantiate === 'function') {
-        _nativeWA = WebAssembly;
-        console.log('[WeChat Diag] => Native WebAssembly SAVED for ArrayBuffer instantiation');
-      }
-    } else {
-      console.log('[WeChat Diag] => Native WebAssembly NOT AVAILABLE in this context');
+    if (typeof WebAssembly !== 'undefined' && WebAssembly && typeof WebAssembly.instantiate === 'function') {
+      _nativeWA = WebAssembly;
     }
-  } catch (e) {
-    console.log('[WeChat Diag] WebAssembly access error: ' + e.message);
-  }
+  } catch (e) {}
 
-  // 诊断 3: 尝试用原生 WebAssembly.instantiate 编译最小 WASM 模块 (8 字节空模块)
-  // 这能确认原生 WebAssembly 是否真正接受 ArrayBuffer
+  // 探测 3: 用最小 WASM 模块验证原生 WebAssembly 是否真正接受 ArrayBuffer
+  // 仅靠 typeof 判断不够：某些上下文 WebAssembly.instantiate 是 stub。
+  // 失败时清除 _nativeWA，避免后续误用。
   if (_nativeWA) {
     try {
-      // 最小有效 WASM 模块: magic + version + empty module
       var minimalWasm = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
-      console.log('[WeChat Diag] Testing native WebAssembly.instantiate(ArrayBuffer)...');
-      _nativeWA.instantiate(minimalWasm.buffer, {}).then(function (res) {
-        console.log('[WeChat Diag] ✓ Native WebAssembly.instantiate(ArrayBuffer) WORKS! instance: ' + typeof res.instance);
+      _nativeWA.instantiate(minimalWasm.buffer, {}).then(function () {
+        console.log('[WeChat Adapter] Native WebAssembly (ArrayBuffer) verified OK');
       }, function (err) {
-        console.log('[WeChat Diag] ✗ Native WebAssembly.instantiate(ArrayBuffer) FAILED: ' + (err && err.message ? err.message : err));
-        // 失败说明不是真正的 V8 WebAssembly，清除
+        console.warn('[WeChat Adapter] Native WebAssembly rejected ArrayBuffer: ' + (err && err.message ? err.message : err) + ', will use WXWebAssembly only');
         _nativeWA = null;
       });
     } catch (e) {
-      console.log('[WeChat Diag] ✗ Native WebAssembly.instantiate synchronous throw: ' + e.message);
+      console.warn('[WeChat Adapter] Native WebAssembly.instantiate threw synchronously: ' + e.message + ', will use WXWebAssembly only');
       _nativeWA = null;
     }
   }
-
-  console.log('[WeChat Diag] === End Diagnostic ===');
+  console.log('[WeChat Adapter] WA ctx: WXWebAssembly=' + (_WXWA ? 'yes' : 'no') + ', native=' + (_nativeWA ? 'yes' : 'no'));
 
   var _tempWasmCounter = 0;
 
@@ -590,9 +556,9 @@
       // 拿走，webgl2 永远返回 null）。在引擎探测前先把主 canvas 锁到 webgl2。
       try {
         var _g2 = _mainCanvas.getContext('webgl2');
-        console.log('[WeChat Diag] main canvas webgl2 probe: ' + (_g2 ? 'OK (locked)' : 'null'));
+        if (!_g2) console.warn('[WeChat Adapter] main canvas webgl2 probe returned null');
       } catch (e) {
-        console.warn('[WeChat Diag] main canvas webgl2 probe THREW: ' + e);
+        console.warn('[WeChat Adapter] main canvas webgl2 probe threw: ' + e);
       }
       _mainCanvas.style = _mainCanvas.style || {};
       var sysInfo = wx.getSystemInfoSync();
@@ -732,21 +698,46 @@
     try {
       var event;
       if (typeof KeyboardEvent === 'function') {
-        event = new KeyboardEvent(type, {
+        try {
+          event = new KeyboardEvent(type, {
+            key: keyName,
+            code: keyName,
+            keyCode: keyCode,
+            which: keyCode,
+            bubbles: true,
+            cancelable: true,
+          });
+        } catch (ke) {
+          // 某些环境 KeyboardEvent 构造器对 keyCode/which 只读，构造失败时回退
+          event = null;
+        }
+      }
+      if (!event) {
+        // 简易事件对象：必须包含 preventDefault/stopPropagation（Godot onKeyEvent 会调用）
+        event = {
+          type: type,
           key: keyName,
           code: keyName,
           keyCode: keyCode,
           which: keyCode,
           bubbles: true,
           cancelable: true,
-        });
+          target: canvas,
+          currentTarget: canvas,
+          preventDefault: function () {},
+          stopPropagation: function () {},
+          stopImmediatePropagation: function () {},
+        };
       } else {
-        event = { type: type, key: keyName, code: keyName, keyCode: keyCode, which: keyCode, bubbles: true, cancelable: true };
+        // 标准 KeyboardEvent 也补 preventDefault/stopPropagation 兜底（微信可能缺）
+        if (typeof event.preventDefault !== 'function') event.preventDefault = function () {};
+        if (typeof event.stopPropagation !== 'function') event.stopPropagation = function () {};
       }
       canvas.dispatchEvent(event);
       if (globalThis.window && globalThis.window !== globalThis) {
         try { globalThis.window.dispatchEvent(event); } catch (e) {}
       }
+      console.log('[WeChat Key] dispatched ' + type + ' key=' + keyName + ' code=' + keyCode);
     } catch (e) {
       console.warn('[WeChat Adapter] dispatchKeyEvent failed: ' + e);
     }
@@ -804,6 +795,9 @@
     }
   }
 
+  // gameOverDetected: adapter 无法直接读取 C# 的 gameOver 字段，
+  // 但 Main.cs 在非 gameOver 状态下会忽略 ui_accept（仅 gameOver 时才检查 Enter 重开），
+  // 因此轻触始终发 Enter 是安全的——非 gameOver 时被游戏逻辑忽略，gameOver 时触发重开。
   function gameOverDetected() { return true; }
 
   if (wx.onTouchStart) {
@@ -812,6 +806,116 @@
     wx.onTouchEnd(function (e) { dispatchTouch('touchend', e.changedTouches); });
     wx.onTouchCancel(function (e) { dispatchTouch('touchcancel', e.changedTouches); });
   }
+
+  // ============================================================
+  // PC 物理键盘事件（仅 PC 微信支持 wx.onKeyDown/wx.onKeyUp）
+  // 手机端无物理键盘，这两个 API 不存在；PC 端 DevTools 和 PC 微信客户端提供。
+  // 关键：PC 物理键盘事件不派发到 canvas（canvas 非 focused element），
+  // 必须通过 wx.onKeyDown 捕获，转成 canvas keydown 事件让 Godot 收到。
+  // 微信 KeyEvent 对象包含: key, code, keyCode(部分版本) 等属性。
+  // ============================================================
+  // ============================================================
+  // PC 物理键盘事件捕获（双路径，互补）
+  // 路径 1: wx.onKeyDown/wx.onKeyUp —— PC 微信客户端触发，DevTools 模拟器是 stub（函数存在但不触发）
+  // 路径 2: DOM window.addEventListener('keydown') —— DevTools 模拟器是 WebView，原生 DOM 事件可触发
+  // 两条路径都注册，互不冲突：
+  //   - PC 微信客户端：路径 1 触发，路径 2 无原生 window（globalThis.window 是 polyfill，无 addEventListener）
+  //   - DevTools 模拟器：路径 1 不触发，路径 2 触发
+  //   - 手机端：两条路径都不触发（无物理键盘，globalThis.window 是 polyfill）
+  // ============================================================
+
+  // 路径 1: wx.onKeyDown（PC 微信客户端）
+  if (typeof wx.onKeyDown === 'function') {
+    console.log('[WeChat Key] wx.onKeyDown available, registering PC keyboard listener');
+    wx.onKeyDown(function (res) {
+      try {
+        var key = res.key || res.code || '';
+        var code = res.code || key || '';
+        var kc = res.keyCode || res.which || 0;
+        if (!kc && typeof key === 'string') {
+          var keyMap = { 'ArrowUp': 38, 'ArrowDown': 40, 'ArrowLeft': 37, 'ArrowRight': 39,
+                         'Enter': 13, 'Space': 32, 'Escape': 27, 'Backspace': 8, 'Tab': 9 };
+          kc = keyMap[key] || 0;
+        }
+        console.log('[WeChat Key PC] keydown key=' + key + ' code=' + code + ' keyCode=' + kc);
+        dispatchKeyEvent('keydown', key, kc);
+      } catch (e) {
+        console.warn('[WeChat Key PC] keydown handler error: ' + e);
+      }
+    });
+    wx.onKeyUp(function (res) {
+      try {
+        var key = res.key || res.code || '';
+        var code = res.code || key || '';
+        var kc = res.keyCode || res.which || 0;
+        if (!kc && typeof key === 'string') {
+          var keyMap = { 'ArrowUp': 38, 'ArrowDown': 40, 'ArrowLeft': 37, 'ArrowRight': 39,
+                         'Enter': 13, 'Space': 32, 'Escape': 27, 'Backspace': 8, 'Tab': 9 };
+          kc = keyMap[key] || 0;
+        }
+        console.log('[WeChat Key PC] keyup key=' + key + ' code=' + code + ' keyCode=' + kc);
+        dispatchKeyEvent('keyup', key, kc);
+      } catch (e) {
+        console.warn('[WeChat Key PC] keyup handler error: ' + e);
+      }
+    });
+  } else {
+    console.log('[WeChat Key] wx.onKeyDown not available');
+  }
+
+  // 路径 2: DOM window 键盘事件（DevTools 模拟器 WebView）
+  // 关键：必须检测 globalThis.window 是否有原生 addEventListener（非 polyfill）
+  // adapter 的 window polyfill 没有 addEventListener，所以不会误触发
+  (function () {
+    var _nativeWin = null;
+    try {
+      _nativeWin = globalThis.window;
+      if (!_nativeWin || typeof _nativeWin.addEventListener !== 'function') {
+        _nativeWin = null;
+      } else {
+        // 进一步检测：polyfill 的 window 没有 documentElement/body 等原生属性
+        // 如果 window 是 polyfill（adapter 创建的），addEventListener 可能是 undefined
+        var proto = Object.getPrototypeOf(_nativeWin);
+        if (!proto || typeof proto.addEventListener !== 'function') {
+          // 仍可能是原生 window（prototype 链不同），保留但加日志
+          console.log('[WeChat Key] window prototype check: addEventListener=' + typeof (_nativeWin.addEventListener));
+        }
+      }
+    } catch (e) { _nativeWin = null; }
+
+    if (_nativeWin) {
+      console.log('[WeChat Key] DOM window available, registering keyboard listener on window+document');
+      var _keyHandler = function (type) {
+        return function (evt) {
+          try {
+            var key = evt.key || '';
+            var code = evt.code || key || '';
+            var kc = evt.keyCode || evt.which || 0;
+            console.log('[WeChat Key DOM] ' + type + ' key=' + key + ' code=' + code + ' keyCode=' + kc);
+            dispatchKeyEvent(type, key, kc);
+          } catch (e) {
+            console.warn('[WeChat Key DOM] ' + type + ' handler error: ' + e);
+          }
+        };
+      };
+      // window 监听（bubble 阶段）
+      _nativeWin.addEventListener('keydown', _keyHandler('keydown'));
+      _nativeWin.addEventListener('keyup', _keyHandler('keyup'));
+      // document 监听（capture 阶段，更早捕获，能拦截到 canvas iframe 内的事件）
+      var _doc = _nativeWin.document;
+      if (_doc && typeof _doc.addEventListener === 'function') {
+        _doc.addEventListener('keydown', _keyHandler('keydown'), true); // capture=true
+        _doc.addEventListener('keyup', _keyHandler('keyup'), true);
+      }
+      // 同时在 canvas 上监听（如果 canvas 能聚焦）
+      if (_mainCanvas && typeof _mainCanvas.addEventListener === 'function') {
+        _mainCanvas.addEventListener('keydown', _keyHandler('keydown'));
+        _mainCanvas.addEventListener('keyup', _keyHandler('keyup'));
+      }
+    } else {
+      console.log('[WeChat Key] No DOM window available, keyboard fallback disabled');
+    }
+  })();
 
   // ============================================================
   // 模块 5b: atob/btoa polyfill（F1 修复）
@@ -1671,39 +1775,6 @@
           }
           console.log('[WeChat fetch F5] Strategy 1 OK: ' + fdAb.byteLength + ' bytes (' + fdChunks.length + ' chunks)');
 
-          // === 诊断: 验证每个 chunk 的前 4 字节 ===
-          // 如果 offset bug 存在，所有 chunk 的前 4 字节会相同（都是文件开头的字节）
-          // 修复后，每个 chunk 的前 4 字节应该不同（因为是顺序读取不同位置的数据）
-          var fdDiag = [];
-          for (var dk = 0; dk < Math.min(fdChunks.length, 6); dk++) {
-            var dck = new Uint8Array(fdChunks[dk]);
-            fdDiag.push(dk + ':[' +
-              (dck[0] < 16 ? '0' : '') + dck[0].toString(16) +
-              (dck[1] < 16 ? '0' : '') + dck[1].toString(16) +
-              (dck[2] < 16 ? '0' : '') + dck[2].toString(16) +
-              (dck[3] < 16 ? '0' : '') + dck[3].toString(16) + ']');
-          }
-          console.log('[WeChat Diag] fd-based chunk first-4-bytes: ' + fdDiag.join(' '));
-
-          // 验证: 搜索组装后 buffer 中的 MZ 头位置
-          var fdMzPos = [];
-          var fdSearchEnd = Math.min(fdView.length, 16 * 1024 * 1024);
-          for (var fmi = 0; fmi < fdSearchEnd - 1; fmi++) {
-            if (fdView[fmi] === 0x4D && fdView[fmi + 1] === 0x5A) {
-              fdMzPos.push(fmi);
-              if (fdMzPos.length >= 5) break;
-            }
-          }
-          console.log('[WeChat Diag] fd-based MZ positions (first 5): ' + JSON.stringify(fdMzPos));
-          // mscorlib.dll 在 .data 中通常在 offset ~12MB 处
-          if (fdView.length > 12198599) {
-            console.log('[WeChat Diag] bytes @12198595 (expected mscorlib MZ): ' +
-              (fdView[12198595] < 16 ? '0' : '') + fdView[12198595].toString(16) +
-              (fdView[12198596] < 16 ? '0' : '') + fdView[12198596].toString(16) + ' ' +
-              (fdView[12198597] < 16 ? '0' : '') + fdView[12198597].toString(16) +
-              (fdView[12198598] < 16 ? '0' : '') + fdView[12198598].toString(16));
-          }
-
           if (fdAb.byteLength === totalSize) {
             return Promise.resolve(fdAb);
           }
@@ -1740,18 +1811,6 @@
             pos += chunks[j].byteLength;
           }
           console.log('[WeChat fetch F5] Strategy 2 OK: ' + ab.byteLength + ' bytes (' + chunks.length + ' chunks)');
-
-          // 诊断: chunk first-4-bytes（如果 offset bug 存在，所有 chunk 前 4 字节相同）
-          var chunkDiag = [];
-          for (var k = 0; k < Math.min(chunks.length, 6); k++) {
-            var ck = new Uint8Array(chunks[k]);
-            chunkDiag.push(k + ':[' +
-              (ck[0] < 16 ? '0' : '') + ck[0].toString(16) +
-              (ck[1] < 16 ? '0' : '') + ck[1].toString(16) +
-              (ck[2] < 16 ? '0' : '') + ck[2].toString(16) +
-              (ck[3] < 16 ? '0' : '') + ck[3].toString(16) + ']');
-          }
-          console.log('[WeChat Diag] parallel chunk first-4-bytes: ' + chunkDiag.join(' '));
 
           // ============================================================
           // offset bug 检测 (2026-07-25):
@@ -2341,26 +2400,6 @@
       safeDefineGlobal('cancelAnimationFrame', function (id) { clearTimeout(id); });
     }
   }
-
-  // ============================================================
-  // 模块 19b: rAF 帧计数诊断（判断主循环是否在跑、canvas 尺寸）
-  // ============================================================
-  (function () {
-    var _raf = globalThis.requestAnimationFrame;
-    if (typeof _raf !== 'function') {
-      console.warn('[WeChat Diag] NO requestAnimationFrame available!');
-      return;
-    }
-    var _ticks = 0;
-    globalThis.requestAnimationFrame = function (cb) {
-      _ticks++;
-      if (_ticks === 1 || _ticks % 300 === 0) {
-        var c = getMainCanvas();
-        console.log('[WeChat Diag] rAF ticks=' + _ticks + ', canvas=' + c.width + 'x' + c.height);
-      }
-      return _raf(cb);
-    };
-  })();
 
   // ============================================================
   // 模块 20: 其他必要 polyfill

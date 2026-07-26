@@ -1,0 +1,4 @@
+ERROR: Another resource is loaded from path 'res://ExportTest.cs' (possible cyclic resource inclusion).
+   at: Resource::set_path (core\io\resource.cpp:104)
+ERROR: Another resource is loaded from path 'res://ExportTest.cs' (possible cyclic resource inclusion).
+   at: Resource::set_path (core\io\resource.cpp:104)

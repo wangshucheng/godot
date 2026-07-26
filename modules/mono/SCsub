@@ -110,21 +110,29 @@ def _select_bcl_dlls(bcl_wasm_dir):
 def _embed_bcl_assemblies(env):
     """Embed BCL assemblies into WASM MEMFS via emcc --embed-file.
 
-    [GodotExt] 2026-07-23 重构（从第一性原理出发）：
-    旧实现用 `--embed-file dir@mount` 嵌入整个 BCL 目录（32MB），其中包含：
-      - mscorlib.dll.so（18MB Mono AOT 原生产物，已通过 mono 静态库链接进 WASM）
-      - Microsoft.AspNetCore.*.dll / Microsoft.Extensions.*.dll（Blazor/DI，Godot 不用）
-      - System.Xml / System.Data / System.Web.Services 等（WCF/ADO.NET/MEF，Godot 不用）
-      - HelloWorld.dll（BCL WASM 测试样本，不应嵌入游戏 WASM）
-    导致 WASM 体积膨胀约 18MB（.so 文件）+ 5MB（无关 BCL）。
+    [GodotExt] 2026-07-23 refactor (first principles):
+    Old impl used `--embed-file dir@mount` to embed entire BCL dir (32MB):
+      - mscorlib.dll.so (18MB Mono AOT native, already linked via static lib)
+      - Microsoft.AspNetCore.*.dll / Microsoft.Extensions.*.dll (Blazor/DI)
+      - System.Xml / System.Data / System.Web.Services (WCF/ADO.NET/MEF)
+      - HelloWorld.dll (BCL WASM test sample)
+    Caused ~18MB (.so) + 5MB (unrelated BCL) bloat.
 
-    新实现用 `--embed-file file@mount` 逐个嵌入白名单 BCL：
-      - 白名单（_BCL_WASM_REQUIRED_DLLS）：mscorlib / System / System.Core / netstandard
-      - 环境变量 BCL_WASM_EXTRA_DLLS：用户可按需追加
-      - 硬性排除 .so 原生库
+    New impl uses `--embed-file file@mount` per-DLL embedding:
+      - Whitelist (_BCL_WASM_REQUIRED_DLLS): mscorlib / System / System.Core / netstandard
+      - Env var BCL_WASM_EXTRA_DLLS: user-specified extras (comma-separated)
+      - Hard exclude: .so native libs
 
-    命令行长度安全：每个 --embed-file 对约 80 字节，10 个 DLL ~800B，
-    远低于 Windows 32KB 命令行限制（旧注释中提到的 WinError 206 是其他原因）。
+    [GodotExt] 2026-07-26 H9 fix: Also embed Facades/ subdirectory.
+    netstandard2.0 BCL splits System.Runtime/System.Collections/etc into
+    separate Facades/*.dll files. mono_host.cpp MONO_PATH includes
+    `<bcl_dir>/Facades`, but the dir was not embedded -> runtime abort
+    "Facades in MONO_PATH doesn't exist" + "Failed to load AOT module
+    System ... dependency cannot be found".
+    Fix: embed the Facades/ dir if it exists (only ~200KB total).
+
+    CommandLine safety: each --embed-file pair ~80 bytes, 10 DLLs ~800B,
+    well under Windows 32KB limit.
     """
     import os
     bcl_wasm_dir = _get_bcl_wasm_dir()
@@ -141,6 +149,25 @@ def _embed_bcl_assemblies(env):
     embed_flags = []
     for src, dst in dlls:
         embed_flags.extend(["--embed-file", src + "@" + dst])
+
+    # H9 fix: Embed Facades/ subdirectory (System.Runtime/Collections/etc).
+    # These are required by netstandard2.0 type forwarding. Without them,
+    # Mono aborts when loading System module (depends on System.Runtime facade).
+    facades_dir = os.path.join(bcl_wasm_dir, "Facades")
+    if os.path.isdir(facades_dir):
+        facades_dst = "/lib/mono/4.5/Facades"
+        embed_flags.extend(["--embed-file", facades_dir + "@" + facades_dst])
+        # Count facade DLLs for diagnostics.
+        facade_files = [f for f in os.listdir(facades_dir)
+                        if f.endswith(".dll") and os.path.isfile(os.path.join(facades_dir, f))]
+        facades_mb = sum(os.path.getsize(os.path.join(facades_dir, f))
+                         for f in facade_files) / (1024 * 1024)
+        print("[Mono] WASM: Facades embedded (%d DLLs, %.2f MB) -> %s"
+              % (len(facade_files), facades_mb, facades_dst))
+    else:
+        print("[Mono] WASM: WARNING - Facades/ subdirectory not found in %s. "
+              "netstandard2.0 facade resolution will fail at runtime." % bcl_wasm_dir)
+
     env.Append(LINKFLAGS=embed_flags)
 
     total_mb = sum(os.path.getsize(s) for s, _ in dlls) / (1024 * 1024)
@@ -148,7 +175,7 @@ def _embed_bcl_assemblies(env):
     print("[Mono] WASM: BCL assemblies embedded (%d DLLs, %.2f MB): %s"
           % (len(dlls), total_mb, dll_names))
 
-    # 诊断：列出被排除的文件（帮助用户识别遗漏）
+    # Diagnostics: list excluded files (help identify missing DLLs).
     try:
         selected_srcs = {s for s, _ in dlls}
         all_files = [f for f in os.listdir(bcl_wasm_dir)

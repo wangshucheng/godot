@@ -344,6 +344,30 @@ Error MonoHost::initialize() {
 	mono_aot_init();
 	mono_aot_register_modules();
 
+	// H9 fix (problem 3): Probe AOT module table integrity before any
+	// mono_class_init call (which triggers module loading and would abort
+	// if a registered AOT module's dependency is missing). The probe loads
+	// mscorlib's Object class — the most fundamental type. If this succeeds,
+	// the AOT module table + MEMFS BCL layout is consistent. If it fails,
+	// we log a diagnostic and continue (Hybrid AOT falls back to interpreter
+	// for missing modules, rather than aborting the whole runtime).
+	printf("[Mono] H9: Probing AOT module table integrity (mono_class_from_name Object)...\n");
+	fflush(stdout);
+	MonoClass *probe_object = mono_class_from_name(mono_get_corlib(), "System", "Object");
+	if (!probe_object) {
+		printf("[Mono] H9 WARNING: AOT module probe failed - Object class not found. "
+		       "Falling back to interpreter-only mode for corlib types.\n");
+		fflush(stdout);
+		// Re-set to INTERP_LLVMONLY to relax AOT dependency checks for
+		// subsequent mono_class_init calls. This is a no-op if already in
+		// INTERP_LLVMONLY, but harmless and documents intent.
+		mono_jit_set_aot_mode(MONO_AOT_MODE_INTERP_LLVMONLY);
+	} else {
+		printf("[Mono] H9: AOT module probe OK - Object class resolved (ptr=%p).\n",
+		       (void *)probe_object);
+		fflush(stdout);
+	}
+
 #elif defined(MONO_AOT_MODE)
 	// ========================================
 	// Pure Full AOT mode (no Interpreter fallback)

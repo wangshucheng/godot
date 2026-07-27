@@ -24,6 +24,7 @@ class CSharpScript : public Script {
 	GDCLASS(CSharpScript, Script);
 
 	friend class CSharpLanguage;
+	friend class CSharpInstance; // H7: 属性系统需要访问 exported_fields
 
 	String script_path;
 	String script_namespace;
@@ -37,6 +38,14 @@ class CSharpScript : public Script {
 	// Signal names parsed from [Signal] attribute declarations in the C# source.
 	// Populated by _parse_signal_declarations() during source load.
 	HashSet<StringName> script_signals;
+
+	// Exported field info parsed from [Export] attribute declarations.
+	// Populated by _parse_export_declarations() during source load.
+	struct ExportedField {
+		StringName name;       // 字段名（C# 原名，如 "Speed"）
+		String type_name;      // C# 类型名（如 "int", "Vector2", "Color"）
+	};
+	Vector<ExportedField> exported_fields;
 
 	SelfList<CSharpScript> script_list;
 
@@ -84,6 +93,7 @@ public:
 
 private:
 	void _parse_signal_declarations();
+	void _parse_export_declarations();
 };
 
 class CSharpInstance : public ScriptInstance {

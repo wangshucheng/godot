@@ -41,6 +41,13 @@ const char *mono_image_get_name(MonoImage *image);
 MonoImage *mono_get_corlib();
 // H7 属性系统所需: 获取字段类型的 type enum
 int mono_type_get_type(MonoType *type);
+// 属性系统扩展: 获取字段的 MonoClass（用于区分 Vector2/Color 等值类型）
+MonoClass *mono_type_get_class(MonoType *type);
+// 属性系统扩展: 遍历类的所有字段
+MonoClassField *mono_class_get_fields(MonoClass *klass, void *iter);
+const char *mono_field_get_name(MonoClassField *field);
+MonoType *mono_field_get_type(MonoClassField *field);
+int mono_class_is_valuetype(MonoClass *klass);
 }
 
 // Mono type enum constants (from mono/metadata/metadata.h)
@@ -63,6 +70,55 @@ int mono_type_get_type(MonoType *type);
 #ifndef MONO_TYPE_BOOLEAN
 #define MONO_TYPE_BOOLEAN   0x02
 #endif
+#ifndef MONO_TYPE_VALUETYPE
+#define MONO_TYPE_VALUETYPE 0x11
+#endif
+
+// 属性系统: 将 C# 类型名（源码解析得到）映射到 Godot Variant::Type。
+// 用于 get_property_list() 构造 PropertyInfo。
+static Variant::Type csharp_type_name_to_variant_type(const String &p_type_name) {
+	if (p_type_name == "int" || p_type_name == "long" || p_type_name == "short" ||
+			p_type_name == "byte" || p_type_name == "sbyte" ||
+			p_type_name == "uint" || p_type_name == "ulong" || p_type_name == "ushort" ||
+			p_type_name == "Int32" || p_type_name == "Int64") {
+		return Variant::INT;
+	}
+	if (p_type_name == "float" || p_type_name == "double" ||
+			p_type_name == "Single" || p_type_name == "Double") {
+		return Variant::FLOAT;
+	}
+	if (p_type_name == "bool" || p_type_name == "Boolean") {
+		return Variant::BOOL;
+	}
+	if (p_type_name == "string" || p_type_name == "String") {
+		return Variant::STRING;
+	}
+	if (p_type_name == "Vector2") return Variant::VECTOR2;
+	if (p_type_name == "Vector2i") return Variant::VECTOR2I;
+	if (p_type_name == "Vector3") return Variant::VECTOR3;
+	if (p_type_name == "Vector3i") return Variant::VECTOR3I;
+	if (p_type_name == "Vector4") return Variant::VECTOR4;
+	if (p_type_name == "Color") return Variant::COLOR;
+	if (p_type_name == "Rect2") return Variant::RECT2;
+	if (p_type_name == "Rect2i") return Variant::RECT2I;
+	if (p_type_name == "Quaternion") return Variant::QUATERNION;
+	if (p_type_name == "Plane") return Variant::PLANE;
+	if (p_type_name == "AABB") return Variant::AABB;
+	if (p_type_name == "Basis") return Variant::BASIS;
+	if (p_type_name == "Transform2D") return Variant::TRANSFORM2D;
+	if (p_type_name == "Transform3D") return Variant::TRANSFORM3D;
+	return Variant::NIL; // 未知/不支持
+}
+
+// 属性系统: 通过 MonoClass 名称判断是否为 Godot 数学类型并返回 Variant::Type。
+// 用于 set()/get() 在 MONO_TYPE_VALUETYPE 分支中区分 Vector2/Color 等。
+static Variant::Type mono_class_name_to_variant_type(MonoClass *p_class) {
+	if (!p_class) return Variant::NIL;
+	const char *name = mono_class_get_name(p_class);
+	if (!name) return Variant::NIL;
+	String class_name = String::utf8(name);
+	return csharp_type_name_to_variant_type(class_name);
+}
 
 // Convert Godot snake_case method names to C# PascalCase.
 // e.g. "_unhandled_input" -> "_UnhandledInput", "set_position" -> "SetPosition"
@@ -357,7 +413,127 @@ void CSharpScript::_parse_signal_declarations() {
 	}
 }
 
+// Parse C# source for [Export] attribute declarations on fields.
+// Recognizes the Godot C# pattern:
+//   [Export]
+//   public int Speed = 200;
+// or:
+//   [Export(PropertyHint.Range, "0,100,1")]
+//   public float Health = 100f;
+// Also handles [Export] on the same line as the field declaration:
+//   [Export] public Vector2 Position = new Vector2(0, 0);
+// Extracts: field name + C# type name (for Variant::Type mapping).
+void CSharpScript::_parse_export_declarations() {
+	exported_fields.clear();
+	if (source.is_empty()) return;
+
+	Vector<String> lines = source.split("\n");
+	for (int i = 0; i < lines.size(); i++) {
+		String line = lines[i].strip_edges();
+		// Match [Export] or [Export(...)]
+		if (!line.begins_with("[Export")) {
+			continue;
+		}
+
+		// Find the field declaration line (could be same line after ], or next non-attribute line).
+		// Strategy: find the closing ']' of [Export...], then look for the field declaration
+		// starting from that position to the next few lines.
+		String search_start = line;
+		int close_bracket = line.find("]");
+		if (close_bracket < 0) {
+			// Multi-line attribute? Skip (rare in practice).
+			continue;
+		}
+
+		// The field declaration may be after [Export] on the same line, or on subsequent lines.
+		// Gather text from the rest of this line + next 2 lines to find the field.
+		String decl_text = line.substr(close_bracket + 1).strip_edges();
+		if (decl_text.is_empty()) {
+			// Look at next lines for the field declaration.
+			for (int j = i + 1; j < MIN(i + 3, lines.size()); j++) {
+				String next_line = lines[j].strip_edges();
+				if (next_line.is_empty() || next_line.begins_with("[")) continue;
+				decl_text = next_line;
+				break;
+			}
+		}
+
+		if (decl_text.is_empty()) continue;
+
+		// Parse field declaration: [modifiers] TypeFieldName = value;
+		// or [modifiers] TypeFieldName;
+		// We need to extract the type and name.
+		// Remove trailing ';' and initializer.
+		int semi = decl_text.find(";");
+		if (semi >= 0) {
+			decl_text = decl_text.substr(0, semi);
+		}
+		int eq = decl_text.find("=");
+		if (eq >= 0) {
+			decl_text = decl_text.substr(0, eq);
+		}
+		decl_text = decl_text.strip_edges(true, true);
+
+		// Remove access modifiers
+		for (const char *mod : { "public ", "private ", "protected ", "internal ",
+								 "static ", "readonly ", "const " }) {
+			String mod_str(mod);
+			while (decl_text.begins_with(mod_str)) {
+				decl_text = decl_text.substr(mod_str.length()).strip_edges(true, true);
+			}
+		}
+
+		// Now decl_text should be: "Type FieldName"
+		// Split by whitespace; first token = type, second token = name.
+		Vector<String> tokens = decl_text.split(" ", false);
+		if (tokens.size() >= 2) {
+			String type_name = tokens[0];
+			String field_name = tokens[1];
+
+			// Validate: field name should be a valid identifier (starts with letter/_).
+			if (field_name.is_empty()) continue;
+			char32_t first = field_name[0];
+			if (!((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_')) {
+				continue;
+			}
+
+			ExportedField ef;
+			ef.name = StringName(field_name);
+			ef.type_name = type_name;
+			exported_fields.push_back(ef);
+		}
+	}
+}
+
 bool CSharpScript::get_property_default_value(const StringName &p_property, Variant &r_value) const {
+	// H7 扩展: 为 [Export] 字段返回类型默认值，支持检查器 revert 与序列化对比。
+	// 注意: 真实的 C# 初始化表达式（= 100f）需运行构造函数才能读取，
+	// 此处仅返回零值默认；若需精确默认值，应在 CSharpInstance 构造后读取字段。
+	for (const ExportedField &ef : exported_fields) {
+		if (ef.name != p_property) continue;
+		Variant::Type vt = csharp_type_name_to_variant_type(ef.type_name);
+		switch (vt) {
+			case Variant::INT: r_value = Variant((int64_t)0); return true;
+			case Variant::FLOAT: r_value = Variant((double)0); return true;
+			case Variant::BOOL: r_value = Variant(false); return true;
+			case Variant::STRING: r_value = Variant(String()); return true;
+			case Variant::VECTOR2: r_value = Variant(Vector2()); return true;
+			case Variant::VECTOR2I: r_value = Variant(Vector2i()); return true;
+			case Variant::VECTOR3: r_value = Variant(Vector3()); return true;
+			case Variant::VECTOR3I: r_value = Variant(Vector3i()); return true;
+			case Variant::VECTOR4: r_value = Variant(Vector4()); return true;
+			case Variant::COLOR: r_value = Variant(Color()); return true;
+			case Variant::RECT2: r_value = Variant(Rect2()); return true;
+			case Variant::RECT2I: r_value = Variant(Rect2i()); return true;
+			case Variant::QUATERNION: r_value = Variant(Quaternion()); return true;
+			case Variant::PLANE: r_value = Variant(Plane()); return true;
+			case Variant::AABB: r_value = Variant(::AABB()); return true;
+			case Variant::BASIS: r_value = Variant(Basis()); return true;
+			case Variant::TRANSFORM2D: r_value = Variant(Transform2D()); return true;
+			case Variant::TRANSFORM3D: r_value = Variant(Transform3D()); return true;
+			default: return false;
+		}
+	}
 	return false;
 }
 
@@ -365,6 +541,19 @@ void CSharpScript::get_script_method_list(List<MethodInfo> *p_list) const {
 }
 
 void CSharpScript::get_script_property_list(List<PropertyInfo> *p_list) const {
+	// 静态属性列表（编辑器在实例化前用此方法查询脚本属性）
+	for (const ExportedField &ef : exported_fields) {
+		Variant::Type vt = csharp_type_name_to_variant_type(ef.type_name);
+		if (vt == Variant::NIL) {
+			continue;
+		}
+		PropertyInfo pi;
+		pi.name = ef.name;
+		pi.type = vt;
+		pi.class_name = "C#" + ef.type_name;
+		pi.usage = PROPERTY_USAGE_STORAGE | PROPERTY_USAGE_EDITOR;
+		p_list->push_back(pi);
+	}
 }
 
 const Variant CSharpScript::get_rpc_config() const {
@@ -397,6 +586,9 @@ Error CSharpScript::load_source_code(const String &p_path) {
 	// Parse [Signal] declarations from source so has_script_signal works
 	// even before the assembly is loaded (editor / inspector support).
 	_parse_signal_declarations();
+	// Parse [Export] field declarations so get_property_list works
+	// even before the assembly is loaded (editor / inspector support).
+	_parse_export_declarations();
 
 	return reload();
 }
@@ -463,6 +655,86 @@ bool CSharpInstance::set(const StringName &p_name, const Variant &p_value) {
 			mono_field_set_value(mono_object, field, &mstr);
 			return true;
 		}
+		case MONO_TYPE_VALUETYPE: {
+			// H7 扩展: 支持 Vector2/Vector3/Color 等 Godot 值类型字段
+			MonoClass *field_class = mono_type_get_class(ftype);
+			if (!field_class) return false;
+			Variant::Type vt = mono_class_name_to_variant_type(field_class);
+			switch (vt) {
+				case Variant::VECTOR2: {
+					Vector2 v = p_value;
+					mono_field_set_value(mono_object, field, &v);
+					return true;
+				}
+				case Variant::VECTOR2I: {
+					Vector2i v = p_value;
+					mono_field_set_value(mono_object, field, &v);
+					return true;
+				}
+				case Variant::VECTOR3: {
+					Vector3 v = p_value;
+					mono_field_set_value(mono_object, field, &v);
+					return true;
+				}
+				case Variant::VECTOR3I: {
+					Vector3i v = p_value;
+					mono_field_set_value(mono_object, field, &v);
+					return true;
+				}
+				case Variant::VECTOR4: {
+					Vector4 v = p_value;
+					mono_field_set_value(mono_object, field, &v);
+					return true;
+				}
+				case Variant::COLOR: {
+					Color v = p_value;
+					mono_field_set_value(mono_object, field, &v);
+					return true;
+				}
+				case Variant::RECT2: {
+					Rect2 v = p_value;
+					mono_field_set_value(mono_object, field, &v);
+					return true;
+				}
+				case Variant::RECT2I: {
+					Rect2i v = p_value;
+					mono_field_set_value(mono_object, field, &v);
+					return true;
+				}
+				case Variant::QUATERNION: {
+					Quaternion v = p_value;
+					mono_field_set_value(mono_object, field, &v);
+					return true;
+				}
+				case Variant::PLANE: {
+					Plane v = p_value;
+					mono_field_set_value(mono_object, field, &v);
+					return true;
+				}
+				case Variant::AABB: {
+					::AABB v = p_value;
+					mono_field_set_value(mono_object, field, &v);
+					return true;
+				}
+				case Variant::BASIS: {
+					Basis v = p_value;
+					mono_field_set_value(mono_object, field, &v);
+					return true;
+				}
+				case Variant::TRANSFORM2D: {
+					Transform2D v = p_value;
+					mono_field_set_value(mono_object, field, &v);
+					return true;
+				}
+				case Variant::TRANSFORM3D: {
+					Transform3D v = p_value;
+					mono_field_set_value(mono_object, field, &v);
+					return true;
+				}
+				default:
+					return false;
+			}
+		}
 		default:
 			return false;
 	}
@@ -526,18 +798,141 @@ bool CSharpInstance::get(const StringName &p_name, Variant &r_ret) const {
 			r_ret = Variant(String());
 			return true;
 		}
+		case MONO_TYPE_VALUETYPE: {
+			// H7 扩展: 支持 Vector2/Vector3/Color 等 Godot 值类型字段读取
+			MonoClass *field_class = mono_type_get_class(ftype);
+			if (!field_class) return false;
+			Variant::Type vt = mono_class_name_to_variant_type(field_class);
+			switch (vt) {
+				case Variant::VECTOR2: {
+					Vector2 v;
+					mono_field_get_value(mono_object, field, &v);
+					r_ret = Variant(v);
+					return true;
+				}
+				case Variant::VECTOR2I: {
+					Vector2i v;
+					mono_field_get_value(mono_object, field, &v);
+					r_ret = Variant(v);
+					return true;
+				}
+				case Variant::VECTOR3: {
+					Vector3 v;
+					mono_field_get_value(mono_object, field, &v);
+					r_ret = Variant(v);
+					return true;
+				}
+				case Variant::VECTOR3I: {
+					Vector3i v;
+					mono_field_get_value(mono_object, field, &v);
+					r_ret = Variant(v);
+					return true;
+				}
+				case Variant::VECTOR4: {
+					Vector4 v;
+					mono_field_get_value(mono_object, field, &v);
+					r_ret = Variant(v);
+					return true;
+				}
+				case Variant::COLOR: {
+					Color v;
+					mono_field_get_value(mono_object, field, &v);
+					r_ret = Variant(v);
+					return true;
+				}
+				case Variant::RECT2: {
+					Rect2 v;
+					mono_field_get_value(mono_object, field, &v);
+					r_ret = Variant(v);
+					return true;
+				}
+				case Variant::RECT2I: {
+					Rect2i v;
+					mono_field_get_value(mono_object, field, &v);
+					r_ret = Variant(v);
+					return true;
+				}
+				case Variant::QUATERNION: {
+					Quaternion v;
+					mono_field_get_value(mono_object, field, &v);
+					r_ret = Variant(v);
+					return true;
+				}
+				case Variant::PLANE: {
+					Plane v;
+					mono_field_get_value(mono_object, field, &v);
+					r_ret = Variant(v);
+					return true;
+				}
+				case Variant::AABB: {
+					::AABB v;
+					mono_field_get_value(mono_object, field, &v);
+					r_ret = Variant(v);
+					return true;
+				}
+				case Variant::BASIS: {
+					Basis v;
+					mono_field_get_value(mono_object, field, &v);
+					r_ret = Variant(v);
+					return true;
+				}
+				case Variant::TRANSFORM2D: {
+					Transform2D v;
+					mono_field_get_value(mono_object, field, &v);
+					r_ret = Variant(v);
+					return true;
+				}
+				case Variant::TRANSFORM3D: {
+					Transform3D v;
+					mono_field_get_value(mono_object, field, &v);
+					r_ret = Variant(v);
+					return true;
+				}
+				default:
+					return false;
+			}
+		}
 		default:
 			return false;
 	}
 }
 
 void CSharpInstance::get_property_list(List<PropertyInfo> *p_properties) const {
+	// H7 扩展: 暴露 [Export] 字段到检查器/序列化。
+	// 依赖 CSharpScript::exported_fields（由 _parse_export_declarations 填充）。
+	// 仅暴露能在 Variant 与 C# 之间往返的类型（基本类型 + Godot 数学结构）。
+	if (script.is_null()) {
+		return;
+	}
+	for (const CSharpScript::ExportedField &ef : script->exported_fields) {
+		Variant::Type vt = csharp_type_name_to_variant_type(ef.type_name);
+		if (vt == Variant::NIL) {
+			// 未知/不支持的类型——跳过，避免检查器显示空属性
+			continue;
+		}
+		PropertyInfo pi;
+		pi.name = ef.name;
+		pi.type = vt;
+		pi.class_name = "C#" + ef.type_name; // 标注来源，方便检查器分组
+		pi.usage = PROPERTY_USAGE_STORAGE | PROPERTY_USAGE_EDITOR;
+		p_properties->push_back(pi);
+	}
 }
 
 Variant::Type CSharpInstance::get_property_type(const StringName &p_name, bool *r_is_valid) const {
-	if (r_is_valid) {
-		*r_is_valid = false;
+	// H7 扩展: 为 [Export] 字段返回正确的 Variant::Type
+	if (script.is_null()) {
+		if (r_is_valid) *r_is_valid = false;
+		return Variant::NIL;
 	}
+	for (const CSharpScript::ExportedField &ef : script->exported_fields) {
+		if (ef.name == p_name) {
+			Variant::Type vt = csharp_type_name_to_variant_type(ef.type_name);
+			if (r_is_valid) *r_is_valid = (vt != Variant::NIL);
+			return vt;
+		}
+	}
+	if (r_is_valid) *r_is_valid = false;
 	return Variant::NIL;
 }
 
@@ -545,10 +940,22 @@ void CSharpInstance::validate_property(PropertyInfo &p_property) const {
 }
 
 bool CSharpInstance::property_can_revert(const StringName &p_name) const {
+	// H7 扩展: [Export] 字段支持 revert（回到类型默认值）
+	if (!script.is_null()) {
+		for (const CSharpScript::ExportedField &ef : script->exported_fields) {
+			if (ef.name == p_name) {
+				return csharp_type_name_to_variant_type(ef.type_name) != Variant::NIL;
+			}
+		}
+	}
 	return false;
 }
 
 bool CSharpInstance::property_get_revert(const StringName &p_name, Variant &r_ret) const {
+	// H7 扩展: 返回类型默认值（与 CSharpScript::get_property_default_value 一致）
+	if (!script.is_null()) {
+		return script->get_property_default_value(p_name, r_ret);
+	}
 	return false;
 }
 
@@ -795,6 +1202,16 @@ bool CSharpInstance::initialize(Object *p_owner) {
 	}
 
 	mono_runtime_object_init(mono_object);
+
+	// 信号系统: 将脚本 [Signal] 声明注册到 owner，使 emit/connect 可用。
+	// 信号名已在 CSharpScript::_parse_signal_declarations 中解析为 snake_case。
+	if (p_owner) {
+		for (const StringName &sig : script->script_signals) {
+			MethodInfo mi;
+			mi.name = sig;
+			p_owner->add_user_signal(mi);
+		}
+	}
 
 	return true;
 }

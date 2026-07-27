@@ -82,10 +82,10 @@
 
 ### v2 可选延后
 
-| 任务 | 优先级 | 前置依赖 | 来源 |
-|------|--------|---------|------|
-| B1 WASM clang++ workaround 集成到 SCsub | 可选 | emcc 工具链修复 | phase3 评审 §B1 |
-| P2 全局类 pdb 反查（解除文件名==类名约束） | 可选 | .pdb 在 WASM 端可用 | spec §4.P2.2 |
+| 任务 | 优先级 | 前置依赖 | 来源 | 状态 |
+|------|--------|---------|------|------|
+| B1 WASM clang++ workaround 集成到 SCsub | 可选 | emcc 工具链修复 | phase3 评审 §B1 | ✅ 已完成（[scene/resources/SCsub:27-40](file:///C:/Users/Administrator/AppData/Roaming/TRAE%20SOLO%20CN/ModularData/ai-agent/work-mode-projects/6a47fad25801ac16b9570799/godot4.7_mono/scene/resources/SCsub#L27-L40)） |
+| P2 全局类 pdb 反查（解除文件名==类名约束） | 可选 | .pdb 在 WASM 端可用 | spec §4.P2.2 | spike 完成（[spike_2026-07-26_p5_pdb.md](file:///C:/Users/Administrator/AppData/Roaming/TRAE%20SOLO%20CN/ModularData/ai-agent/work-mode-projects/6a47fad25801ac16b9570799/godot4.7_mono/docs/spike_2026-07-26_p5_pdb.md)），桌面端 Conditional GO / WASM NO-GO，代码实施待决策 |
 
 ### v3 探索项
 

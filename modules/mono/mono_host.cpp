@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mono/utils/mono-logger.h>
+#include <mono/metadata/mono-debug.h>
 
 #ifdef WINDOWS_ENABLED
 #define WIN32_LEAN_AND_MEAN
@@ -297,6 +298,23 @@ Error MonoHost::initialize() {
 			mono_jit_parse_options(1, opt_argv);
 		}
 	}
+#endif // TOOLS_ENABLED && !WEB_ENABLED
+
+#if defined(TOOLS_ENABLED) && !defined(WEB_ENABLED)
+	// P2 v2: Initialize Mono debug subsystem to enable Portable PDB loading.
+	// Must be called AFTER mono_jit_parse_options but BEFORE mono_jit_init_version
+	// (per mono-debug.h: "must be the first debug function called").
+	// Once initialized, mono_assembly_open will automatically load the .pdb file
+	// sitting next to the .dll (Portable PDB, DebugType=portable in .csproj).
+	// This enables mono_debug_lookup_source_location() in refresh_global_classes()
+	// to reverse-map class names to source file paths, lifting the
+	// file_name==class_name constraint (spec §4.P2.2 [REV-#06]).
+	// Desktop editor only — WASM has no .pdb (see spike_2026-07-26_p5_pdb.md).
+	printf("[Mono] P2 v2: Initializing debug subsystem (MONO_DEBUG_FORMAT_MONO) for .pdb loading...\n");
+	fflush(stdout);
+	mono_debug_init(MONO_DEBUG_FORMAT_MONO);
+	printf("[Mono] P2 v2: Debug subsystem initialized. .pdb files will be auto-loaded.\n");
+	fflush(stdout);
 #endif // TOOLS_ENABLED && !WEB_ENABLED
 
 #if defined(MONO_AOT_MODE) && defined(MONO_INTERP_MODE)

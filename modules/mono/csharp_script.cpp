@@ -28,6 +28,7 @@
 // P2 v2: mono_image_get_table_rows + MONO_TABLE_TYPEDEF for typedef iteration.
 #include <mono/metadata/image.h>
 #include <mono/metadata/blob.h>
+#include <mono/metadata/mono-debug.h>
 #include <cstdio>
 #include <cstring>
 
@@ -353,10 +354,44 @@ String CSharpLanguage::get_global_class_name(const String &p_path, String *r_bas
 		return "";
 	}
 
-	// P2 v2: prefer typedef cache when valid (AOT-accurate, no file IO).
-	// The cache key is the class name, which under Godot's file_name==class_name
-	// convention (spec §0.2.5) equals the .cs basename without extension.
+	// P2 v2 [REV-#06]: prefer .pdb reverse-lookup when valid (desktop editor).
+	// The source map uses source file path as key (normalized to res://),
+	// completely lifting the file_name==class_name constraint — a class
+	// declared in res://scripts/actor/player.cs is correctly matched
+	// regardless of the .cs filename.
+	//
+	// On WASM (WEB_ENABLED), the source map is always empty (.pdb unavailable),
+	// so we fall through to the file_name==class_name convention below.
+	// See spike_2026-07-26_p5_pdb.md for details.
 	if (global_classes_valid) {
+#if defined(TOOLS_ENABLED) && !defined(WEB_ENABLED)
+		// Normalize p_path to res:// for lookup (source map keys are normalized).
+		String lookup_path = p_path.replace("\\", "/");
+		String res_path = ProjectSettings::get_singleton() ?
+				ProjectSettings::get_singleton()->get_resource_path() : "";
+		if (!res_path.is_empty()) {
+			String norm_res = res_path.replace("\\", "/");
+			if (lookup_path.begins_with(norm_res)) {
+				lookup_path = "res://" + lookup_path.substr(norm_res.length()).lstrip("/");
+			}
+		}
+		const String *src_match = global_class_source_map.getptr(lookup_path);
+		if (src_match) {
+			const GlobalClassInfo *info = global_class_cache.getptr(*src_match);
+			if (info) {
+				if (r_base_type) *r_base_type = info->base_type;
+				if (r_icon_path) *r_icon_path = "";
+				if (r_is_abstract) *r_is_abstract = info->is_abstract;
+				if (r_is_tool) *r_is_tool = info->is_tool;
+				return *src_match;
+			}
+		}
+#endif // TOOLS_ENABLED && !WEB_ENABLED
+
+		// Fallback: file_name==class_name convention (WASM, or desktop when
+		// .pdb lookup missed — e.g., newly added script not yet built).
+		// Under this convention, the cache key is the class name, which
+		// equals the .cs basename without extension (spec §0.2.5).
 		String candidate = p_path.get_file().get_basename();
 		const GlobalClassInfo *info = global_class_cache.getptr(candidate);
 		if (info) {
@@ -1631,9 +1666,11 @@ void CSharpLanguage::reload_all_pending_scripts() {
 //   - base_type = mono_class_get_name(mono_class_get_parent(klass)); falls back to "Node".
 //   - is_abstract = MONO_TYPE_ATTR_ABSTRACT flag.
 //   - is_tool = [Tool] attribute presence.
+//   - source_path = via mono_debug_lookup_source_location(.ctor) (desktop only, [REV-#06]).
 // Spec ref: §4.P2.2 (typedef iteration + path lookup HashMap).
 void CSharpLanguage::refresh_global_classes() {
 	global_class_cache.clear();
+	global_class_source_map.clear();
 	global_classes_valid = false;
 
 	if (!scripts_assembly) {
@@ -1644,8 +1681,11 @@ void CSharpLanguage::refresh_global_classes() {
 		return;
 	}
 
+	MonoDomain *domain = MonoHost::get_singleton() ? MonoHost::get_singleton()->get_domain() : nullptr;
+
 	int num_typedefs = mono_image_get_table_rows(image, MONO_TABLE_TYPEDEF);
 	int registered = 0;
+	int pdb_hits = 0;
 
 	for (int i = 1; i <= num_typedefs; i++) {
 		uint32_t token = (MONO_TABLE_TYPEDEF << 24) | (uint32_t)i;
@@ -1687,13 +1727,49 @@ void CSharpLanguage::refresh_global_classes() {
 			info.base_type = "Node";
 		}
 
+		// P2 v2 [REV-#06]: .pdb reverse-lookup to map class_name → source_path.
+		// Uses .ctor method (always exists for instantiable classes) to get
+		// a MonoMethod*, then mono_debug_lookup_source_location to get source file.
+		// Desktop only — WASM has no .pdb (see spike_2026-07-26_p5_pdb.md).
+		// Path is normalized to res:// when it falls under the project resource path.
+#if defined(TOOLS_ENABLED) && !defined(WEB_ENABLED)
+		if (domain) {
+			MonoMethod *ctor_method = mono_class_get_method_from_name(klass, ".ctor", 0);
+			if (ctor_method) {
+				MonoDebugSourceLocation *loc = mono_debug_lookup_source_location(ctor_method, 0, domain);
+				if (loc && loc->source_file) {
+					String src_path = String(loc->source_file).replace("\\", "/");
+					// Normalize to res:// if under the project resource path.
+					String res_path = ProjectSettings::get_singleton() ?
+							ProjectSettings::get_singleton()->get_resource_path() : "";
+					if (!res_path.is_empty()) {
+						String norm_res = res_path.replace("\\", "/");
+						if (src_path.begins_with(norm_res)) {
+							src_path = "res://" + src_path.substr(norm_res.length()).lstrip("/");
+						}
+					}
+					info.source_path = src_path;
+					global_class_source_map[src_path] = String(cname);
+					pdb_hits++;
+				}
+				if (loc) {
+					mono_debug_free_source_location(loc);
+				}
+			}
+		}
+#endif // TOOLS_ENABLED && !WEB_ENABLED
+
 		global_class_cache[String(cname)] = info;
 		registered++;
 	}
 
 	global_classes_valid = true;
-	printf("[Mono] P2 refresh_global_classes: %d typedefs scanned, %d global classes registered\n",
+	printf("[Mono] P2 refresh_global_classes: %d typedefs scanned, %d global classes registered",
 			num_typedefs, registered);
+#if defined(TOOLS_ENABLED) && !defined(WEB_ENABLED)
+	printf(", %d .pdb source lookups", pdb_hits);
+#endif
+	printf("\n");
 	fflush(stdout);
 }
 

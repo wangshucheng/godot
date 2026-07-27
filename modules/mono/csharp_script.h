@@ -126,6 +126,7 @@ public:
 };
 
 class CSharpLanguage : public ScriptLanguage {
+	friend class MonoExportPlugin;
 	static CSharpLanguage *singleton;
 	int lang_idx = -1;
 	HashMap<String, MonoAssembly *> loaded_assemblies;
@@ -171,8 +172,17 @@ class CSharpLanguage : public ScriptLanguage {
 		String base_type;
 		bool is_abstract = false;
 		bool is_tool = false;
+		// P2 v2 [REV-#06]: source file path (normalized to res:// when possible).
+		// Populated via mono_debug_lookup_source_location() on the .ctor method.
+		// Empty when .pdb is unavailable (WASM) or source lookup fails.
+		String source_path;
 	};
 	HashMap<String, GlobalClassInfo> global_class_cache;
+	// P2 v2 [REV-#06]: Reverse index (source_path → class_name) for fast lookup
+	// in get_global_class_name(). Built alongside global_class_cache in
+	// refresh_global_classes(). Only populated on desktop (requires .pdb);
+	// empty on WASM (file_name==class_name convention maintained).
+	HashMap<String, String> global_class_source_map;
 	bool global_classes_valid = false;
 
 public:

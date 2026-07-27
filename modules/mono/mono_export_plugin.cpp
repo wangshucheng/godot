@@ -2,6 +2,7 @@
 
 #include "mono_export_plugin.h"
 #include "utils/path_utils.h"
+#include "csharp_script.h"
 #include "core/os/os.h"
 #include "core/io/dir_access.h"
 #include "core/io/file_access.h"
@@ -20,6 +21,40 @@ void MonoExportPlugin::_export_begin(const HashSet<String> &p_features, bool p_d
 	// application/config/name → then sanitizes. The export/runtime pair must
 	// agree byte-for-byte on the .dll filename.
 	String project_name = Path::get_csharp_project_name();
+
+	// P2 v2 [REV-#06]: WASM export lint — verify file_name==class_name convention.
+	// On WASM, .pdb is unavailable so the runtime relies on the
+	// file_name==class_name convention to map .cs files to classes. If a
+	// [GlobalClass] class violates this convention, it will be invisible at
+	// runtime (Add Node dialog / class database). Catch this at export time.
+	// Desktop-only check; runs when exporting to Web platform.
+	bool is_web_export = p_features.has("web");
+	if (is_web_export) {
+		CSharpLanguage *lang = CSharpLanguage::get_singleton();
+		if (lang && lang->global_classes_valid) {
+			int violations = 0;
+			for (const auto &entry : lang->global_class_cache) {
+				const String &class_name = entry.key;
+				const CSharpLanguage::GlobalClassInfo &info = entry.value;
+				if (info.source_path.is_empty()) {
+					continue; // No .pdb source path — cannot check (shouldn't happen on desktop).
+				}
+				String file_basename = info.source_path.get_file().get_basename();
+				if (file_basename != class_name) {
+					print_line(vformat("[Mono Export] WARNING: [GlobalClass] class '%s' is declared in '%s' "
+									   "(file basename '%s' != class name '%s'). On WASM/Web platform, this class "
+									   "will NOT be registered at runtime. Rename the .cs file to match the class name.",
+							class_name, info.source_path, file_basename, class_name));
+					violations++;
+				}
+			}
+			if (violations > 0) {
+				WARN_PRINT(vformat("Mono Export: %d [GlobalClass] class(es) violate the file_name==class_name "
+								   "convention required for WASM/Web platform. See warnings above.",
+						violations));
+			}
+		}
+	}
 
 	// Get the project resource path
 	String project_path = ProjectSettings::get_singleton()->get_resource_path();

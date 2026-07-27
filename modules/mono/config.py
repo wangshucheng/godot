@@ -1,10 +1,10 @@
 def can_build(env, platform):
-    if platform == "web":
-        return False
-    if env.editor_build:
-        env.module_add_dependencies("mono", ["regex"])
-
-    return True
+    # P2-1: 本模块是上游 Godot 4 官方 .NET 模块（Godot.NET.Sdk + SourceGenerators，
+    # 基于 .NET 6+/CoreCLR），不属于本项目的自研 Mono 静态链接方案。
+    # 本项目使用 modules/mono_new/（Mono 6.12 sgen 静态链接 + .NET Framework 4.8 BCL）。
+    # 为避免两套模块并存导致的混淆与潜在类名冲突，此处直接返回 False 禁用编译。
+    # 如需实验性启用上游模块，临时改为 `return True` 并加 `module_mono_enabled=yes`。
+    return False
 
 
 def get_opts(platform):

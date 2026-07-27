@@ -760,6 +760,7 @@ class CSharpEditorExportPlugin : public EditorExportPlugin {
 	GDCLASS(CSharpEditorExportPlugin, EditorExportPlugin);
 
 	String export_path;
+	bool is_debug_build = false;
 
 public:
 	virtual String get_name() const override { return "CSharp"; }
@@ -767,6 +768,7 @@ public:
 protected:
 	virtual void _export_begin(const HashSet<String> &p_features, bool p_debug, const String &p_path, int p_flags) override {
 		export_path = p_path;
+		is_debug_build = p_debug;
 		String exe_dir = OS::get_singleton()->get_executable_path().get_base_dir();
 
 		bool is_windows = p_features.has("windows");
@@ -814,6 +816,102 @@ private:
 		_deploy_nuget_assemblies();
 	}
 
+	// Run IL trimming (monolinker + mono-cil-strip) on an assembly for Web
+	// export. Returns the path to the trimmed DLL, or empty string on failure
+	// (caller falls back to the original untrimmed assembly).
+	//
+	// Trimming is skipped for:
+	//   - Debug builds (keep full debug info for development)
+	//   - Missing Python or Mono SDK tools (graceful degradation)
+	//
+	// Conservative settings: --preserve-public is always set because C++ ->
+	// C# interop via mono_runtime_invoke is invisible to the linker's static
+	// reachability analysis. --strip-debug is only added for release builds.
+	String _trim_assembly(const String &p_input_dll) {
+		if (is_debug_build) {
+			return String(); // skip trimming in debug builds
+		}
+
+		// Locate trim_assemblies.py (ships at modules/mono_new/scripts/)
+		String exe_dir = OS::get_singleton()->get_executable_path().get_base_dir();
+		String script_path = exe_dir.path_join("..").path_join("modules").path_join("mono_new").path_join("scripts").path_join("trim_assemblies.py");
+		if (!FileAccess::exists(script_path)) {
+			script_path = "modules/mono_new/scripts/trim_assemblies.py"; // dev build fallback
+		}
+		if (!FileAccess::exists(script_path)) {
+			MonoLogger::log("Export (web): trim_assemblies.py not found, skipping IL trimming");
+			return String();
+		}
+
+		// Find Python interpreter (same logic as nuget_restore)
+		String python = "python";
+		{
+			String output;
+			int exit_code = -1;
+			Error err = OS::get_singleton()->execute(python, List<String>(), &output, &exit_code);
+			if (err != OK) {
+				python = "python3";
+				err = OS::get_singleton()->execute(python, List<String>(), &output, &exit_code);
+				if (err != OK) {
+					MonoLogger::log("Export (web): Python not found, skipping IL trimming");
+					return String();
+				}
+			}
+		}
+
+		// Prepare output directory (temp dir under the project's .mono/)
+		String project_dir = get_project_dir();
+		String trim_output_dir = project_dir.path_join(".mono").path_join("trimmed");
+		DirAccess::make_dir_recursive_absolute(trim_output_dir);
+
+		// BCL reference for type resolution
+		String bcl_dir = exe_dir.path_join("mono").path_join("lib").path_join("mono").path_join("4.5");
+		if (!FileAccess::exists(bcl_dir.path_join("mscorlib.dll"))) {
+			bcl_dir = exe_dir.path_join("..").path_join("mono").path_join("lib").path_join("mono").path_join("4.5");
+		}
+
+		// Build command args
+		List<String> args;
+		args.push_back(script_path);
+		args.push_back("--input");
+		args.push_back(p_input_dll);
+		args.push_back("--output");
+		args.push_back(trim_output_dir);
+		args.push_back("--preserve-public");
+		args.push_back("--strip-debug");
+
+		if (FileAccess::exists(bcl_dir.path_join("mscorlib.dll"))) {
+			args.push_back("--references");
+			args.push_back(bcl_dir.path_join("mscorlib.dll"));
+		}
+
+		MonoLogger::log(vformat("Export (web): running IL trimming on %s", p_input_dll.get_file()));
+
+		String output;
+		int exit_code = -1;
+		Error err = OS::get_singleton()->execute(python, args, &output, &exit_code, true);
+		if (err != OK || exit_code != 0) {
+			MonoLogger::log_warning(vformat("Export (web): IL trimming failed (exit %d), using untrimmed assembly", exit_code));
+			if (!output.is_empty()) {
+				MonoLogger::log_warning(output);
+			}
+			return String();
+		}
+
+		String trimmed_dll = trim_output_dir.path_join(p_input_dll.get_file());
+		if (FileAccess::exists(trimmed_dll)) {
+			uint64_t orig_size = FileAccess::get_file_as_bytes(p_input_dll).size();
+			uint64_t trimmed_size = FileAccess::get_file_as_bytes(trimmed_dll).size();
+			double reduction = orig_size > 0 ? (1.0 - (double)trimmed_size / orig_size) * 100.0 : 0.0;
+			MonoLogger::log(vformat("Export (web): IL trimming OK: %llu -> %llu bytes (%.1f%% reduction)",
+					(uint64_t)orig_size, (uint64_t)trimmed_size, reduction));
+			return trimmed_dll;
+		}
+
+		MonoLogger::log_warning("Export (web): trimmed assembly not found in output dir, using untrimmed");
+		return String();
+	}
+
 	void _deploy_user_assemblies_web() {
 		String project_name = get_project_name();
 		String project_dir = get_project_dir();
@@ -821,10 +919,17 @@ private:
 
 		String latest_dll = find_latest_project_dll(project_assemblies_dir, project_name);
 		if (!latest_dll.is_empty() && FileAccess::exists(latest_dll)) {
+			// Try IL trimming for release Web exports to reduce .data size.
+			String deploy_dll = latest_dll;
+			String trimmed = _trim_assembly(latest_dll);
+			if (!trimmed.is_empty() && FileAccess::exists(trimmed)) {
+				deploy_dll = trimmed;
+			}
+
 			String target_path = ".mono/assemblies/" + project_name + ".dll";
-			PackedByteArray data = FileAccess::get_file_as_bytes(latest_dll);
+			PackedByteArray data = FileAccess::get_file_as_bytes(deploy_dll);
 			add_file(target_path, data, false);
-			MonoLogger::log(vformat("Export (web): deployed user assembly to %s", target_path));
+			MonoLogger::log(vformat("Export (web): deployed user assembly to %s (%d bytes)", target_path, data.size()));
 		}
 
 		// Deploy NuGet dependency DLLs alongside the user assembly so the
@@ -958,8 +1063,17 @@ private:
 			return;
 		}
 
-		PackedByteArray data = FileAccess::get_file_as_bytes(source_dll);
-		MonoLogger::log(vformat("Export (web): deploying GodotSharp.dll from %s (%d bytes)", source_dll, data.size()));
+		// Try IL trimming for release Web exports to reduce .data size.
+		// GodotSharp.dll benefits from trimming since it contains many
+		// wrapper methods that are never reached by user code.
+		String deploy_dll = source_dll;
+		String trimmed = _trim_assembly(source_dll);
+		if (!trimmed.is_empty() && FileAccess::exists(trimmed)) {
+			deploy_dll = trimmed;
+		}
+
+		PackedByteArray data = FileAccess::get_file_as_bytes(deploy_dll);
+		MonoLogger::log(vformat("Export (web): deploying GodotSharp.dll from %s (%d bytes)", deploy_dll, data.size()));
 		add_file(".mono/assemblies/GodotSharp.dll", data, false);
 	}
 };

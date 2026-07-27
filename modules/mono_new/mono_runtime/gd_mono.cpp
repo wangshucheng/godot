@@ -480,16 +480,26 @@ bool GDMono::initialize() {
 
 		MonoLogger::log(vformat("Found %d candidate user assemblies", user_dll_paths.size()));
 
-		// M3 修复: 对版本化 DLL（形如 Name_<timestamp>.dll）按时间戳升序排序，
-		// 确保最新版本最后加载，配合 get_class/find_class 的反向遍历优先命中新版。
+		// M12 修复: 版本化 DLL（形如 Name_<timestamp>.dll）的去重 + 排序。
+		// 背景: csharp_editor_compile_project 每次产出 Name_<时间戳>.dll，并尽力
+		//   删除旧版本；但 Mono 锁定的 DLL 删除失败会留在 .mono/assemblies/ 中。
+		//   若不处理，下次启动会同时加载多个版本，mono_class_from_name 在多份
+		//   同名类中行为不可预期，热重载后可能命中陈旧类。
+		// 策略:
+		//   1) 解析每个 DLL 文件名，提取 base name（去掉 _<时间戳> 后缀）和时间戳。
+		//   2) 同一 base name 下仅保留时间戳最大的版本（无时间戳视为非版本化，全保留）。
+		//   3) 剩余项按时间戳升序排序，配合 get_class/find_class 的反向遍历确保
+		//      最新版本最后加载、最先被查询。
+		// 注: NuGet 依赖 DLL（无 _<纯数字> 时间戳后缀）不受影响，全部保留。
 		{
-			struct DllSortEntry {
+			struct DllEntry {
 				String path;
-				int64_t timestamp; // -1 = 无时间戳（非版本化），排在最前
+				String base_name;  // 去掉 _<timestamp> 后的 base
+				int64_t timestamp; // -1 = 无时间戳（非版本化）
 			};
-			Vector<DllSortEntry> sorted_entries;
+			Vector<DllEntry> entries;
 			for (const String &p : user_dll_paths) {
-				DllSortEntry e;
+				DllEntry e;
 				e.path = p;
 				e.timestamp = -1;
 				// 提取文件名中最后一个 '_' 后的数字时间戳
@@ -503,17 +513,54 @@ bool GDMono::initialize() {
 					}
 					if (all_digits) {
 						e.timestamp = suffix.to_int();
+						e.base_name = base.substr(0, underscore_pos);
+					} else {
+						e.base_name = base;
+					}
+				} else {
+					e.base_name = base;
+				}
+				entries.push_back(e);
+			}
+
+			// 按 base_name 分组，每组仅保留时间戳最大的版本化 DLL
+			// （非版本化 timestamp=-1 的 DLL 彼此独立，不参与去重）
+			HashMap<String, int64_t> latest_ts_by_base;
+			for (const DllEntry &e : entries) {
+				if (e.timestamp < 0) continue; // 非版本化，跳过
+				int64_t *existing = latest_ts_by_base.getptr(e.base_name);
+				if (!existing || *existing < e.timestamp) {
+					latest_ts_by_base[e.base_name] = e.timestamp;
+				}
+			}
+
+			Vector<DllEntry> deduped;
+			int dropped_count = 0;
+			for (const DllEntry &e : entries) {
+				if (e.timestamp >= 0) {
+					int64_t *latest = latest_ts_by_base.getptr(e.base_name);
+					if (latest && *latest != e.timestamp) {
+						// 旧版本化 DLL，跳过加载（不删除磁盘文件，留给编辑器清理）
+						MonoLogger::log(vformat("Skipping stale versioned assembly: %s (kept ts=%d)",
+								e.path, *latest));
+						dropped_count++;
+						continue;
 					}
 				}
-				sorted_entries.push_back(e);
+				deduped.push_back(e);
 			}
+			if (dropped_count > 0) {
+				MonoLogger::log(vformat("M12 dedup: dropped %d stale versioned DLL(s)", dropped_count));
+			}
+
 			// 升序排序：无时间戳(-1)在前，有时间戳按值升序（最新在最后）
-			std::stable_sort(sorted_entries.ptrw(), sorted_entries.ptrw() + sorted_entries.size(),
-					[](const DllSortEntry &a, const DllSortEntry &b) {
+			std::stable_sort(deduped.ptrw(), deduped.ptrw() + deduped.size(),
+					[](const DllEntry &a, const DllEntry &b) {
 						return a.timestamp < b.timestamp;
 					});
+
 			user_dll_paths.clear();
-			for (const DllSortEntry &e : sorted_entries) {
+			for (const DllEntry &e : deduped) {
 				user_dll_paths.push_back(e.path);
 			}
 		}
@@ -836,7 +883,7 @@ MonoClass *GDMono::get_class(const String &p_namespace, const String &p_class_na
 	CharString ns_utf8 = p_namespace.utf8();
 	CharString class_utf8 = p_class_name.utf8();
 
-	// M3 修复: 反向遍历 user_assemblies，最新加载的程序集优先命中，
+	// M12 修复: 反向遍历 user_assemblies，最新加载的程序集优先命中，
 	// 避免版本化 DLL 并存时找到旧版类。
 	for (int i = user_assemblies.size() - 1; i >= 0; i--) {
 		const UserAssembly &ua = user_assemblies[i];
@@ -918,7 +965,7 @@ MonoClass *GDMono::find_class(const String &p_class_name) {
 	}
 
 	// Last resort: search all user assemblies by iterating images
-	// M3 修复: 反向遍历，最新版本优先
+	// M12 修复: 反向遍历，最新版本优先
 	CharString p_class_name_utf8 = p_class_name.utf8();
 	for (int idx = user_assemblies.size() - 1; idx >= 0; idx--) {
 		const UserAssembly &ua = user_assemblies[idx];

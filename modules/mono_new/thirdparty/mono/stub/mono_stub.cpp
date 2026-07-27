@@ -162,6 +162,18 @@ void* mono_get_single_class(void) { return nullptr; }
 void* mono_get_double_class(void) { return nullptr; }
 void* mono_get_string_class(void) { return nullptr; }
 void* mono_get_object_class(void) { return nullptr; }
+void* mono_get_byte_class(void) { return nullptr; }
 void mono_array_setref(void* array, int index, void* value) {}
+
+// P2 修复: 补全 stub 缺失的 Mono API，使 mono_new_stub=yes 能完整链接验证。
+void mono_gc_wbarrier_set_arrayref(void* arr, void* slot_ptr, void* value) {}
+void* mono_field_get_value_object(void* domain, void* field, void* obj) { return nullptr; }
+void mono_install_unhandled_exception_hook(void* hook, void* user_data) {}
+int mono_is_debugger_attached(void) { return 0; }
+const void* mono_image_get_table_info(void* image, int table_id) { return nullptr; }
+int mono_table_info_get_rows(const void* table) { return 0; }
+void* mono_class_get(void* image, uint32_t type_token) { return nullptr; }
+void* mono_property_get_value(void* prop, void* obj, void** params, void** exc) { return nullptr; }
+char* mono_object_to_string(void* obj, void** exc) { return (char*)""; }
 
 }

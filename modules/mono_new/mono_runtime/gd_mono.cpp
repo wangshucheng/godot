@@ -362,10 +362,11 @@ bool GDMono::initialize() {
 	GDMonoCallable::register_icalls();
 	GDSignalAwaiter::register_icalls();
 
-	// Register ClassDB-generated Node/Node2D/Node3D/Resource/Timer icalls (see glue/glue_cpp/).
+	// Register ClassDB-generated Node/Node2D/Node3D/Control/Resource/Timer icalls (see glue/glue_cpp/).
 	GDMonoInterop::register_node_icalls();
 	GDMonoInterop::register_node2d_icalls();
 	GDMonoInterop::register_node3d_icalls();
+	GDMonoInterop::register_control_icalls();
 	GDMonoInterop::register_resource_icalls();
 	GDMonoInterop::register_timer_icalls();
 

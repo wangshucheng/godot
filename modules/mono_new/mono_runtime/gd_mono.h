@@ -32,7 +32,6 @@ class GDMono {
 
 	// Hot-reload support: track loaded user assembly paths for re-compilation
 	List<String> loaded_assembly_paths;
-	bool domain_reload_supported = false;
 
 	// Note: Mono SDB debugger state is managed by the CSharpDebugger namespace
 	// (see mono_runtime/csharp_debugger.h). The agent must be configured before

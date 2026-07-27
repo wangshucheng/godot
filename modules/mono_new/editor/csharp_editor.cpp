@@ -339,6 +339,17 @@ static String find_csharp_compiler() {
 				cached_compiler = candidate;
 				return cached_compiler;
 			}
+		} else if (candidate.ends_with("mcs.bat")) {
+			// mcs.bat 存在不等于可用：它内部调用 mono.exe 加载 mcs.exe，
+			// 系统 Mono 安装可能不完整（4.5 目录为空）。同时验证 mcs.exe 存在。
+			if (FileAccess::exists(candidate)) {
+				String mcs_exe = candidate.get_base_dir().path_join("..").path_join("lib").path_join("mono").path_join("4.5").path_join("mcs.exe");
+				if (FileAccess::exists(mcs_exe)) {
+					cached_compiler = candidate;
+					return cached_compiler;
+				}
+				MonoLogger::log_warning(vformat("Found %s but %s is missing, skipping mcs", candidate, mcs_exe));
+			}
 		} else {
 			if (FileAccess::exists(candidate)) {
 				cached_compiler = candidate;
@@ -405,15 +416,31 @@ static bool compile_with_mcs(const String &p_compiler, const String &p_project_d
 	args.push_back("-out:" + p_output_dll);
 	args.push_back("-r:" + p_godotsharp_ref);
 
-	// Add reference to System assemblies from Mono BCL
+	// Add reference to System assemblies from Mono BCL.
+	// 优先用引擎自带的 BCL（exe_dir/mono/lib/mono/4.5）， fallback 到系统 Mono。
+	// 同时设置 MONO_PATH 环境变量，让 mcs.bat 调用的 mono.exe 能加载 mscorlib.dll
+	// （系统 Mono 安装可能不完整，4.5 目录可能为空）。
+	String exe_dir = OS::get_singleton()->get_executable_path().get_base_dir();
+	String engine_bcl = exe_dir.path_join("mono").path_join("lib").path_join("mono").path_join("4.5");
+	bool engine_bcl_ok = FileAccess::exists(engine_bcl.path_join("mscorlib.dll"));
+
 	String mono_lib = OS::get_singleton()->get_environment("MONO_PREFIX");
 	if (mono_lib.is_empty()) {
 #ifdef WINDOWS_ENABLED
 		mono_lib = "C:/Program Files/Mono";
 #endif
 	}
-	if (!mono_lib.is_empty()) {
-		String bcl_dir = mono_lib.path_join("lib").path_join("mono").path_join("4.5");
+
+	String bcl_dir;
+	if (engine_bcl_ok) {
+		bcl_dir = engine_bcl;
+		// 让 mcs.bat 内部的 mono.exe 优先从引擎 BCL 加载 mscorlib.dll
+		OS::get_singleton()->set_environment("MONO_PATH", engine_bcl);
+	} else if (!mono_lib.is_empty()) {
+		bcl_dir = mono_lib.path_join("lib").path_join("mono").path_join("4.5");
+	}
+
+	if (!bcl_dir.is_empty()) {
 		args.push_back("-lib:" + bcl_dir);
 	}
 
@@ -448,7 +475,58 @@ static bool compile_with_mcs(const String &p_compiler, const String &p_project_d
 	return true;
 }
 
+// Recursively remove a directory tree. DirAccess::remove() only works on
+// empty directories, so we must empty subtrees bottom-up before removing
+// the directory itself.
+static void remove_dir_recursive(const String &p_dir) {
+	Ref<DirAccess> dir = DirAccess::open(p_dir);
+	if (dir.is_null()) {
+		return;
+	}
+	dir->list_dir_begin();
+	String fname = dir->get_next();
+	while (!fname.is_empty()) {
+		if (fname != "." && fname != "..") {
+			String full = p_dir.path_join(fname);
+			if (dir->current_is_dir()) {
+				remove_dir_recursive(full);
+			} else {
+				Error e = dir->remove(fname);
+				if (e != OK) {
+					MonoLogger::log_warning(vformat("Failed to remove file: %s (err %d)", full, e));
+				}
+			}
+		}
+		fname = dir->get_next();
+	}
+	dir->list_dir_end();
+	dir.unref(); // release handle before removing
+
+	// Now the directory is empty; remove it via its parent.
+	String parent = p_dir.get_base_dir();
+	String base = p_dir.get_file();
+	Ref<DirAccess> parent_dir = DirAccess::open(parent);
+	if (parent_dir.is_valid()) {
+		Error e = parent_dir->remove(base);
+		if (e != OK) {
+			MonoLogger::log_warning(vformat("Failed to remove dir: %s (err %d)", p_dir, e));
+		}
+	}
+}
+
 static bool compile_with_dotnet(const String &p_project_dir, const String &p_csproj_path) {
+	// Clean stale obj/ artifacts before building. dotnet build generates
+	// obj/<Config>/.NETFramework,Version=v4.8.AssemblyAttributes.cs per
+	// configuration; if a previous build used a different config (e.g.
+	// Release), both files linger and CS0579 "duplicate
+	// TargetFrameworkAttribute" fires. Wiping obj/ is the standard remedy.
+	{
+		String obj_dir = p_project_dir.path_join("obj");
+		if (DirAccess::exists(obj_dir)) {
+			remove_dir_recursive(obj_dir);
+		}
+	}
+
 	// Use dotnet build to compile the project
 	List<String> args;
 	args.push_back("build");

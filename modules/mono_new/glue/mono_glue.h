@@ -6,6 +6,7 @@ namespace GDMonoInterop {
 void register_node_icalls();
 void register_node2d_icalls();
 void register_node3d_icalls();
+void register_control_icalls();
 void register_resource_icalls();
 void register_timer_icalls();
 }

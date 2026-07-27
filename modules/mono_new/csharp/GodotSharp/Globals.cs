@@ -128,7 +128,7 @@ namespace Godot
 		}
 
 		[MethodImpl(MethodImplOptions.InternalCall)]
-		internal extern static bool godot_icall_Signal_Connect(long ownerPtr, string signal, long callablePtr, bool oneshot);
+		internal extern static bool godot_icall_Signal_Connect(long ownerPtr, string signal, long callablePtr, uint flags);
 
 		[MethodImpl(MethodImplOptions.InternalCall)]
 		internal extern static bool godot_icall_Signal_Disconnect(long ownerPtr, string signal, long callablePtr);
@@ -146,7 +146,7 @@ namespace Godot
 		{
 			if (disposed) throw new ObjectDisposedException("Signal");
 			if (Owner == null || Name == null || callable == null) return false;
-			bool oneshot = (flags & (uint)GodotObject.ConnectFlags.OneShot) != 0;
+			// H7 扩展: 透传完整 ConnectFlags（Deferred/Persist/OneShot/ReferenceCounted）
 			long callablePtr = callable.nativeCallable;
 			if (callablePtr == 0 && callable.TargetDelegate != null)
 			{
@@ -154,7 +154,7 @@ namespace Godot
 				callable.nativeCallable = callablePtr;
 			}
 			if (callablePtr == 0) return false;
-			return godot_icall_Signal_Connect(Owner.nativeInstance, Name.ToString(), callablePtr, oneshot);
+			return godot_icall_Signal_Connect(Owner.nativeInstance, Name.ToString(), callablePtr, flags);
 		}
 
 		public void Disconnect(Callable callable)

@@ -105,6 +105,16 @@ namespace Godot
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal extern static void godot_icall_Node_RemoveFromGroup(long node, string group);
 
+        // H7 扩展: 常用 Node API 补全
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal extern static void godot_icall_Node_SetProcessMode(long node, long mode);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal extern static long godot_icall_Node_FindChild(long node, string pattern, int flags);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal extern static string godot_icall_Node_GetGroups(long node);
+
         public int GetChildCount()
         {
             return godot_icall_Node_GetChildCount(nativeInstance);
@@ -269,6 +279,51 @@ namespace Godot
         public void RemoveFromGroup(string group)
         {
             godot_icall_Node_RemoveFromGroup(nativeInstance, group);
+        }
+
+        // H7 扩展: 常用 Node API 补全
+
+        /// <summary>
+        /// 设置节点的处理模式（ProcessMode 枚举值）。
+        /// </summary>
+        public void SetProcessMode(long mode)
+        {
+            godot_icall_Node_SetProcessMode(nativeInstance, mode);
+        }
+
+        /// <summary>
+        /// 按名称递归查找子节点。pattern 支持通配符 "*" 和 "?"。
+        /// </summary>
+        public Node FindChild(string pattern, bool recursive = true, bool owned = true)
+        {
+            int flags = (recursive ? 0x1 : 0) | (owned ? 0x2 : 0);
+            long ptr = godot_icall_Node_FindChild(nativeInstance, pattern, flags);
+            if (ptr == 0) return null;
+            return WrapNode(ptr);
+        }
+
+        /// <summary>
+        /// 返回节点所属的组名数组。
+        /// </summary>
+        public string[] GetGroups()
+        {
+            string joined = godot_icall_Node_GetGroups(nativeInstance);
+            if (string.IsNullOrEmpty(joined)) return new string[0];
+            return joined.Split('\n');
+        }
+
+        /// <summary>
+        /// 返回所有外部子节点的数组（便捷方法，等价于循环调用 GetChild）。
+        /// </summary>
+        public Node[] GetChildren()
+        {
+            int count = GetChildCount();
+            Node[] children = new Node[count];
+            for (int i = 0; i < count; i++)
+            {
+                children[i] = GetChild(i);
+            }
+            return children;
         }
 
         // Internal helper to wrap a raw native pointer into a Node subclass.

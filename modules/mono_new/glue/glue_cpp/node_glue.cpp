@@ -262,6 +262,45 @@ static void icall_Node_RemoveFromGroup(int64_t p_node, MonoString *p_group) {
 	node->remove_from_group(StringName(h.to_string()));
 }
 
+// H7 扩展: Node: SetProcessMode — 设置节点的处理模式
+static void icall_Node_SetProcessMode(int64_t p_node, int64_t p_mode) {
+	Node *node = (Node *)(intptr_t)p_node;
+	if (!node) return;
+	node->set_process_mode((Node::ProcessMode)(int)p_mode);
+}
+
+// H7 扩展: Node: FindChild — 按名称递归查找子节点
+// pattern: 子节点名称（支持通配符 "*" 和 "?"）
+// flags: bit 0 = recursive, bit 1 = owned（合并为 int32 以复用 cookie LLII）
+static int64_t icall_Node_FindChild(int64_t p_node, MonoString *p_pattern, int32_t p_flags) {
+	Node *node = (Node *)(intptr_t)p_node;
+	if (!node || !p_pattern) return 0;
+	NodeMonoStringHolder h(p_pattern);
+	if (!h.valid()) return 0;
+	bool recursive = (p_flags & 0x1) != 0;
+	bool owned = (p_flags & 0x2) != 0;
+	Node *child = node->find_child(h.to_string(), recursive, owned);
+	return (int64_t)(intptr_t)child;
+}
+
+// H7 扩展: Node: GetGroups — 返回节点所属的组名（用换行符 join）。
+// 用 join 字符串而非 MonoArray，避免 mono_array_setref 在精简静态库中
+// 未导出的链接问题（与 Resource::GetMetaList 模式一致）。
+// C# 侧用 Split('\n') 还原为 string[]。
+static MonoString *icall_Node_GetGroups(int64_t p_node) {
+	Node *node = (Node *)(intptr_t)p_node;
+	if (!node) return mono_string_new(mono_domain_get(), "");
+	List<Node::GroupInfo> groups;
+	node->get_groups(&groups);
+	String joined;
+	for (const Node::GroupInfo &gi : groups) {
+		if (!joined.is_empty()) joined += "\n";
+		joined += String(gi.name);
+	}
+	CharString cs = joined.utf8();
+	return mono_string_new(mono_domain_get(), cs.get_data());
+}
+
 // --- ClassDB auto-binding framework ---
 // Scans ClassDB for classes inheriting Node and registers generic dispatch
 // icalls that route through Object::call(). This allows C# to call any
@@ -332,6 +371,10 @@ void register_node_icalls() {
 	mono_add_internal_call("Godot.Node::godot_icall_Node_IsInGroup", (const void *)icall_Node_IsInGroup);
 	mono_add_internal_call("Godot.Node::godot_icall_Node_AddToGroup", (const void *)icall_Node_AddToGroup);
 	mono_add_internal_call("Godot.Node::godot_icall_Node_RemoveFromGroup", (const void *)icall_Node_RemoveFromGroup);
+	// H7 扩展: 常用 Node API 补全
+	mono_add_internal_call("Godot.Node::godot_icall_Node_SetProcessMode", (const void *)icall_Node_SetProcessMode);
+	mono_add_internal_call("Godot.Node::godot_icall_Node_FindChild", (const void *)icall_Node_FindChild);
+	mono_add_internal_call("Godot.Node::godot_icall_Node_GetGroups", (const void *)icall_Node_GetGroups);
 
 	MonoLogger::log("Node icalls registered (25 methods: 15 original + 10 new)");
 }

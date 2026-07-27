@@ -9,6 +9,7 @@
 #include "core/string/ustring.h"
 #include "core/object/ref_counted.h"
 #include "core/io/resource.h"
+#include "core/io/resource_saver.h"
 #include "core/variant/variant.h"
 #include <mono/mono-publib.h>
 #include <cstdint>
@@ -170,6 +171,37 @@ static void icall_Resource_TakeOverPath(int64_t p_res, MonoString *p_path) {
 	res->set_path(holder.to_string(), true);
 }
 
+// H7 扩展: Resource::duplicate(flags) -> Resource*
+// 通过 ClassDB 路径调用，避免依赖 Resource::duplicate 的具体签名
+// flags 参考 Node::DuplicateFlags: 0=浅复制, SUBRESOURCES=1 深复制
+static int64_t icall_Resource_Duplicate(int64_t p_res, int64_t p_flags) {
+	Resource *res = (Resource *)(intptr_t)p_res;
+	if (!res) return 0;
+	Variant v_res = res;
+	Variant v_flags = (int64_t)p_flags;
+	const Variant *args[] = { &v_flags };
+	Variant ret;
+	Callable::CallError err;
+	static const StringName method_name("duplicate");
+	ret = res->callp(method_name, args, 1, err);
+	if (err.error != Callable::CallError::CALL_OK) return 0;
+	Resource *dup = Object::cast_to<Resource>(ret);
+	if (!dup) return 0;
+	dup->reference(); // C# 侧 ownsNative=true，析构时会 unreference
+	return (int64_t)(intptr_t)dup;
+}
+
+// H7 扩展: ResourceSaver::save(resource, path, flags) -> int32
+// 返回 OK(0) 或错误码（负值）；用 int32 透传以复用 cookie ILII
+static int32_t icall_ResourceSaver_Save(int64_t p_res, MonoString *p_path, int32_t p_flags) {
+	Resource *res = (Resource *)(intptr_t)p_res;
+	if (!res || !p_path) return (int32_t)ERR_INVALID_PARAMETER;
+	MonoStringHolder holder(p_path);
+	if (!holder) return (int32_t)ERR_INVALID_PARAMETER;
+	Error err = ResourceSaver::save(Ref<Resource>(res), holder.to_string(), (uint32_t)p_flags);
+	return (int32_t)err;
+}
+
 // ClassDB validation: verify Resource / RefCounted have the methods we bind.
 static void scan_and_validate_resource_methods() {
 	const char *resource_methods[] = {
@@ -224,7 +256,11 @@ void register_resource_icalls() {
 	mono_add_internal_call("Godot.Resource::godot_icall_Resource_RemoveMeta", (const void *)icall_Resource_RemoveMeta);
 	mono_add_internal_call("Godot.Resource::godot_icall_Resource_GetMetaList", (const void *)icall_Resource_GetMetaList);
 
-	MonoLogger::log("Resource/RefCounted icalls registered (13 methods)");
+	// H7 扩展: Resource.Duplicate + ResourceSaver.Save
+	mono_add_internal_call("Godot.Resource::godot_icall_Resource_Duplicate", (const void *)icall_Resource_Duplicate);
+	mono_add_internal_call("Godot.ResourceSaver::godot_icall_ResourceSaver_Save", (const void *)icall_ResourceSaver_Save);
+
+	MonoLogger::log("Resource/RefCounted icalls registered (15 methods)");
 }
 
 } // namespace GDMonoInterop

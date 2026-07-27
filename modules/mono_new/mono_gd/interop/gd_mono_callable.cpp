@@ -254,7 +254,7 @@ static void icall_Callable_Call(int64_t p_callable_ptr, MonoArray *p_args, MonoO
 	}
 }
 
-static mono_bool icall_Object_ConnectSignal(int64_t p_native_ptr, MonoString *p_signal, MonoObject *p_callable, mono_bool p_oneshot) {
+static mono_bool icall_Object_ConnectSignal(int64_t p_native_ptr, MonoString *p_signal, MonoObject *p_callable, uint32_t p_flags) {
 	if (!p_native_ptr || !p_signal || !p_callable) return false;
 	Object *obj = (Object *)(intptr_t)p_native_ptr;
 	char *_sig_utf8 = mono_string_to_utf8(p_signal);
@@ -263,11 +263,7 @@ static mono_bool icall_Object_ConnectSignal(int64_t p_native_ptr, MonoString *p_
 	if (!obj->has_signal(signal_name)) return false;
 
 	Callable target = GDMonoCallable::create_callable_from_mono_delegate(p_callable);
-	if (p_oneshot) {
-		return obj->connect(signal_name, target, Object::CONNECT_ONE_SHOT) == OK;
-	} else {
-		return obj->connect(signal_name, target) == OK;
-	}
+	return obj->connect(signal_name, target, p_flags) == OK;
 }
 
 static mono_bool icall_Object_DisconnectSignal(int64_t p_native_ptr, MonoString *p_signal, MonoObject *p_callable) {
@@ -285,7 +281,7 @@ static mono_bool icall_Object_DisconnectSignal(int64_t p_native_ptr, MonoString 
 
 // Connect a signal using a pre-allocated native Callable pointer (from Callable(GodotObject, string)).
 // This avoids delegate marshalling — the callable is already a Godot Callable object.
-static mono_bool icall_Object_ConnectSignalNative(int64_t p_native_ptr, MonoString *p_signal, int64_t p_callable_ptr, mono_bool p_oneshot) {
+static mono_bool icall_Object_ConnectSignalNative(int64_t p_native_ptr, MonoString *p_signal, int64_t p_callable_ptr, uint32_t p_flags) {
 	if (!p_native_ptr || !p_signal || !p_callable_ptr) return false;
 	Object *obj = (Object *)(intptr_t)p_native_ptr;
 	char *_sig_utf8 = mono_string_to_utf8(p_signal);
@@ -294,11 +290,30 @@ static mono_bool icall_Object_ConnectSignalNative(int64_t p_native_ptr, MonoStri
 	if (!obj->has_signal(signal_name)) return false;
 
 	Callable *callable = (Callable *)(intptr_t)p_callable_ptr;
-	if (p_oneshot) {
-		return obj->connect(signal_name, *callable, Object::CONNECT_ONE_SHOT) == OK;
-	} else {
-		return obj->connect(signal_name, *callable) == OK;
-	}
+	return obj->connect(signal_name, *callable, p_flags) == OK;
+}
+
+// H7 扩展: HasSignal icall — 检查对象是否拥有指定信号（含用户信号）
+static mono_bool icall_Object_HasSignal(int64_t p_native_ptr, MonoString *p_signal) {
+	if (!p_native_ptr || !p_signal) return false;
+	Object *obj = (Object *)(intptr_t)p_native_ptr;
+	char *_sig_utf8 = mono_string_to_utf8(p_signal);
+	StringName signal_name(String::utf8(_sig_utf8));
+	mono_free(_sig_utf8);
+	return obj->has_signal(signal_name);
+}
+
+// H7 扩展: IsConnected icall — 检查指定 callable 是否已连接到信号
+static mono_bool icall_Object_IsConnected(int64_t p_native_ptr, MonoString *p_signal, int64_t p_callable_ptr) {
+	if (!p_native_ptr || !p_signal || !p_callable_ptr) return false;
+	Object *obj = (Object *)(intptr_t)p_native_ptr;
+	char *_sig_utf8 = mono_string_to_utf8(p_signal);
+	StringName signal_name(String::utf8(_sig_utf8));
+	mono_free(_sig_utf8);
+	if (!obj->has_signal(signal_name)) return false;
+
+	Callable *callable = (Callable *)(intptr_t)p_callable_ptr;
+	return obj->is_connected(signal_name, *callable);
 }
 
 static mono_bool icall_Object_DisconnectSignalNative(int64_t p_native_ptr, MonoString *p_signal, int64_t p_callable_ptr) {
@@ -315,8 +330,8 @@ static mono_bool icall_Object_DisconnectSignalNative(int64_t p_native_ptr, MonoS
 }
 
 // Signal class icalls — operate on owner + signal name + native callable pointer.
-static mono_bool icall_Signal_Connect(int64_t p_owner_ptr, MonoString *p_signal, int64_t p_callable_ptr, mono_bool p_oneshot) {
-	return icall_Object_ConnectSignalNative(p_owner_ptr, p_signal, p_callable_ptr, p_oneshot);
+static mono_bool icall_Signal_Connect(int64_t p_owner_ptr, MonoString *p_signal, int64_t p_callable_ptr, uint32_t p_flags) {
+	return icall_Object_ConnectSignalNative(p_owner_ptr, p_signal, p_callable_ptr, p_flags);
 }
 
 static mono_bool icall_Signal_Disconnect(int64_t p_owner_ptr, MonoString *p_signal, int64_t p_callable_ptr) {
@@ -429,6 +444,8 @@ void GDMonoCallable::register_icalls() {
 	mono_add_internal_call("Godot.GodotObject::godot_icall_Object_DisconnectSignal", (const void *)icall_Object_DisconnectSignal);
 	mono_add_internal_call("Godot.GodotObject::godot_icall_Object_ConnectSignalNative", (const void *)icall_Object_ConnectSignalNative);
 	mono_add_internal_call("Godot.GodotObject::godot_icall_Object_DisconnectSignalNative", (const void *)icall_Object_DisconnectSignalNative);
+	mono_add_internal_call("Godot.GodotObject::godot_icall_Object_HasSignal", (const void *)icall_Object_HasSignal);
+	mono_add_internal_call("Godot.GodotObject::godot_icall_Object_IsConnected", (const void *)icall_Object_IsConnected);
 	mono_add_internal_call("Godot.Signal::godot_icall_Signal_Connect", (const void *)icall_Signal_Connect);
 	mono_add_internal_call("Godot.Signal::godot_icall_Signal_Disconnect", (const void *)icall_Signal_Disconnect);
 	mono_add_internal_call("Godot.Signal::godot_icall_Signal_IsConnected", (const void *)icall_Signal_IsConnected);

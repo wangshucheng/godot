@@ -56,16 +56,22 @@ namespace Godot
         internal extern static bool godot_icall_Object_EmitSignal(long nativePtr, string signal, object[] args);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        internal extern static bool godot_icall_Object_ConnectSignal(long nativePtr, string signal, Delegate callable, bool oneshot);
+        internal extern static bool godot_icall_Object_ConnectSignal(long nativePtr, string signal, Delegate callable, uint flags);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal extern static bool godot_icall_Object_DisconnectSignal(long nativePtr, string signal, Delegate callable);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        internal extern static bool godot_icall_Object_ConnectSignalNative(long nativePtr, string signal, long callablePtr, bool oneshot);
+        internal extern static bool godot_icall_Object_ConnectSignalNative(long nativePtr, string signal, long callablePtr, uint flags);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal extern static bool godot_icall_Object_DisconnectSignalNative(long nativePtr, string signal, long callablePtr);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal extern static bool godot_icall_Object_HasSignal(long nativePtr, string signal);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal extern static bool godot_icall_Object_IsConnected(long nativePtr, string signal, long callablePtr);
 
 		[MethodImpl(MethodImplOptions.InternalCall)]
 		internal extern static long godot_icall_CreateObject(string className);
@@ -236,18 +242,40 @@ namespace Godot
         {
             if (nativeInstance == 0)
                 throw new ObjectDisposedException(GetType().Name);
-            bool oneshot = (flags & (uint)ConnectFlags.OneShot) != 0;
+            // H7 扩展: 透传完整 ConnectFlags（Deferred/Persist/OneShot/ReferenceCounted）
             // Prefer the native callable path (target+method) when available, since it
             // avoids delegate marshalling. Fall back to the delegate path otherwise.
             if (callable != null && callable.nativeCallable != 0)
             {
-                return godot_icall_Object_ConnectSignalNative(nativeInstance, signal.ToString(), callable.nativeCallable, oneshot);
+                return godot_icall_Object_ConnectSignalNative(nativeInstance, signal.ToString(), callable.nativeCallable, flags);
             }
             if (callable != null && callable.TargetDelegate != null)
             {
-                return godot_icall_Object_ConnectSignal(nativeInstance, signal.ToString(), callable.TargetDelegate, oneshot);
+                return godot_icall_Object_ConnectSignal(nativeInstance, signal.ToString(), callable.TargetDelegate, flags);
             }
             return false;
+        }
+
+        /// <summary>
+        /// 检查对象是否拥有指定信号（包括 [Signal] 声明的用户信号与原生信号）。
+        /// </summary>
+        public bool HasSignal(StringName signal)
+        {
+            if (nativeInstance == 0)
+                throw new ObjectDisposedException(GetType().Name);
+            return godot_icall_Object_HasSignal(nativeInstance, signal.ToString());
+        }
+
+        /// <summary>
+        /// 检查指定 callable 是否已连接到信号。
+        /// </summary>
+        public bool IsConnected(StringName signal, Callable callable)
+        {
+            if (nativeInstance == 0)
+                throw new ObjectDisposedException(GetType().Name);
+            if (callable == null || callable.nativeCallable == 0)
+                return false;
+            return godot_icall_Object_IsConnected(nativeInstance, signal.ToString(), callable.nativeCallable);
         }
 
         public void Disconnect(StringName signal, Callable callable)
@@ -711,6 +739,24 @@ namespace Godot
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal extern static string godot_icall_Resource_GetMetaList(long ptr);
 
+        // H7 扩展: Resource.Duplicate — 复制资源（flags: 0=浅, 1=深, 参考 Node.DuplicateFlags）
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal extern static long godot_icall_Resource_Duplicate(long ptr, long flags);
+
+        /// <summary>
+        /// 复制此资源。flags 用 Node.DuplicateFlags 组合（0 = 浅复制，SUBRESOURCES = 深复制）。
+        /// </summary>
+        public Resource Duplicate(long flags = 0)
+        {
+            if (nativeInstance == 0) return null;
+            long ptr = godot_icall_Resource_Duplicate(nativeInstance, flags);
+            if (ptr == 0) return null;
+            Resource r = new Resource();
+            r.nativeInstance = ptr;
+            r.ownsNative = true;
+            return r;
+        }
+
         // --- Reference counting API ---
         public bool InitRef()
         {
@@ -785,6 +831,23 @@ namespace Godot
             // Use char-based split to avoid regex/string.Split overloads that may
             // trigger mscorlib internal icalls under WASM.
             return joined.Split('\n');
+        }
+    }
+
+    // H7 扩展: ResourceSaver — 静态工具类，保存资源到文件
+    public static class ResourceSaver
+    {
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal extern static int godot_icall_ResourceSaver_Save(long resource, string path, int flags);
+
+        /// <summary>
+        /// 将资源保存到指定路径。返回 0 表示成功，负值为错误码。
+        /// flags: 参考 ResourceSaver.SaverFlags（0 = 默认）。
+        /// </summary>
+        public static int Save(Resource resource, string path, int flags = 0)
+        {
+            if (resource == null || resource.nativeInstance == 0) return -1;
+            return godot_icall_ResourceSaver_Save(resource.nativeInstance, path, flags);
         }
     }
 

@@ -477,5 +477,17 @@ Callable GDMonoCallable::create_callable_from_mono_delegate(MonoObject *p_delega
 }
 
 MonoObject *GDMonoCallable::create_mono_delegate_from_callable(MonoDomain *p_domain, const Callable &p_callable) {
+	// H7 状态: 反向桥接（C++ Callable → C# Delegate）未实现。
+	// 这影响"GDScript 把 Callable 传给 C# 方法"的边缘场景。
+	// 实现思路（未来）:
+	//   1. 在 GodotSharp.dll 中定义 CallableDelegateBridge : Delegate，
+	//      持有 nativeCallable 句柄，Invoke 时调用 godot_icall_Callable_Call。
+	//   2. C++ 侧通过 mono_class_from_name 取该类，mono_object_new 实例化，
+	//      设置 nativeCallable 字段，返回该 delegate。
+	//   3. 需要解决: 委托签名匹配（C++ Callable 是动态 arity，
+	//      而 C# Delegate 是静态签名）—— 通常用 Action<object[]> 包装。
+	// 当前: 返回 nullptr，调用方应自行处理 null 返回。
+	(void)p_domain;
+	(void)p_callable;
 	return nullptr;
 }

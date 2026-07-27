@@ -349,10 +349,100 @@ bool CSharpScript::has_script_signal(const StringName &p_signal) const {
 }
 
 void CSharpScript::get_script_signal_list(List<MethodInfo> *r_signals) const {
-	for (const StringName &sig : script_signals) {
+	// H7 扩展: 用 ScriptSignal.param_type_names 填充 MethodInfo.arguments，
+	// 使编辑器与 emit_signalp 校验路径能识别信号参数签名。
+	for (const KeyValue<StringName, ScriptSignal> &E : script_signals) {
 		MethodInfo mi;
-		mi.name = sig;
+		mi.name = E.value.name;
+		for (int i = 0; i < E.value.param_type_names.size(); i++) {
+			PropertyInfo pi;
+			pi.name = i < E.value.param_names.size() ? E.value.param_names[i] : String("arg") + String::num(i + 1);
+			pi.type = csharp_type_name_to_variant_type(E.value.param_type_names[i]);
+			mi.arguments.push_back(pi);
+		}
 		r_signals->push_back(mi);
+	}
+}
+
+// H7 辅助: PascalCase → snake_case，正确处理连续大写（如 MyHTTPSignal → my_http_signal）。
+// 规则: 在大写字母前插入下划线，但跳过:
+//   - 字符串开头
+//   - 前一个字符已是下划线/小写
+//   - 后一个字符也是小写（避免把 "HTTP" 切成 "h_t_t_p"，应整体作 "http"）
+//   即: 仅在 "小写→大写" 或 "大写→大写且再下一个是小写" 边界插入下划线。
+static String _pascal_to_snake(const String &p_pascal) {
+	String snake;
+	for (int k = 0; k < p_pascal.length(); k++) {
+		char32_t c = p_pascal[k];
+		if (k > 0 && c >= 'A' && c <= 'Z') {
+			char32_t prev = p_pascal[k - 1];
+			bool prev_is_lower = (prev >= 'a' && prev <= 'z') || (prev >= '0' && prev <= '9');
+			bool next_is_lower = (k + 1 < p_pascal.length()) &&
+					(p_pascal[k + 1] >= 'a' && p_pascal[k + 1] <= 'z');
+			if (prev_is_lower || next_is_lower) {
+				snake += '_';
+			}
+		}
+		if (c >= 'A' && c <= 'Z') {
+			snake += String::chr(c + 32);
+		} else {
+			snake += String::chr(c);
+		}
+	}
+	return snake;
+}
+
+// H7 辅助: 解析委托参数列表 "int x, string y, Vector2 pos" → 类型名/参数名对。
+// 用简单状态机扫描，处理泛型（如 List<int>）与数组（int[]）中的逗号。
+static void _parse_delegate_params(const String &p_params_str,
+		Vector<String> &r_type_names, Vector<String> &r_param_names) {
+	if (p_params_str.strip_edges().is_empty()) return;
+
+	Vector<String> params;
+	// 按逗号分割，但忽略 < > 内的逗号（泛型参数）
+	int depth = 0;
+	String current;
+	for (int i = 0; i < p_params_str.length(); i++) {
+		char32_t c = p_params_str[i];
+		if (c == '<') { depth++; current += c; }
+		else if (c == '>') { depth--; current += c; }
+		else if (c == ',' && depth == 0) {
+			params.push_back(current);
+			current = String();
+		} else {
+			current += c;
+		}
+	}
+	if (!current.is_empty()) params.push_back(current);
+
+	for (const String &p : params) {
+		String trimmed = p.strip_edges();
+		if (trimmed.is_empty()) continue;
+		// 形如 "int x" / "Vector2 pos" / "out int x" / "ref string y"
+		// 移除修饰符
+		Vector<String> tokens = trimmed.split(" ", false);
+		if (tokens.is_empty()) continue;
+
+		int type_idx = 0;
+		if (tokens[0] == "out" || tokens[0] == "ref" || tokens[0] == "in" || tokens[0] == "params") {
+			type_idx = 1;
+		}
+		if (tokens.size() <= type_idx) continue;
+
+		// 类型可能是最后一个 token 之前的所有部分（如 List<int>）
+		// 简化: 类型取 type_idx 处 token，名字取最后一个 token
+		String type_name = tokens[type_idx];
+		String param_name = tokens[tokens.size() - 1];
+		// 修掉数组标记 int[] → int
+		if (type_name.ends_with("[]")) {
+			type_name = type_name.substr(0, type_name.length() - 2);
+		}
+		// 跳过无名字的参数（纯类型，如委托声明中省略名）
+		if (type_name == param_name) {
+			param_name = String();
+		}
+		r_type_names.push_back(type_name);
+		r_param_names.push_back(param_name);
 	}
 }
 
@@ -362,12 +452,11 @@ void CSharpScript::get_script_signal_list(List<MethodInfo> *r_signals) const {
 //   public delegate void MySignalEventHandler(int value);
 // The signal name is derived by stripping an optional "EventHandler" suffix
 // and converting PascalCase to snake_case (e.g. MySignalEventHandler → my_signal).
+// H7 扩展: 同时解析委托参数列表，记录参数类型/名字用于 MethodInfo.arguments。
 void CSharpScript::_parse_signal_declarations() {
 	script_signals.clear();
 	if (source.is_empty()) return;
 
-	// Simple line-by-line scanner: find [Signal] attributes and extract the
-	// delegate name from the following line.
 	Vector<String> lines = source.split("\n");
 	for (int i = 0; i < lines.size(); i++) {
 		String line = lines[i].strip_edges();
@@ -377,35 +466,28 @@ void CSharpScript::_parse_signal_declarations() {
 				String dl = lines[j].strip_edges();
 				int delegate_idx = dl.find("delegate");
 				if (delegate_idx < 0) continue;
-				// Extract the name token after "delegate void " or "delegate bool " etc.
-				// Pattern: [modifiers] delegate ReturnType Name(
-				int paren = dl.find("(", delegate_idx);
-				if (paren < 0) continue;
-				String header = dl.substr(delegate_idx, paren - delegate_idx);
-				// Split by whitespace and take the last token (the delegate name).
+				int paren_open = dl.find("(", delegate_idx);
+				if (paren_open < 0) continue;
+				// 找匹配的右括号（可能跨多行，但简化为同行查找）
+				int paren_close = dl.find(")", paren_open);
+				if (paren_close < 0) paren_close = dl.length();
+
+				String header = dl.substr(delegate_idx, paren_open - delegate_idx);
 				Vector<String> tokens = header.split(" ", false);
 				if (tokens.size() >= 2) {
 					String delegate_name = tokens[tokens.size() - 1];
-					// Strip "EventHandler" suffix if present.
 					if (delegate_name.ends_with("EventHandler")) {
 						delegate_name = delegate_name.substr(0, delegate_name.length() - 12);
 					}
-					// Convert PascalCase to snake_case.
-					String snake;
-					for (int k = 0; k < delegate_name.length(); k++) {
-						char32_t c = delegate_name[k];
-						if (k > 0 && c >= 'A' && c <= 'Z') {
-							snake += '_';
-						}
-						if (c >= 'A' && c <= 'Z') {
-							snake += String::chr(c + 32);
-						} else {
-							snake += String::chr(c);
-						}
-					}
-					if (!snake.is_empty()) {
-						script_signals.insert(StringName(snake));
-					}
+					String snake = _pascal_to_snake(delegate_name);
+					if (snake.is_empty()) break;
+
+					// H7 扩展: 解析参数列表
+					String params_str = dl.substr(paren_open + 1, paren_close - paren_open - 1);
+					ScriptSignal ss;
+					ss.name = StringName(snake);
+					_parse_delegate_params(params_str, ss.param_type_names, ss.param_names);
+					script_signals.insert(ss.name, ss);
 				}
 				break;
 			}
@@ -1205,10 +1287,17 @@ bool CSharpInstance::initialize(Object *p_owner) {
 
 	// 信号系统: 将脚本 [Signal] 声明注册到 owner，使 emit/connect 可用。
 	// 信号名已在 CSharpScript::_parse_signal_declarations 中解析为 snake_case。
+	// H7 扩展: 同时注册参数签名（填 MethodInfo.arguments）。
 	if (p_owner) {
-		for (const StringName &sig : script->script_signals) {
+		for (const KeyValue<StringName, CSharpScript::ScriptSignal> &E : script->script_signals) {
 			MethodInfo mi;
-			mi.name = sig;
+			mi.name = E.value.name;
+			for (int i = 0; i < E.value.param_type_names.size(); i++) {
+				PropertyInfo pi;
+				pi.name = i < E.value.param_names.size() ? E.value.param_names[i] : String("arg") + String::num(i + 1);
+				pi.type = csharp_type_name_to_variant_type(E.value.param_type_names[i]);
+				mi.arguments.push_back(pi);
+			}
 			p_owner->add_user_signal(mi);
 		}
 	}

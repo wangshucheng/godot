@@ -35,9 +35,16 @@ class CSharpScript : public Script {
 	String source;
 	bool source_changed_cache = false;
 
-	// Signal names parsed from [Signal] attribute declarations in the C# source.
+	// Signal declarations parsed from [Signal] attribute in C# source.
 	// Populated by _parse_signal_declarations() during source load.
-	HashSet<StringName> script_signals;
+	// H7 扩展: 同时记录信号参数类型名（C# 源码扫描，不依赖程序集加载），
+	// 用于 get_script_signal_list 填充 MethodInfo.arguments。
+	struct ScriptSignal {
+		StringName name;                  // snake_case 信号名
+		Vector<String> param_type_names;  // C# 类型名（"int"/"string"/"Vector2" 等）
+		Vector<String> param_names;       // 参数名（可为空）
+	};
+	HashMap<StringName, ScriptSignal> script_signals;
 
 	// Exported field info parsed from [Export] attribute declarations.
 	// Populated by _parse_export_declarations() during source load.

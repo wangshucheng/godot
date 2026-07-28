@@ -43,6 +43,9 @@ MonoObject *mono_field_get_value_object(MonoDomain *domain, MonoClassField *fiel
 typedef uint16_t mono_unichar2;
 int mono_string_length(MonoString *s);
 mono_unichar2 *mono_string_chars(MonoString *s);
+// P2.1: Array introspection (stock mono 新版 API，精简头文件缺)
+int mono_class_is_array(MonoClass *klass);
+MonoClass *mono_class_get_element_class(MonoClass *klass);
 }
 
 using namespace GDMonoInterop;
@@ -710,6 +713,123 @@ MonoObject *variant_to_mono_object(MonoDomain *p_domain, const Variant &p_varian
 			return obj;
 		}
 
+		// --- PackedXxxArray (P2.1: 10 种打包数组封送) ---
+		// 原始内存直接拷贝到 Mono 数组；值类型数组逐元素 box。
+		case Variant::PACKED_BYTE_ARRAY: {
+			PackedByteArray arr = p_variant;
+			int n = arr.size();
+			MonoArray *mono_arr = mono_array_new(p_domain, mono_get_byte_class(), (uintptr_t)n);
+			if (mono_arr && n > 0) {
+				memcpy(mono_array_addr_with_size(mono_arr, 1, 0), arr.ptr(), (size_t)n);
+			}
+			return (MonoObject *)mono_arr;
+		}
+		case Variant::PACKED_INT32_ARRAY: {
+			PackedInt32Array arr = p_variant;
+			int n = arr.size();
+			MonoArray *mono_arr = mono_array_new(p_domain, mono_get_int32_class(), (uintptr_t)n);
+			if (mono_arr && n > 0) {
+				memcpy(mono_array_addr_with_size(mono_arr, sizeof(int32_t), 0), arr.ptr(), (size_t)n * sizeof(int32_t));
+			}
+			return (MonoObject *)mono_arr;
+		}
+		case Variant::PACKED_INT64_ARRAY: {
+			PackedInt64Array arr = p_variant;
+			int n = arr.size();
+			MonoArray *mono_arr = mono_array_new(p_domain, mono_get_int64_class(), (uintptr_t)n);
+			if (mono_arr && n > 0) {
+				memcpy(mono_array_addr_with_size(mono_arr, sizeof(int64_t), 0), arr.ptr(), (size_t)n * sizeof(int64_t));
+			}
+			return (MonoObject *)mono_arr;
+		}
+		case Variant::PACKED_FLOAT32_ARRAY: {
+			PackedFloat32Array arr = p_variant;
+			int n = arr.size();
+			MonoArray *mono_arr = mono_array_new(p_domain, mono_get_single_class(), (uintptr_t)n);
+			if (mono_arr && n > 0) {
+				memcpy(mono_array_addr_with_size(mono_arr, sizeof(float), 0), arr.ptr(), (size_t)n * sizeof(float));
+			}
+			return (MonoObject *)mono_arr;
+		}
+		case Variant::PACKED_FLOAT64_ARRAY: {
+			PackedFloat64Array arr = p_variant;
+			int n = arr.size();
+			MonoArray *mono_arr = mono_array_new(p_domain, mono_get_double_class(), (uintptr_t)n);
+			if (mono_arr && n > 0) {
+				memcpy(mono_array_addr_with_size(mono_arr, sizeof(double), 0), arr.ptr(), (size_t)n * sizeof(double));
+			}
+			return (MonoObject *)mono_arr;
+		}
+		case Variant::PACKED_STRING_ARRAY: {
+			PackedStringArray arr = p_variant;
+			int n = arr.size();
+			MonoArray *mono_arr = mono_array_new(p_domain, mono_get_string_class(), (uintptr_t)n);
+			if (!mono_arr) return nullptr;
+			for (int i = 0; i < n; i++) {
+				CharString cs = String(arr[i]).utf8();
+				MonoString *s = mono_string_new(p_domain, cs.get_data());
+				MonoString **slot = (MonoString **)mono_array_addr_with_size(mono_arr, sizeof(MonoString *), i);
+				if (slot) *slot = s;
+			}
+			return (MonoObject *)mono_arr;
+		}
+		case Variant::PACKED_VECTOR2_ARRAY: {
+			PackedVector2Array arr = p_variant;
+			int n = arr.size();
+			MonoArray *mono_arr = mono_array_new(p_domain, mono_get_object_class(), (uintptr_t)n);
+			if (!mono_arr) return nullptr;
+			for (int i = 0; i < n; i++) {
+				MonoObject *boxed = box_godot_value<MonoVector2>(p_domain, image, arr[i]);
+				if (boxed) {
+					MonoObject **slot = (MonoObject **)mono_array_addr_with_size(mono_arr, sizeof(MonoObject *), i);
+					if (slot) *slot = boxed;
+				}
+			}
+			return (MonoObject *)mono_arr;
+		}
+		case Variant::PACKED_VECTOR3_ARRAY: {
+			PackedVector3Array arr = p_variant;
+			int n = arr.size();
+			MonoArray *mono_arr = mono_array_new(p_domain, mono_get_object_class(), (uintptr_t)n);
+			if (!mono_arr) return nullptr;
+			for (int i = 0; i < n; i++) {
+				MonoObject *boxed = box_godot_value<MonoVector3>(p_domain, image, arr[i]);
+				if (boxed) {
+					MonoObject **slot = (MonoObject **)mono_array_addr_with_size(mono_arr, sizeof(MonoObject *), i);
+					if (slot) *slot = boxed;
+				}
+			}
+			return (MonoObject *)mono_arr;
+		}
+		case Variant::PACKED_COLOR_ARRAY: {
+			PackedColorArray arr = p_variant;
+			int n = arr.size();
+			MonoArray *mono_arr = mono_array_new(p_domain, mono_get_object_class(), (uintptr_t)n);
+			if (!mono_arr) return nullptr;
+			for (int i = 0; i < n; i++) {
+				MonoObject *boxed = box_godot_value<MonoColor>(p_domain, image, arr[i]);
+				if (boxed) {
+					MonoObject **slot = (MonoObject **)mono_array_addr_with_size(mono_arr, sizeof(MonoObject *), i);
+					if (slot) *slot = boxed;
+				}
+			}
+			return (MonoObject *)mono_arr;
+		}
+		case Variant::PACKED_VECTOR4_ARRAY: {
+			PackedVector4Array arr = p_variant;
+			int n = arr.size();
+			MonoArray *mono_arr = mono_array_new(p_domain, mono_get_object_class(), (uintptr_t)n);
+			if (!mono_arr) return nullptr;
+			for (int i = 0; i < n; i++) {
+				MonoObject *boxed = box_godot_value<MonoVector4>(p_domain, image, arr[i]);
+				if (boxed) {
+					MonoObject **slot = (MonoObject **)mono_array_addr_with_size(mono_arr, sizeof(MonoObject *), i);
+					if (slot) *slot = boxed;
+				}
+			}
+			return (MonoObject *)mono_arr;
+		}
+
 		default:
 			return nullptr;
 	}
@@ -726,6 +846,89 @@ Variant mono_object_to_variant(MonoObject *p_obj, VariantTypeManaged p_hint_type
 	MonoClass *cls = mono_object_get_class(p_obj);
 	if (!cls)
 		return Variant();
+
+	// --- Mono arrays → PackedXxxArray / Array (P2.1 反向封送) ---
+	// 数组没有 "Godot" 命名空间，必须在命名空间检查之前处理。
+	// 通过元素 class 鉴别 byte/int32/int64/single/double/string。
+	if (mono_class_is_array(cls)) {
+		MonoClass *elem_cls = mono_class_get_element_class(cls);
+		intptr_t n = mono_array_length((MonoArray *)p_obj);
+		if (elem_cls == mono_get_byte_class()) {
+			PackedByteArray arr;
+			arr.resize(n);
+			if (n > 0) {
+				memcpy(arr.ptrw(), mono_array_addr_with_size((MonoArray *)p_obj, 1, 0), (size_t)n);
+			}
+			return Variant(arr);
+		}
+		if (elem_cls == mono_get_int32_class()) {
+			PackedInt32Array arr;
+			arr.resize(n);
+			if (n > 0) {
+				memcpy(arr.ptrw(), mono_array_addr_with_size((MonoArray *)p_obj, sizeof(int32_t), 0), (size_t)n * sizeof(int32_t));
+			}
+			return Variant(arr);
+		}
+		if (elem_cls == mono_get_int64_class()) {
+			PackedInt64Array arr;
+			arr.resize(n);
+			if (n > 0) {
+				memcpy(arr.ptrw(), mono_array_addr_with_size((MonoArray *)p_obj, sizeof(int64_t), 0), (size_t)n * sizeof(int64_t));
+			}
+			return Variant(arr);
+		}
+		if (elem_cls == mono_get_single_class()) {
+			PackedFloat32Array arr;
+			arr.resize(n);
+			if (n > 0) {
+				memcpy(arr.ptrw(), mono_array_addr_with_size((MonoArray *)p_obj, sizeof(float), 0), (size_t)n * sizeof(float));
+			}
+			return Variant(arr);
+		}
+		if (elem_cls == mono_get_double_class()) {
+			PackedFloat64Array arr;
+			arr.resize(n);
+			if (n > 0) {
+				memcpy(arr.ptrw(), mono_array_addr_with_size((MonoArray *)p_obj, sizeof(double), 0), (size_t)n * sizeof(double));
+			}
+			return Variant(arr);
+		}
+		if (elem_cls == mono_get_string_class()) {
+			PackedStringArray arr;
+			arr.resize(n);
+			for (intptr_t i = 0; i < n; i++) {
+				MonoString *s = mono_array_get((MonoArray *)p_obj, MonoString *, i);
+				arr.write[i] = mono_string_to_godot_string(s);
+			}
+			return Variant(arr);
+		}
+		// 值类型数组（Vector2/3/4/Color）：unbox 后逐元素填入
+		const char *elem_name = elem_cls ? mono_class_get_name(elem_cls) : nullptr;
+		if (elem_name) {
+			#define GD_TRY_ARR_UNBOX(MonoT, GodotArrT)                                       \
+				if (strcmp(elem_name, ValueTypeTraits<MonoT>::CSharpClassName) == 0) {       \
+					GodotArrT arr;                                                          \
+					arr.resize(n);                                                          \
+					for (intptr_t i = 0; i < n; i++) {                                      \
+						MonoObject *elem = mono_array_get((MonoArray *)p_obj, MonoObject *, i); \
+						if (elem) arr.write[i] = unbox_mono_struct<MonoT>(elem);           \
+					}                                                                       \
+					return Variant(arr);                                                    \
+				}
+			GD_TRY_ARR_UNBOX(MonoVector2, PackedVector2Array)
+			GD_TRY_ARR_UNBOX(MonoVector3, PackedVector3Array)
+			GD_TRY_ARR_UNBOX(MonoVector4, PackedVector4Array)
+			GD_TRY_ARR_UNBOX(MonoColor, PackedColorArray)
+			#undef GD_TRY_ARR_UNBOX
+		}
+		// 其他元素类型 → 退化为普通 Array
+		Array generic;
+		for (intptr_t i = 0; i < n; i++) {
+			MonoObject *elem = mono_array_get((MonoArray *)p_obj, MonoObject *, i);
+			generic.push_back(mono_object_to_variant(elem));
+		}
+		return Variant(generic);
+	}
 
 	// --- Primitive types ---
 	if (mono_class_is_subclass_of(cls, mono_get_boolean_class(), false)) {

@@ -316,8 +316,16 @@ bool GDMono::initialize() {
 #ifdef WEB_ENABLED
 	MonoLogger::log("Setting up interpreter mode (EE_MODE_INTERP, no AOT trampolines)...");
 	mono_jit_set_aot_mode(MONO_EE_MODE_INTERP);
+	// P2.5: MONO_NO_VERIFY 安全让步——WASM 解释器无法通过严格 CIL 验证（BCL 程序集
+	// 也会被拒），故跳过全部验证。这是已知安全让步：恶意构造的 CIL 字节码可绕过类型
+	// 安全检查。缓解措施：
+	//   1. 仅加载构建管线产出的 BCL 与编辑器编译的用户 DLL，不加载不可信第三方 DLL
+	//   2. 用户 DLL 应先在桌面平台（MONO_NO_VERIFY 未设置）跑过完整验证
+	//   3. 生产环境用 monolinker/mono-cil-strip 预处理（见 scripts/trim_assemblies.py）
+	// 详见 AGENTS.md 第八节"安全注意事项"。
 	setenv("MONO_NO_VERIFY", "1", 1);
-	MonoLogger::log("Set MONO_NO_VERIFY=1 to skip CIL verification");
+	MonoLogger::log_warning("MONO_NO_VERIFY=1 (WASM only) — CIL verification skipped, "
+	                        "load only trusted assemblies (BCL + editor-built user DLL)");
 #endif
 
 	MonoLogger::log(vformat("Calling mono_jit_init_version with runtime: %s", runtime_version));

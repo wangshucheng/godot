@@ -292,8 +292,13 @@ namespace Godot
             return new DoubleLongUnion { LongValue = bits }.DoubleValue;
         }
 
+        // P2-10 加固: path null 在 C# 侧预检查，避免把 null MonoString 传给 icall
+        // （WASM 解释器对 null 字符串参数行为不稳定）。返回值用 as T 保持 Godot 3
+        // 静默降级语义：类型不匹配返回 null 而非抛异常。
         public static T Load<T>(string path) where T : GodotObject
         {
+            if (path == null)
+                throw new System.ArgumentNullException(nameof(path));
             GodotObject obj = godot_icall_GD_Load(path);
             return obj as T;
         }

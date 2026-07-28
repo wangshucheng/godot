@@ -48,6 +48,8 @@ MonoClassField *mono_class_get_fields(MonoClass *klass, void *iter);
 const char *mono_field_get_name(MonoClassField *field);
 MonoType *mono_field_get_type(MonoClassField *field);
 int mono_class_is_valuetype(MonoClass *klass);
+// P1.1: 枚举类型判断——mono_type_is_enum 不在精简头文件中，用 mono_class_is_enum + mono_type_get_class 组合
+int mono_class_is_enum(MonoClass *klass);
 }
 
 // Mono type enum constants (from mono/metadata/metadata.h)
@@ -72,6 +74,9 @@ int mono_class_is_valuetype(MonoClass *klass);
 #endif
 #ifndef MONO_TYPE_VALUETYPE
 #define MONO_TYPE_VALUETYPE 0x11
+#endif
+#ifndef MONO_TYPE_OBJECT
+#define MONO_TYPE_OBJECT 0x1c
 #endif
 
 // 属性系统: 将 C# 类型名（源码解析得到）映射到 Godot Variant::Type。
@@ -817,7 +822,28 @@ bool CSharpInstance::set(const StringName &p_name, const Variant &p_value) {
 					return false;
 			}
 		}
+		case MONO_TYPE_OBJECT: {
+			// P1.1: 支持 GodotObject 引用类型字段（如 [Export] Node Target）
+			Object *obj = p_value;
+			if (!obj) {
+				MonoObject *null_obj = nullptr;
+				mono_field_set_value(mono_object, field, &null_obj);
+				return true;
+			}
+			MonoObject *mono_obj = GDMono::get_singleton()->get_mono_object_for_godot_object(obj);
+			if (mono_obj) {
+				mono_field_set_value(mono_object, field, &mono_obj);
+				return true;
+			}
+			return false;
+		}
 		default:
+			// P1.1: 枚举底层类型走 I4 路径
+			if (mono_class_is_enum(mono_type_get_class(ftype))) {
+				int32_t val = (int32_t)(int64_t)p_value;
+				mono_field_set_value(mono_object, field, &val);
+				return true;
+			}
 			return false;
 	}
 }
@@ -974,7 +1000,27 @@ bool CSharpInstance::get(const StringName &p_name, Variant &r_ret) const {
 					return false;
 			}
 		}
+		case MONO_TYPE_OBJECT: {
+			// P1.1: 支持 GodotObject 引用类型字段读取
+			MonoObject *mono_obj = nullptr;
+			mono_field_get_value(mono_object, field, &mono_obj);
+			if (!mono_obj) {
+				r_ret = Variant();
+				return true;
+			}
+			// 从 C# GodotObject 取回 native Object*
+			Object *obj = GDMono::get_singleton()->get_godot_object_for_mono_object(mono_obj);
+			r_ret = Variant(obj);
+			return true;
+		}
 		default:
+			// P1.1: 枚举底层类型走 I4 路径
+			if (mono_class_is_enum(mono_type_get_class(ftype))) {
+				int32_t val = 0;
+				mono_field_get_value(mono_object, field, &val);
+				r_ret = Variant((int64_t)val);
+				return true;
+			}
 			return false;
 	}
 }
@@ -982,21 +1028,50 @@ bool CSharpInstance::get(const StringName &p_name, Variant &r_ret) const {
 void CSharpInstance::get_property_list(List<PropertyInfo> *p_properties) const {
 	// H7 扩展: 暴露 [Export] 字段到检查器/序列化。
 	// 依赖 CSharpScript::exported_fields（由 _parse_export_declarations 填充）。
-	// 仅暴露能在 Variant 与 C# 之间往返的类型（基本类型 + Godot 数学结构）。
+	// P1.1: 支持枚举与 GodotObject 引用类型字段。
 	if (script.is_null()) {
 		return;
 	}
 	for (const CSharpScript::ExportedField &ef : script->exported_fields) {
 		Variant::Type vt = csharp_type_name_to_variant_type(ef.type_name);
-		if (vt == Variant::NIL) {
-			// 未知/不支持的类型——跳过，避免检查器显示空属性
-			continue;
-		}
+
 		PropertyInfo pi;
 		pi.name = ef.name;
-		pi.type = vt;
-		pi.class_name = "C#" + ef.type_name; // 标注来源，方便检查器分组
+		pi.class_name = "C#" + ef.type_name;
 		pi.usage = PROPERTY_USAGE_STORAGE | PROPERTY_USAGE_EDITOR;
+
+		if (vt != Variant::NIL) {
+			// 已知基本类型/数学类型
+			pi.type = vt;
+		} else if (mono_class) {
+			// P1.1: 用 Mono 反射判断枚举或引用类型
+			CharString name_utf8 = String(ef.name).utf8();
+			MonoClassField *field = mono_class_get_field_from_name(mono_class->get_raw_class(), name_utf8.get_data());
+			if (field) {
+				MonoType *ftype = mono_field_get_type(field);
+				if (ftype) {
+					if (mono_class_is_enum(mono_type_get_class(ftype))) {
+						pi.type = Variant::INT;
+						pi.hint = PROPERTY_HINT_ENUM;
+						// TODO: 枚举值列表需要从 C# 反射获取，暂用类名作为 hint_string
+						pi.hint_string = ef.type_name;
+					} else {
+						int ttype = mono_type_get_type(ftype);
+						if (ttype == MONO_TYPE_OBJECT) {
+							pi.type = Variant::OBJECT;
+						} else {
+							continue; // 不支持的类型
+						}
+					}
+				} else {
+					continue;
+				}
+			} else {
+				continue;
+			}
+		} else {
+			continue;
+		}
 		p_properties->push_back(pi);
 	}
 }

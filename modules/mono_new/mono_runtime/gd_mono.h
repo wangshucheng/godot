@@ -51,6 +51,10 @@ public:
 	MonoObject *get_cached_managed_object(ObjectID p_native_id) const;
 	void remove_cached_managed_object(ObjectID p_native_id);
 
+	// P1.1: 属性系统引用类型字段支持——双向查找 Godot Object* 与 MonoObject*
+	MonoObject *get_mono_object_for_godot_object(Object *p_obj) const;
+	Object *get_godot_object_for_mono_object(MonoObject *p_mono_obj) const;
+
 	void post_sync_callback(void (*p_callback)());
 	void post_sync_delegate(MonoObject *p_delegate);
 	void process_sync_callbacks();

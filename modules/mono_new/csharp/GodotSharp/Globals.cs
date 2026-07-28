@@ -322,6 +322,21 @@ namespace Godot
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal extern static string godot_icall_GD_FloatToString(int valBits);
 
+        // P1.2: WASM-safe string primitives. string.Length / string[i] / String.Concat
+        // 在 Mono WASM 解释器下会崩溃（m2n cookie 表缺签名 / CIL 操作码不支持）。
+        // 提供 icall 在 C++ 侧用 mono_string_length / mono_string_chars 实现。
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal extern static int godot_icall_GD_StringLength(string str);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal extern static char godot_icall_GD_StringCharAt(string str, int index);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal extern static string godot_icall_GD_StringConcat(string a, string b);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal extern static string godot_icall_GD_StringConcat3(string a, string b, string c);
+
         // Safe ToString for numeric types - avoids Double.ToString() crash in WASM
         public static string ToString(double val)
         {
@@ -345,20 +360,22 @@ namespace Godot
             return godot_icall_GD_Int64ToString((long)val);
         }
 
-        // Safe string concatenation helper - avoids string.Concat crash in WASM
+        // P1.2: Safe string concatenation - uses icall to avoid string.Length /
+        // String.Concat crash in WASM interpreter. Previous implementation used
+        // a.Length / b.Length which themselves crash in WASM.
         public static string Concat(string a, string b)
         {
             if (a == null) a = string.Empty;
             if (b == null) b = string.Empty;
-            char[] chars = new char[a.Length + b.Length];
-            for (int i = 0; i < a.Length; i++) chars[i] = a[i];
-            for (int i = 0; i < b.Length; i++) chars[a.Length + i] = b[i];
-            return new string(chars);
+            return godot_icall_GD_StringConcat(a, b);
         }
 
         public static string Concat(string a, string b, string c)
         {
-            return Concat(Concat(a, b), c);
+            if (a == null) a = string.Empty;
+            if (b == null) b = string.Empty;
+            if (c == null) c = string.Empty;
+            return godot_icall_GD_StringConcat3(a, b, c);
         }
 
         public static string Concat(params string[] parts)
@@ -367,9 +384,23 @@ namespace Godot
             string result = parts[0] ?? string.Empty;
             for (int i = 1; i < parts.Length; i++)
             {
-                result = Concat(result, parts[i]);
+                result = godot_icall_GD_StringConcat(result, parts[i] ?? string.Empty);
             }
             return result;
+        }
+
+        // P1.2: Safe string length - avoids string.Length crash in WASM
+        public static int StringLength(string str)
+        {
+            if (str == null) return 0;
+            return godot_icall_GD_StringLength(str);
+        }
+
+        // P1.2: Safe string char access - avoids string[i] crash in WASM
+        public static char StringCharAt(string str, int index)
+        {
+            if (str == null) return '\0';
+            return godot_icall_GD_StringCharAt(str, index);
         }
     }
 

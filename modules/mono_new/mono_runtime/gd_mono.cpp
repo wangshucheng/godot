@@ -11,6 +11,7 @@
 #include "core/config/project_settings.h"
 #include "core/io/dir_access.h"
 #include "core/io/file_access.h"
+#include "core/object/object.h"
 #include "core/os/os.h"
 #include "core/os/main_loop.h"
 #include "utils/mono_logger.h"
@@ -111,6 +112,24 @@ void GDMono::remove_cached_managed_object(ObjectID p_native_id) {
 		*gchandle = 0;
 	}
 	object_gchandles.erase(p_native_id);
+}
+
+// P1.1: 属性系统引用类型字段支持
+MonoObject *GDMono::get_mono_object_for_godot_object(Object *p_obj) const {
+	if (!p_obj) return nullptr;
+	return get_cached_managed_object(p_obj->get_instance_id());
+}
+
+Object *GDMono::get_godot_object_for_mono_object(MonoObject *p_mono_obj) const {
+	if (!p_mono_obj) return nullptr;
+	// 反向查找：遍历 object_gchandles 找匹配的 MonoObject
+	for (const KeyValue<ObjectID, uint32_t> &E : object_gchandles) {
+		MonoObject *cached = mono_gchandle_get_target(E.value);
+		if (cached == p_mono_obj) {
+			return ObjectDB::get_instance(E.key);
+		}
+	}
+	return nullptr;
 }
 
 void GDMono::post_sync_callback(void (*p_callback)()) {

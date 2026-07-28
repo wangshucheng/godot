@@ -39,6 +39,10 @@
 
 extern "C" {
 MonoObject *mono_field_get_value_object(MonoDomain *domain, MonoClassField *field, MonoObject *obj);
+// P1.2: String primitives for WASM-safe access
+typedef uint16_t mono_unichar2;
+int mono_string_length(MonoString *s);
+mono_unichar2 *mono_string_chars(MonoString *s);
 }
 
 using namespace GDMonoInterop;
@@ -1597,6 +1601,45 @@ static MonoString *icall_GD_FloatToString(int32_t p_val_bits) {
 	return icall_GD_DoubleToString(double_to_bits((double)fval));
 }
 
+// P1.2: WASM-safe string primitives. string.Length / string[i] / String.Concat
+// 在 Mono WASM 解释器下崩溃，提供 icall 在 C++ 侧用 mono_string_length /
+// mono_string_chars 实现。
+static int32_t icall_GD_StringLength(MonoString *p_str) {
+	if (!p_str) return 0;
+	return (int32_t)mono_string_length(p_str);
+}
+
+static uint16_t icall_GD_StringCharAt(MonoString *p_str, int32_t p_index) {
+	if (!p_str) return 0;
+	int len = (int)mono_string_length(p_str);
+	if (p_index < 0 || p_index >= len) return 0;
+	mono_unichar2 *chars = mono_string_chars(p_str);
+	if (!chars) return 0;
+	return (uint16_t)chars[p_index];
+}
+
+static MonoString *icall_GD_StringConcat(MonoString *p_a, MonoString *p_b) {
+	MonoDomain *domain = mono_domain_get();
+	if (!p_a && !p_b) return mono_string_new(domain, "");
+	if (!p_a) return p_b;
+	if (!p_b) return p_a;
+
+	// 用 String 拼接（C++ 侧安全），再转回 MonoString
+	String result = mono_string_to_godot_string(p_a) + mono_string_to_godot_string(p_b);
+	CharString cs = result.utf8();
+	return mono_string_new(domain, cs.get_data());
+}
+
+static MonoString *icall_GD_StringConcat3(MonoString *p_a, MonoString *p_b, MonoString *p_c) {
+	MonoDomain *domain = mono_domain_get();
+	String a = mono_string_to_godot_string(p_a);
+	String b = mono_string_to_godot_string(p_b);
+	String c = mono_string_to_godot_string(p_c);
+	String result = a + b + c;
+	CharString cs = result.utf8();
+	return mono_string_new(domain, cs.get_data());
+}
+
 // ===== Async/await =====
 
 static void icall_PostSyncCallback(MonoObject *p_delegate) {
@@ -1625,6 +1668,10 @@ static const ICallEntry icall_entries[] = {
 	{ "Godot.GD::godot_icall_GD_DoubleToString",       (const void *)icall_GD_DoubleToString },
 	{ "Godot.GD::godot_icall_GD_Int64ToString",        (const void *)icall_GD_Int64ToString },
 	{ "Godot.GD::godot_icall_GD_FloatToString",        (const void *)icall_GD_FloatToString },
+	{ "Godot.GD::godot_icall_GD_StringLength",         (const void *)icall_GD_StringLength },
+	{ "Godot.GD::godot_icall_GD_StringCharAt",         (const void *)icall_GD_StringCharAt },
+	{ "Godot.GD::godot_icall_GD_StringConcat",         (const void *)icall_GD_StringConcat },
+	{ "Godot.GD::godot_icall_GD_StringConcat3",        (const void *)icall_GD_StringConcat3 },
 
 	// GodotObject / Object
 	{ "Godot.GodotObject::godot_icall_CreateObject",         (const void *)icall_CreateObject },

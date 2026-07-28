@@ -194,9 +194,12 @@ static void icall_SignalAwaiter_Connect(int64_t p_source_ptr, MonoString *p_sign
 	if (!p_source_ptr || !p_signal || gchandle == 0) return;
 
 	Object *source = (Object *)(intptr_t)p_source_ptr;
+	// M3 修复: 检查 mono_string_to_utf8 返回值，避免 null 传给 String::utf8
 	char *utf8 = mono_string_to_utf8(p_signal);
+	if (!utf8) return;
 	StringName signal_name(String::utf8(utf8));
 	mono_free(utf8);
+	if (signal_name == StringName()) return;
 
 	GDSignalAwaiter::connect_signal_awaiter(source, signal_name, gchandle);
 }

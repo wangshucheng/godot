@@ -28,12 +28,14 @@ static void ensure_stack_bounds() {
 		web_stack_base = ems_base;
 		web_stack_end = ems_end;
 	} else {
-		// H5 修复: 栈边界获取失败时使用保守估计并记录警告，
-		// 而非无声地猜测。WASM 线性内存栈通常从高地址向低地址增长，
-		// emscripten 默认栈大小 64KB~5MB。使用 2MB 保守范围。
+		// M7 修复: emscripten 栈边界 API 失败时使用保守估计并显著警告。
+		// 不直接 abort（会导致 WASM 启动失败、黑屏），而是用 2MB 保守范围
+		// 让 GC 能继续工作，同时通过 console.warn + MonoLogger 双通道报警。
+		// WASM 线性内存栈从高地址向低地址增长，emscripten 默认栈 64KB~5MB。
 		EM_ASM({
-			console.warn('[Mono-Web] WARNING: emscripten_stack_get_base/end returned invalid values (' + $0 + '/' + $1 + '), using conservative stack bounds. GC may be unreliable.');
+			console.warn('[Mono-Web] WARNING: emscripten_stack_get_base/end returned invalid values (' + $0 + '/' + $1 + '), using conservative 2MB stack bounds. GC may be unreliable.');
 		}, ems_base, ems_end);
+		MonoLogger::log_warning("emscripten_stack_get_base/end returned invalid values, using conservative 2MB stack bounds for GC");
 		web_stack_base = current_sp + (512 * 1024);  // 向上 512KB
 		web_stack_end = current_sp - (2 * 1024 * 1024);  // 向下 2MB
 	}

@@ -254,12 +254,27 @@ static void icall_Callable_Call(int64_t p_callable_ptr, MonoArray *p_args, MonoO
 	}
 }
 
+// M3 修复: 统一封装 MonoString -> StringName 转换，包含 null 返回值检查。
+// mono_string_to_utf8 在内存分配失败时可能返回 nullptr，直接传给 String::utf8
+// 会触发 strlen(nullptr) 的未定义行为。
+static inline StringName stringname_from_mono_string(MonoString *p_str) {
+	if (!p_str) {
+		return StringName();
+	}
+	char *utf8 = mono_string_to_utf8(p_str);
+	if (!utf8) {
+		return StringName();
+	}
+	StringName name(String::utf8(utf8));
+	mono_free(utf8);
+	return name;
+}
+
 static mono_bool icall_Object_ConnectSignal(int64_t p_native_ptr, MonoString *p_signal, MonoObject *p_callable, uint32_t p_flags) {
 	if (!p_native_ptr || !p_signal || !p_callable) return false;
 	Object *obj = (Object *)(intptr_t)p_native_ptr;
-	char *_sig_utf8 = mono_string_to_utf8(p_signal);
-	StringName signal_name(String::utf8(_sig_utf8));
-	mono_free(_sig_utf8);
+	StringName signal_name = stringname_from_mono_string(p_signal);
+	if (signal_name == StringName()) return false;
 	if (!obj->has_signal(signal_name)) return false;
 
 	Callable target = GDMonoCallable::create_callable_from_mono_delegate(p_callable);
@@ -269,9 +284,8 @@ static mono_bool icall_Object_ConnectSignal(int64_t p_native_ptr, MonoString *p_
 static mono_bool icall_Object_DisconnectSignal(int64_t p_native_ptr, MonoString *p_signal, MonoObject *p_callable) {
 	if (!p_native_ptr || !p_signal || !p_callable) return false;
 	Object *obj = (Object *)(intptr_t)p_native_ptr;
-	char *_sig_utf8 = mono_string_to_utf8(p_signal);
-	StringName signal_name(String::utf8(_sig_utf8));
-	mono_free(_sig_utf8);
+	StringName signal_name = stringname_from_mono_string(p_signal);
+	if (signal_name == StringName()) return false;
 	if (!obj->has_signal(signal_name)) return false;
 
 	Callable target = GDMonoCallable::create_callable_from_mono_delegate(p_callable);
@@ -284,9 +298,8 @@ static mono_bool icall_Object_DisconnectSignal(int64_t p_native_ptr, MonoString 
 static mono_bool icall_Object_ConnectSignalNative(int64_t p_native_ptr, MonoString *p_signal, int64_t p_callable_ptr, uint32_t p_flags) {
 	if (!p_native_ptr || !p_signal || !p_callable_ptr) return false;
 	Object *obj = (Object *)(intptr_t)p_native_ptr;
-	char *_sig_utf8 = mono_string_to_utf8(p_signal);
-	StringName signal_name(String::utf8(_sig_utf8));
-	mono_free(_sig_utf8);
+	StringName signal_name = stringname_from_mono_string(p_signal);
+	if (signal_name == StringName()) return false;
 	if (!obj->has_signal(signal_name)) return false;
 
 	Callable *callable = (Callable *)(intptr_t)p_callable_ptr;
@@ -297,9 +310,8 @@ static mono_bool icall_Object_ConnectSignalNative(int64_t p_native_ptr, MonoStri
 static mono_bool icall_Object_HasSignal(int64_t p_native_ptr, MonoString *p_signal) {
 	if (!p_native_ptr || !p_signal) return false;
 	Object *obj = (Object *)(intptr_t)p_native_ptr;
-	char *_sig_utf8 = mono_string_to_utf8(p_signal);
-	StringName signal_name(String::utf8(_sig_utf8));
-	mono_free(_sig_utf8);
+	StringName signal_name = stringname_from_mono_string(p_signal);
+	if (signal_name == StringName()) return false;
 	return obj->has_signal(signal_name);
 }
 
@@ -307,9 +319,8 @@ static mono_bool icall_Object_HasSignal(int64_t p_native_ptr, MonoString *p_sign
 static mono_bool icall_Object_IsConnected(int64_t p_native_ptr, MonoString *p_signal, int64_t p_callable_ptr) {
 	if (!p_native_ptr || !p_signal || !p_callable_ptr) return false;
 	Object *obj = (Object *)(intptr_t)p_native_ptr;
-	char *_sig_utf8 = mono_string_to_utf8(p_signal);
-	StringName signal_name(String::utf8(_sig_utf8));
-	mono_free(_sig_utf8);
+	StringName signal_name = stringname_from_mono_string(p_signal);
+	if (signal_name == StringName()) return false;
 	if (!obj->has_signal(signal_name)) return false;
 
 	Callable *callable = (Callable *)(intptr_t)p_callable_ptr;
@@ -319,9 +330,8 @@ static mono_bool icall_Object_IsConnected(int64_t p_native_ptr, MonoString *p_si
 static mono_bool icall_Object_DisconnectSignalNative(int64_t p_native_ptr, MonoString *p_signal, int64_t p_callable_ptr) {
 	if (!p_native_ptr || !p_signal || !p_callable_ptr) return false;
 	Object *obj = (Object *)(intptr_t)p_native_ptr;
-	char *_sig_utf8 = mono_string_to_utf8(p_signal);
-	StringName signal_name(String::utf8(_sig_utf8));
-	mono_free(_sig_utf8);
+	StringName signal_name = stringname_from_mono_string(p_signal);
+	if (signal_name == StringName()) return false;
 	if (!obj->has_signal(signal_name)) return false;
 
 	Callable *callable = (Callable *)(intptr_t)p_callable_ptr;
@@ -341,9 +351,8 @@ static mono_bool icall_Signal_Disconnect(int64_t p_owner_ptr, MonoString *p_sign
 static mono_bool icall_Signal_IsConnected(int64_t p_owner_ptr, MonoString *p_signal, int64_t p_callable_ptr) {
 	if (!p_owner_ptr || !p_signal || !p_callable_ptr) return false;
 	Object *obj = (Object *)(intptr_t)p_owner_ptr;
-	char *_sig_utf8 = mono_string_to_utf8(p_signal);
-	StringName signal_name(String::utf8(_sig_utf8));
-	mono_free(_sig_utf8);
+	StringName signal_name = stringname_from_mono_string(p_signal);
+	if (signal_name == StringName()) return false;
 	if (!obj->has_signal(signal_name)) return false;
 
 	Callable *callable = (Callable *)(intptr_t)p_callable_ptr;
@@ -353,9 +362,8 @@ static mono_bool icall_Signal_IsConnected(int64_t p_owner_ptr, MonoString *p_sig
 static void icall_Signal_Emit(int64_t p_owner_ptr, MonoString *p_signal, MonoArray *p_args) {
 	if (!p_owner_ptr || !p_signal) return;
 	Object *obj = (Object *)(intptr_t)p_owner_ptr;
-	char *_sig_utf8 = mono_string_to_utf8(p_signal);
-	StringName signal_name(String::utf8(_sig_utf8));
-	mono_free(_sig_utf8);
+	StringName signal_name = stringname_from_mono_string(p_signal);
+	if (signal_name == StringName()) return;
 	if (!obj->has_signal(signal_name)) return;
 
 	int argcount = p_args ? mono_array_length(p_args) : 0;

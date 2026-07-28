@@ -1544,18 +1544,9 @@ static int64_t icall_SceneTree_GetCurrentScene(int64_t p_tree) {
 }
 
 // ===== ResourceLoader / PackedScene =====
-
-static int64_t icall_ResourceLoader_Load(MonoString *p_path) {
-	if (!p_path) return 0;
-	char *path = mono_string_to_utf8(p_path);
-	if (!path) return 0;
-	String s = String::utf8(path);
-	mono_free(path);
-	Ref<Resource> res = ResourceLoader::load(s);
-	if (res.is_null()) return 0;
-	res->reference();
-	return (int64_t)(intptr_t)res.ptr();
-}
+// M4 修复: icall_ResourceLoader_Load 已删除（与 icall_GD_Load 功能重复、所有权
+// 语义不一致）。C# 侧 LoadPackedScene 改用 godot_icall_GD_Load（wrapper 模式，
+// 由 GC 管理生命周期，避免手动 reference/unreference 不匹配）。
 
 static int64_t icall_PackedScene_Instantiate(int64_t p_scene) {
 	if (!p_scene) return 0;
@@ -1634,7 +1625,6 @@ static const ICallEntry icall_entries[] = {
 	{ "Godot.GD::godot_icall_GD_DoubleToString",       (const void *)icall_GD_DoubleToString },
 	{ "Godot.GD::godot_icall_GD_Int64ToString",        (const void *)icall_GD_Int64ToString },
 	{ "Godot.GD::godot_icall_GD_FloatToString",        (const void *)icall_GD_FloatToString },
-	{ "Godot.GD::godot_icall_ResourceLoader_Load",     (const void *)icall_ResourceLoader_Load },
 
 	// GodotObject / Object
 	{ "Godot.GodotObject::godot_icall_CreateObject",         (const void *)icall_CreateObject },

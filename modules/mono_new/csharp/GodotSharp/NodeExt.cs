@@ -583,20 +583,15 @@ namespace Godot
     // GD extensions - adds resource loading.
     public static partial class GD
     {
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        internal extern static long godot_icall_ResourceLoader_Load(string path);
-
+        // M4 修复: 统一用 icall_GD_Load（wrapper 模式），删除 icall_ResourceLoader_Load
+        // （裸指针 + 手动 reference 模式）。两者功能重复，wrapper 模式由 GC 管理生命
+        // 周期更安全，避免手动 reference/unreference 不匹配导致的泄漏或双释放。
         public static PackedScene LoadPackedScene(string path)
         {
-            long ptr = godot_icall_ResourceLoader_Load(path);
-            if (ptr == 0) return null;
-            // H4 修复: C++ 侧 icall_ResourceLoader_Load 调用了 res->reference()，
-            // 因此 C# 侧必须设置 ownsNative=true，这样 Dispose/终结器会调用
-            // godot_icall_Object_Free 来 unreference，避免引用计数泄漏。
-            PackedScene ps = new PackedScene();
-            ps.nativeInstance = ptr;
-            ps.ownsNative = true;
-            return ps;
+            if (path == null)
+                throw new System.ArgumentNullException(nameof(path));
+            GodotObject obj = godot_icall_GD_Load(path);
+            return obj as PackedScene;
         }
     }
 

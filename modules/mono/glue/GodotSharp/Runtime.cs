@@ -519,6 +519,20 @@ namespace Godot {
             Bridge.godot_icall_Test_ResetCounters();
         }
 
+        // ===== Phase 0.1: Delegate probe helpers =====
+        // Register a delegate (Action) for cross-language invocation tests.
+        public static int TestRegisterDelegateProbe(System.Action del) {
+            return Bridge.godot_icall_Test_RegisterDelegateProbe(del);
+        }
+        // Invoke the registered delegate via C++ mono_runtime_invoke(delegate.Invoke).
+        public static int TestInvokeDelegateViaMRI() {
+            return Bridge.godot_icall_Test_InvokeDelegateViaMRI();
+        }
+        // Invoke the registered delegate via C++ mono_compile_method + function pointer.
+        public static int TestInvokeDelegateViaFtnPtr() {
+            return Bridge.godot_icall_Test_InvokeDelegateViaFtnPtr();
+        }
+
         // ===== WeChat minigame audio adapter (InnerAudioContext-based) =====
         // Desktop platforms: stubs (return 0 / no-op).
         // WeChat minigame: routes to GameGlobal.GodotAudioWX via EM_ASM.

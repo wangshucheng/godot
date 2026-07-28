@@ -463,6 +463,23 @@ namespace Godot {
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern void godot_icall_Test_ResetCounters();
 
+        // ===== Phase 0.1: Delegate probe icalls =====
+        // Receives a delegate (as MonoObject) and pins it with a strong GCHandle.
+        // Returns 1 on success, 0 on failure.
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_RegisterDelegateProbe(object delegateObj);
+
+        // Invokes the registered delegate via mono_runtime_invoke on its Invoke method.
+        // Returns 1 if mono_runtime_invoke succeeded without exception, 0 otherwise.
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_InvokeDelegateViaMRI();
+
+        // Invokes the registered delegate via mono_compile_method +
+        // direct function pointer call (no mono_runtime_invoke).
+        // Returns 1 on success, 0 on failure.
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Test_InvokeDelegateViaFtnPtr();
+
         // Register the GodotSynchronizationContext singleton for instance-based
         // pumping. Called from Runtime.Initialize() to avoid static method
         // dispatch via mono_runtime_invoke (WASM interpreter signature mismatch).

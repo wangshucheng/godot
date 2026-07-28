@@ -2454,6 +2454,119 @@ static int32_t godot_icall_Test_GetClassCategory(MonoString *className) {
 	return 0;
 }
 
+// ============================================================================
+// Phase 0.1: Delegate probe icalls
+//
+// 验证 delegate 在 Mono 6.12 interpreter/AOT 下的可用性，为阶段 0
+// （通知路径 SG 化）提供决策依据。
+//
+// 三个测试路径：
+//   Test 2: godot_icall_Test_InvokeDelegateViaMRI
+//           用 mono_runtime_invoke 调用 delegate.Invoke
+//   Test 3: godot_icall_Test_InvokeDelegateViaFtnPtr
+//           用 mono_method_get_function_pointer 拿到函数指针直接调用
+// ============================================================================
+
+static MonoObject *_g_delegate_probe = nullptr;
+static uint32_t _g_delegate_probe_gchandle = 0;
+static MonoMethod *_g_delegate_invoke_method = nullptr;
+
+// 接收 C# 侧传入的 delegate 对象，保活并预解析 Invoke 方法。
+// 返回 1 成功，0 失败。
+static int32_t godot_icall_Test_RegisterDelegateProbe(MonoObject *delegate_obj) {
+	if (!delegate_obj) {
+		printf("[PROBE] RegisterDelegateProbe: delegate_obj is null\n");
+		return 0;
+	}
+
+	// 释放旧 delegate
+	if (_g_delegate_probe_gchandle != 0) {
+		mono_gchandle_free(_g_delegate_probe_gchandle);
+		_g_delegate_probe_gchandle = 0;
+	}
+	_g_delegate_probe = nullptr;
+	_g_delegate_invoke_method = nullptr;
+
+	// 强 GCHandle 保活，防止 GC 回收
+	_g_delegate_probe_gchandle = mono_gchandle_new(delegate_obj, false);
+	_g_delegate_probe = delegate_obj;
+
+	// 预解析 Invoke 方法（无参）
+	MonoClass *delegate_class = mono_object_get_class(delegate_obj);
+	if (!delegate_class) {
+		printf("[PROBE] RegisterDelegateProbe: failed to get delegate class\n");
+		return 0;
+	}
+	_g_delegate_invoke_method = mono_class_get_method_from_name(delegate_class, "Invoke", 0);
+	if (!_g_delegate_invoke_method) {
+		// delegate 可能有多个 Invoke 重载，尝试不指定参数数量
+		_g_delegate_invoke_method = mono_class_get_method_from_name(delegate_class, "Invoke", -1);
+	}
+	if (!_g_delegate_invoke_method) {
+		printf("[PROBE] RegisterDelegateProbe: Invoke method not found on class '%s'\n",
+			   mono_class_get_name(delegate_class));
+		return 0;
+	}
+
+	printf("[PROBE] RegisterDelegateProbe: OK (class=%s, gchandle=%u)\n",
+		   mono_class_get_name(delegate_class), _g_delegate_probe_gchandle);
+	return 1;
+}
+
+// 通过 mono_runtime_invoke 调用 delegate.Invoke。
+// 返回 1 成功（无异常），0 失败（异常或状态无效）。
+static int32_t godot_icall_Test_InvokeDelegateViaMRI() {
+	if (!_g_delegate_probe || !_g_delegate_invoke_method) {
+		printf("[PROBE] InvokeViaMRI: delegate not registered\n");
+		return 0;
+	}
+
+	MonoObject *exc = nullptr;
+	mono_runtime_invoke(_g_delegate_invoke_method, _g_delegate_probe, nullptr, &exc);
+	if (exc) {
+		MonoClass *exc_class = mono_object_get_class(exc);
+		const char *exc_name = exc_class ? mono_class_get_name(exc_class) : "(unknown)";
+		printf("[PROBE] InvokeViaMRI: exception %s\n", exc_name ? exc_name : "?");
+		// 清理 pending exception（P5 [REV-#11] 同款修复）
+		mono_runtime_set_pending_exception(nullptr, true);
+		return 0;
+	}
+	return 1;
+}
+
+// 通过 mono_compile_method 拿到函数指针直接调用（绕过 mono_runtime_invoke）。
+// 返回 1 成功，0 失败（函数指针获取失败或调用异常）。
+static int32_t godot_icall_Test_InvokeDelegateViaFtnPtr() {
+	if (!_g_delegate_probe || !_g_delegate_invoke_method) {
+		printf("[PROBE] InvokeViaFtnPtr: delegate not registered\n");
+		return 0;
+	}
+
+	// mono_compile_method 触发 JIT 编译并返回函数指针。
+	// 在 interpreter-only 模式下（WASM INTERP_LLVMONLY），返回 interpreter thunk。
+	// 注意：Mono 6.12 头文件中无 mono_method_get_function_pointer，用此 API 替代。
+	void *ftn_ptr = mono_compile_method(_g_delegate_invoke_method);
+	if (!ftn_ptr) {
+		printf("[PROBE] InvokeViaFtnPtr: mono_compile_method returned NULL\n");
+		return 0;
+	}
+
+	printf("[PROBE] InvokeViaFtnPtr: ftn_ptr=%p\n", ftn_ptr);
+
+	// delegate.Invoke 是实例方法，调用约定：
+	//   void Invoke(MonoObject *this_ptr)
+	// 第一个参数是 delegate 对象本身（this）
+	typedef void (*InvokeFn)(MonoObject *);
+	InvokeFn fn = (InvokeFn)ftn_ptr;
+
+	// 注意：直接函数指针调用绕过 mono_runtime_invoke 的异常捕获，
+	// 若 delegate 内部抛异常会直接传播到 C++，无法被 try/catch 捕获。
+	// 这里依赖 C# 侧不抛异常作为前提（探针 OnDelegateInvoked 仅 ++计数）。
+	fn(_g_delegate_probe);
+
+	return 1;
+}
+
 // Register the GodotSynchronizationContext singleton for instance-based
 // pumping. Called from C# Runtime.Initialize() after Install().
 static void godot_icall_RegisterSyncContext(MonoObject *instance) {
@@ -3018,6 +3131,11 @@ void godot_register_icalls() {
 	mono_add_internal_call("Godot.Bridge::godot_icall_Test_GetPassCount", (const void *)godot_icall_Test_GetPassCount);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Test_GetFailCount", (const void *)godot_icall_Test_GetFailCount);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Test_ResetCounters", (const void *)godot_icall_Test_ResetCounters);
+
+	// Phase 0.1: Delegate probe icalls (验证 delegate 在 WASM interpreter 下的可用性)
+	mono_add_internal_call("Godot.Bridge::godot_icall_Test_RegisterDelegateProbe", (const void *)godot_icall_Test_RegisterDelegateProbe);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Test_InvokeDelegateViaMRI", (const void *)godot_icall_Test_InvokeDelegateViaMRI);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Test_InvokeDelegateViaFtnPtr", (const void *)godot_icall_Test_InvokeDelegateViaFtnPtr);
 
 	// Sync context registration (C# -> C++ to register singleton for instance-based pumping)
 	mono_add_internal_call("Godot.Bridge::godot_icall_RegisterSyncContext", (const void *)godot_icall_RegisterSyncContext);

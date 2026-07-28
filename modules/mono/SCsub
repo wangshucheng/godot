@@ -27,6 +27,7 @@ mono_sources = [
     "mono_bridge.cpp",
     "mono_gc_bridge.cpp",
     "csharp_script.cpp",
+    "csharp_notify_dispatch.cpp",  # Phase 0.2: per-instance notification dispatch cache
     "mono_aot.cpp",
     "mono_aot_modules.cpp",
     "mono_export_plugin.cpp",

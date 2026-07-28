@@ -5,6 +5,8 @@
 #include "core/doc_data.h"
 #include "core/templates/hash_map.h"
 
+#include "csharp_notify_dispatch.h"
+
 typedef struct _MonoClass MonoClass;
 typedef struct _MonoObject MonoObject;
 typedef struct _MonoImage MonoImage;
@@ -95,14 +97,25 @@ public:
 
 class CSharpInstance : public ScriptInstance {
 	friend class CSharpScript;
+	friend class CSharpNotifyDispatch;
 
 	Object *owner = nullptr;
 	Ref<CSharpScript> script;
 	MonoObject *mono_object = nullptr;
 	uint32_t gchandle = 0;
 
+	// Phase 0.2: per-instance notification dispatch cache.
+	// Eliminates per-notification find_method() + overridden-check overhead.
+	// See docs/spike_2026-07-28_phase0.2_notify_dispatch.md.
+	CSharpNotifyDispatch notify_dispatch_;
+
 	MonoObject *invoke_method(MonoMethod *p_method, const Variant **p_args, int p_argcount, Variant &r_result, Callable::CallError &r_error);
 	MonoMethod *find_method(const StringName &p_method, int p_argcount = -1);
+
+	// Phase 0.2: resolve a notification entry (look up method + declaring class).
+	void resolve_notify_entry(NotifyEntryIndex p_index);
+	// Phase 0.2: invoke a cached notification entry via mono_runtime_invoke.
+	void invoke_cached_notify(NotifyEntryIndex p_index, int p_notification);
 
 public:
 	Object *get_owner() override { return owner; }

@@ -1260,74 +1260,134 @@ void CSharpInstance::notification(int p_notification, bool p_reversed) {
 
 	MONO_LOG("[Mono] notification(id=%d) for '%s'\n", p_notification, script->class_name.utf8().get_data());
 
-	struct NotificationMap {
-		int notification;
-		const char *method_name;
-		int arg_count;
-	};
-
-	static const NotificationMap notif_map[] = {
-		{Node::NOTIFICATION_READY, "_Ready", 0},
-		{Node::NOTIFICATION_ENTER_TREE, "_EnterTree", 0},
-		{Node::NOTIFICATION_EXIT_TREE, "_ExitTree", 0},
-		{Node::NOTIFICATION_PROCESS, "_Process", 1},
-		{Node::NOTIFICATION_PHYSICS_PROCESS, "_PhysicsProcess", 1},
-		{-1, nullptr, 0}
-	};
-
-	for (int i = 0; notif_map[i].method_name != nullptr; i++) {
-		if (notif_map[i].notification == p_notification) {
-			MonoMethod *m = find_method(notif_map[i].method_name, notif_map[i].arg_count);
-			if (m) {
-				// Only call if the method is actually overridden by the script class.
-				// The Mono WASM interpreter has a bug with virtual dispatch for
-				// inherited (non-overridden) methods that causes "function signature
-				// mismatch". Since base class implementations are empty, skipping
-				// them is safe and correct.
-				MonoClass *method_declaring_class = mono_method_get_class(m);
-				if (script.is_valid() && script->mono_class &&
-					method_declaring_class != script->mono_class) {
-					break;
-				}
-
-				MONO_LOG("[Mono] notification: calling %s for '%s'\n", notif_map[i].method_name, script->class_name.utf8().get_data());
-				Variant result;
-				Callable::CallError err;
-				if (notif_map[i].arg_count == 1) {
-					double delta = 0.0;
-					if (owner->is_class("Node")) {
-						Node *node = Object::cast_to<Node>(owner);
-						if (p_notification == Node::NOTIFICATION_PROCESS) {
-							delta = (double)node->get_process_delta_time();
-						} else if (p_notification == Node::NOTIFICATION_PHYSICS_PROCESS) {
-							delta = (double)node->get_physics_process_delta_time();
-						}
-					}
-					Variant arg = delta;
-					const Variant *args[1] = { &arg };
-					invoke_method(m, args, 1, result, err);
-				} else {
-					invoke_method(m, nullptr, 0, result, err);
-				}
-			}
-			break;
+	// Phase 0.2: dispatch via cached entry table.
+	// See docs/spike_2026-07-28_phase0.2_notify_dispatch.md.
+	//
+	// High-frequency notifications (READY/ENTER_TREE/EXIT_TREE/PROCESS/
+	// PHYSICS_PROCESS) have dedicated entries resolved lazily on first use.
+	// Other IDs (e.g., NOTIFICATION_DRAW, NOTIFICATION_INTERNAL_PROCESS) fall
+	// through to the generic _Notification(int) path below.
+	const NotifySpec *spec = csharp_notify_find_spec(p_notification);
+	if (spec) {
+		NotifyEntryIndex idx = csharp_notify_spec_entry_index(spec);
+		NotifyEntry &entry = notify_dispatch_.get_entry(idx);
+		if (!entry.resolved) {
+			resolve_notify_entry(idx);
+		}
+		if (entry.method) {
+			invoke_cached_notify(idx, p_notification);
 		}
 	}
 
-	MonoMethod *on_notification = find_method("_Notification", 1);
-	if (on_notification) {
+	// _Notification(int) is always called for any notification ID, regardless
+	// of whether a dedicated entry above handled it. This mirrors Godot's
+	// C++ notification flow: virtual _Ready() + virtual _Notification(int).
+	NotifyEntry &notif_entry = notify_dispatch_.get_entry(NOTIFY_ENTRY_NOTIFICATION);
+	if (!notif_entry.resolved) {
+		resolve_notify_entry(NOTIFY_ENTRY_NOTIFICATION);
+	}
+	if (notif_entry.method) {
 		// Skip if _Notification is not overridden (inherited from Godot.Node).
-		MonoClass *notif_declaring_class = mono_method_get_class(on_notification);
+		// Same WASM signature-mismatch workaround as dedicated entries.
 		bool notif_overridden = !(script.is_valid() && script->mono_class &&
-								  notif_declaring_class != script->mono_class);
+								  notif_entry.declaring_class != script->mono_class);
 		if (notif_overridden) {
 			MONO_LOG("[Mono] notification: calling _Notification(%d) for '%s'\n", p_notification, script->class_name.utf8().get_data());
 			Variant arg = p_notification;
 			const Variant *args[1] = { &arg };
 			Variant result;
 			Callable::CallError err;
-			invoke_method(on_notification, args, 1, result, err);
+			invoke_method(notif_entry.method, args, 1, result, err);
 		}
+	}
+}
+
+// Phase 0.2: resolve a notify entry by looking up the method on the
+// instance's class hierarchy. Cached for the lifetime of the instance
+// (unless cleared by hot reload).
+void CSharpInstance::resolve_notify_entry(NotifyEntryIndex p_index) {
+	NotifyEntry &entry = notify_dispatch_.get_entry(p_index);
+	entry.method = nullptr;
+	entry.declaring_class = nullptr;
+	entry.resolved = true; // mark resolved even if not found (avoids re-lookup)
+
+	if (!mono_object) return;
+
+	const NotifySpec *spec = csharp_notify_find_spec_by_entry(p_index);
+	if (!spec) return;
+
+	const char *method_name = csharp_notify_spec_method_name(spec);
+	int arg_count = csharp_notify_spec_arg_count(spec);
+
+	MonoMethod *m = find_method(StringName(method_name), arg_count);
+	if (!m) return;
+
+	entry.method = m;
+	entry.declaring_class = mono_method_get_class(m);
+}
+
+// Phase 0.2: invoke a cached notify entry via mono_runtime_invoke.
+// Skips the call if the method is inherited (not overridden by the script class).
+void CSharpInstance::invoke_cached_notify(NotifyEntryIndex p_index, int p_notification) {
+	NotifyEntry &entry = notify_dispatch_.get_entry(p_index);
+	if (!entry.method) return;
+
+	// Only call if the method is actually overridden by the script class.
+	// The Mono WASM interpreter has a bug with virtual dispatch for
+	// inherited (non-overridden) methods that causes "function signature
+	// mismatch". Since base class implementations are empty, skipping
+	// them is safe and correct.
+	if (script.is_valid() && script->mono_class &&
+		entry.declaring_class != script->mono_class) {
+		return;
+	}
+
+	const NotifySpec *spec = csharp_notify_find_spec_by_entry(p_index);
+	if (!spec) return;
+
+	int arg_count = csharp_notify_spec_arg_count(spec);
+	int arg_provider = csharp_notify_spec_arg_provider(spec);
+
+	MONO_LOG("[Mono] notification: calling %s for '%s'\n",
+		csharp_notify_spec_method_name(spec),
+		script->class_name.utf8().get_data());
+
+	Variant result;
+	Callable::CallError err;
+
+	if (arg_count == 0) {
+		invoke_method(entry.method, nullptr, 0, result, err);
+	} else if (arg_count == 1) {
+		Variant arg;
+		switch (arg_provider) {
+			case 1: { // DELTA_PROCESS
+				if (owner && owner->is_class("Node")) {
+					Node *node = Object::cast_to<Node>(owner);
+					arg = (double)node->get_process_delta_time();
+				} else {
+					arg = 0.0;
+				}
+				break;
+			}
+			case 2: { // DELTA_PHYSICS
+				if (owner && owner->is_class("Node")) {
+					Node *node = Object::cast_to<Node>(owner);
+					arg = (double)node->get_physics_process_delta_time();
+				} else {
+					arg = 0.0;
+				}
+				break;
+			}
+			case 3: { // NOTIFICATION_ID
+				arg = p_notification;
+				break;
+			}
+			default:
+				arg = Variant();
+				break;
+		}
+		const Variant *args[1] = { &arg };
+		invoke_method(entry.method, args, 1, result, err);
 	}
 }
 
@@ -1335,19 +1395,22 @@ String CSharpInstance::to_string(bool *r_valid) {
 	if (r_valid) *r_valid = false;
 	if (!mono_object) return "<CSharpInstance>";
 
-	MonoMethod *to_string = find_method("ToString", 0);
-	if (to_string) {
+	// Phase 0.2: use cached dispatch entry for ToString.
+	NotifyEntry &ts_entry = notify_dispatch_.get_entry(NOTIFY_ENTRY_TOSTRING);
+	if (!ts_entry.resolved) {
+		resolve_notify_entry(NOTIFY_ENTRY_TOSTRING);
+	}
+	if (ts_entry.method) {
 		// Skip if ToString is not overridden by the script class.
 		// System.Object.ToString() virtual dispatch triggers signature mismatch
 		// in WASM interpreter mode.
-		MonoClass *decl_class = mono_method_get_class(to_string);
 		if (script.is_valid() && script->mono_class &&
-			decl_class != script->mono_class) {
+			ts_entry.declaring_class != script->mono_class) {
 			// Not overridden - use C++ fallback.
 		} else {
 			Variant result;
 			Callable::CallError err;
-			invoke_method(to_string, nullptr, 0, result, err);
+			invoke_method(ts_entry.method, nullptr, 0, result, err);
 			if (err.error == Callable::CallError::CALL_OK && result.get_type() == Variant::STRING) {
 				if (r_valid) *r_valid = true;
 				return (String)result;

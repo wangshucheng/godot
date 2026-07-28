@@ -20,8 +20,93 @@ public partial class Test : Node
 
 	public override void _Ready()
 	{
-		// Empty: avoids Mono WASM _Ready signature mismatch.
-		// All init happens in _Process state 0.
+		// Constraint #14 eliminated (2026-07-29):
+		// Phase 0.1 delegate probe + mono_host init audit verified icalls
+		// work in _Ready on WASM. GC bridge init (mono_host.cpp:454) and
+		// Runtime.Initialize() (mono_host.cpp:482) both run at SERVERS level,
+		// pre-SceneTree. See docs/spike_2026-07-29_constraint_14_eligibility.md.
+		_frameCount = 0; // first _Process call will increment to 1
+		_physicsCount = 0;
+		_waitFrames = 0;
+		_isWeb = Runtime.TestIsWebPlatform();
+		Runtime.TestResetCounters();
+		Runtime.DebugUiInit();
+		Runtime.DebugUiClear();
+		Runtime.DebugUiAddLine("=== Godot 4.7 C# Workflow Tests ===");
+		Runtime.DebugUiAddLine("24 scenarios with detailed assertions");
+		Runtime.DebugUiAddSeparator();
+
+		// Reflection API verification (on non-WASM platforms)
+		if (_isWeb == 0)
+		{
+			// Test ClassDB reflection
+			string[] classes = Reflection.GetClassList();
+			GD.Print("Reflection: " + classes.Length + " classes in ClassDB");
+			Runtime.DebugUiAddLine("Reflection: " + classes.Length + " classes in ClassDB");
+
+			bool nodeExists = Reflection.ClassExists("Node");
+			bool fakeExists = Reflection.ClassExists("FakeClass123");
+			GD.Print("Reflection: Node exists=" + nodeExists + " Fake=" + fakeExists);
+			Runtime.DebugUiAddLine("Reflection: Node exists=" + nodeExists + " Fake=" + fakeExists);
+
+			string nodeParent = Reflection.GetParentClass("Node");
+			string labelParent = Reflection.GetParentClass("Label");
+			GD.Print("Reflection: Node parent=" + nodeParent + " Label parent=" + labelParent);
+			Runtime.DebugUiAddLine("Reflection: Node parent=" + nodeParent + " Label parent=" + labelParent);
+
+			bool isSubclass = Reflection.IsSubclassOf("Label", "CanvasItem");
+			GD.Print("Reflection: Label subclass of CanvasItem=" + isSubclass);
+			Runtime.DebugUiAddLine("Reflection: Label subclass of CanvasItem=" + isSubclass);
+
+			string[] nodeMethods = Reflection.GetMethodList("Node");
+			GD.Print("Reflection: Node has " + nodeMethods.Length + " methods");
+			Runtime.DebugUiAddLine("Reflection: Node has " + nodeMethods.Length + " methods");
+
+			bool hasReady = Reflection.HasMethod("Node", "_ready");
+			bool hasProcess = Reflection.HasMethod("Node", "_process");
+			GD.Print("Reflection: Node has _ready=" + hasReady + " _process=" + hasProcess);
+			Runtime.DebugUiAddLine("Reflection: Node has _ready=" + hasReady + " _process=" + hasProcess);
+
+			int addChildArgs = Reflection.GetMethodArgumentCount("Node", "add_child");
+			GD.Print("Reflection: add_child arg count=" + addChildArgs);
+			Runtime.DebugUiAddLine("Reflection: add_child arg count=" + addChildArgs);
+
+			string[] nodeProps = Reflection.GetPropertyList("Node");
+			GD.Print("Reflection: Node has " + nodeProps.Length + " properties");
+			Runtime.DebugUiAddLine("Reflection: Node has " + nodeProps.Length + " properties");
+
+			bool hasName = Reflection.HasProperty("Node", "name");
+			GD.Print("Reflection: Node has 'name' property=" + hasName);
+			Runtime.DebugUiAddLine("Reflection: Node has 'name' property=" + hasName);
+
+			string[] nodeSignals = Reflection.GetSignalList("Node");
+			GD.Print("Reflection: Node has " + nodeSignals.Length + " signals");
+			Runtime.DebugUiAddLine("Reflection: Node has " + nodeSignals.Length + " signals");
+
+			bool hasReadySig = Reflection.HasSignal("Node", "ready");
+			GD.Print("Reflection: Node has 'ready' signal=" + hasReadySig);
+			Runtime.DebugUiAddLine("Reflection: Node has 'ready' signal=" + hasReadySig);
+
+			// REAL assertions (previously all of the above was only
+			// printed, never asserted — a reflection regression could
+			// not fail the suite).
+			Runtime.TestAssert("0a ClassExists(Node)", nodeExists ? 1 : 0);
+			Runtime.TestAssert("0b !ClassExists(FakeClass123)", !fakeExists ? 1 : 0);
+			Runtime.TestAssert("0c GetParentClass(Node)==Object", nodeParent == "Object" ? 1 : 0);
+			Runtime.TestAssert("0d GetParentClass(Label)==Control", labelParent == "Control" ? 1 : 0);
+			Runtime.TestAssert("0e IsSubclassOf(Label,CanvasItem)", isSubclass ? 1 : 0);
+			// NOTE: _ready/_process are VIRTUAL methods and are not in
+			// ClassDB::has_method's method_map, so assert on a real bound
+			// method plus a negative check instead.
+			Runtime.TestAssert("0f HasMethod(Node,add_child)", Reflection.HasMethod("Node", "add_child") ? 1 : 0);
+			Runtime.TestAssert("0f2 !HasMethod(Node,fake_method_123)", !Reflection.HasMethod("Node", "fake_method_123") ? 1 : 0);
+			Runtime.TestAssert("0g add_child argc>=1", addChildArgs >= 1 ? 1 : 0);
+			Runtime.TestAssert("0h HasProperty(Node,name)", hasName ? 1 : 0);
+			Runtime.TestAssert("0i HasSignal(Node,ready)", hasReadySig ? 1 : 0);
+			Runtime.TestFinishTest("0. Reflection: ClassDB introspection");
+		}
+
+		_state = 1; // skip state 0, directly enter state 1 on first _Process
 	}
 
 	public override void _PhysicsProcess(double delta)
@@ -42,93 +127,7 @@ public partial class Test : Node
 	{
 		_frameCount++;
 
-		// State 0: Initialize
-		if (_state == 0)
-		{
-			_frameCount = 1;
-			_physicsCount = 0;
-			_waitFrames = 0;
-			_isWeb = Runtime.TestIsWebPlatform();
-			Runtime.TestResetCounters();
-			Runtime.DebugUiInit();
-			Runtime.DebugUiClear();
-			Runtime.DebugUiAddLine("=== Godot 4.7 C# Workflow Tests ===");
-			Runtime.DebugUiAddLine("24 scenarios with detailed assertions");
-			Runtime.DebugUiAddSeparator();
-
-			// Reflection API verification (on non-WASM platforms)
-			if (_isWeb == 0)
-			{
-				// Test ClassDB reflection
-				string[] classes = Reflection.GetClassList();
-				GD.Print("Reflection: " + classes.Length + " classes in ClassDB");
-				Runtime.DebugUiAddLine("Reflection: " + classes.Length + " classes in ClassDB");
-
-				bool nodeExists = Reflection.ClassExists("Node");
-				bool fakeExists = Reflection.ClassExists("FakeClass123");
-				GD.Print("Reflection: Node exists=" + nodeExists + " Fake=" + fakeExists);
-				Runtime.DebugUiAddLine("Reflection: Node exists=" + nodeExists + " Fake=" + fakeExists);
-
-				string nodeParent = Reflection.GetParentClass("Node");
-				string labelParent = Reflection.GetParentClass("Label");
-				GD.Print("Reflection: Node parent=" + nodeParent + " Label parent=" + labelParent);
-				Runtime.DebugUiAddLine("Reflection: Node parent=" + nodeParent + " Label parent=" + labelParent);
-
-				bool isSubclass = Reflection.IsSubclassOf("Label", "CanvasItem");
-				GD.Print("Reflection: Label subclass of CanvasItem=" + isSubclass);
-				Runtime.DebugUiAddLine("Reflection: Label subclass of CanvasItem=" + isSubclass);
-
-				string[] nodeMethods = Reflection.GetMethodList("Node");
-				GD.Print("Reflection: Node has " + nodeMethods.Length + " methods");
-				Runtime.DebugUiAddLine("Reflection: Node has " + nodeMethods.Length + " methods");
-
-				bool hasReady = Reflection.HasMethod("Node", "_ready");
-				bool hasProcess = Reflection.HasMethod("Node", "_process");
-				GD.Print("Reflection: Node has _ready=" + hasReady + " _process=" + hasProcess);
-				Runtime.DebugUiAddLine("Reflection: Node has _ready=" + hasReady + " _process=" + hasProcess);
-
-				int addChildArgs = Reflection.GetMethodArgumentCount("Node", "add_child");
-				GD.Print("Reflection: add_child arg count=" + addChildArgs);
-				Runtime.DebugUiAddLine("Reflection: add_child arg count=" + addChildArgs);
-
-				string[] nodeProps = Reflection.GetPropertyList("Node");
-				GD.Print("Reflection: Node has " + nodeProps.Length + " properties");
-				Runtime.DebugUiAddLine("Reflection: Node has " + nodeProps.Length + " properties");
-
-				bool hasName = Reflection.HasProperty("Node", "name");
-				GD.Print("Reflection: Node has 'name' property=" + hasName);
-				Runtime.DebugUiAddLine("Reflection: Node has 'name' property=" + hasName);
-
-				string[] nodeSignals = Reflection.GetSignalList("Node");
-				GD.Print("Reflection: Node has " + nodeSignals.Length + " signals");
-				Runtime.DebugUiAddLine("Reflection: Node has " + nodeSignals.Length + " signals");
-
-				bool hasReadySig = Reflection.HasSignal("Node", "ready");
-				GD.Print("Reflection: Node has 'ready' signal=" + hasReadySig);
-				Runtime.DebugUiAddLine("Reflection: Node has 'ready' signal=" + hasReadySig);
-
-				// REAL assertions (previously all of the above was only
-				// printed, never asserted — a reflection regression could
-				// not fail the suite).
-				Runtime.TestAssert("0a ClassExists(Node)", nodeExists ? 1 : 0);
-				Runtime.TestAssert("0b !ClassExists(FakeClass123)", !fakeExists ? 1 : 0);
-				Runtime.TestAssert("0c GetParentClass(Node)==Object", nodeParent == "Object" ? 1 : 0);
-				Runtime.TestAssert("0d GetParentClass(Label)==Control", labelParent == "Control" ? 1 : 0);
-				Runtime.TestAssert("0e IsSubclassOf(Label,CanvasItem)", isSubclass ? 1 : 0);
-				// NOTE: _ready/_process are VIRTUAL methods and are not in
-				// ClassDB::has_method's method_map, so assert on a real bound
-				// method plus a negative check instead.
-				Runtime.TestAssert("0f HasMethod(Node,add_child)", Reflection.HasMethod("Node", "add_child") ? 1 : 0);
-				Runtime.TestAssert("0f2 !HasMethod(Node,fake_method_123)", !Reflection.HasMethod("Node", "fake_method_123") ? 1 : 0);
-				Runtime.TestAssert("0g add_child argc>=1", addChildArgs >= 1 ? 1 : 0);
-				Runtime.TestAssert("0h HasProperty(Node,name)", hasName ? 1 : 0);
-				Runtime.TestAssert("0i HasSignal(Node,ready)", hasReadySig ? 1 : 0);
-				Runtime.TestFinishTest("0. Reflection: ClassDB introspection");
-			}
-
-			_state = 1;
-			return;
-		}
+		// State 0 removed: initialization now happens in _Ready() (constraint #14 eliminated)
 
 		// ============================================================
 		// Test 1: base_test - Node lifecycle, signals, tree operations

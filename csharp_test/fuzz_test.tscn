@@ -1,4 +1,4 @@
-[gd_scene load_steps=12 format=3 uid="uid://fuzzp5test11"]
+[gd_scene load_steps=24 format=3 uid="uid://fuzzp5test21"]
 
 [ext_resource type="Script" path="res://fuzz/Fuzz01NullRef.cs" id="1"]
 [ext_resource type="Script" path="res://fuzz/Fuzz02DivZero.cs" id="2"]
@@ -10,7 +10,20 @@
 [ext_resource type="Script" path="res://fuzz/Fuzz08PropertyGetterException.cs" id="8"]
 [ext_resource type="Script" path="res://fuzz/Fuzz09MethodArgException.cs" id="9"]
 [ext_resource type="Script" path="res://fuzz/Fuzz10SignalCallbackException.cs" id="10"]
-[ext_resource type="Script" path="res://fuzz/FuzzQuit.cs" id="11"]
+[ext_resource type="Script" path="res://fuzz/Fuzz11StaticFieldException.cs" id="11"]
+[ext_resource type="Script" path="res://fuzz/Fuzz12CrossScriptCascade.cs" id="12"]
+[ext_resource type="Script" path="res://fuzz/Fuzz12Target.cs" id="12t"]
+[ext_resource type="Script" path="res://fuzz/Fuzz13AsyncDelayedException.cs" id="13"]
+[ext_resource type="Script" path="res://fuzz/Fuzz14SignalReentryException.cs" id="14"]
+[ext_resource type="Script" path="res://fuzz/Fuzz15PerFrameAccumulation.cs" id="15"]
+[ext_resource type="Script" path="res://fuzz/Fuzz16ExitTreeException.cs" id="16"]
+[ext_resource type="Script" path="res://fuzz/Fuzz17CallableException.cs" id="17"]
+[ext_resource type="Script" path="res://fuzz/Fuzz17Target.cs" id="17t"]
+[ext_resource type="Script" path="res://fuzz/Fuzz18StaticMethodException.cs" id="18"]
+[ext_resource type="Script" path="res://fuzz/Fuzz19NestedRethrow.cs" id="19"]
+[ext_resource type="Script" path="res://fuzz/Fuzz20ToStringException.cs" id="20"]
+[ext_resource type="Script" path="res://fuzz/Fuzz21StateConsistency.cs" id="21"]
+[ext_resource type="Script" path="res://fuzz/FuzzQuit.cs" id="22"]
 
 [node name="FuzzRoot" type="Node"]
 
@@ -44,5 +57,44 @@ script = ExtResource("9")
 [node name="Fuzz10" type="Node" parent="."]
 script = ExtResource("10")
 
-[node name="FuzzQuit" type="Node" parent="."]
+[node name="Fuzz11" type="Node" parent="."]
 script = ExtResource("11")
+
+[node name="Fuzz12" type="Node" parent="."]
+script = ExtResource("12")
+
+[node name="Fuzz12Target" type="Node" parent="."]
+script = ExtResource("12t")
+
+[node name="Fuzz13" type="Node" parent="."]
+script = ExtResource("13")
+
+[node name="Fuzz14" type="Node" parent="."]
+script = ExtResource("14")
+
+[node name="Fuzz15" type="Node" parent="."]
+script = ExtResource("15")
+
+[node name="Fuzz16" type="Node" parent="."]
+script = ExtResource("16")
+
+[node name="Fuzz17" type="Node" parent="."]
+script = ExtResource("17")
+
+[node name="Fuzz17Target" type="Node" parent="."]
+script = ExtResource("17t")
+
+[node name="Fuzz18" type="Node" parent="."]
+script = ExtResource("18")
+
+[node name="Fuzz19" type="Node" parent="."]
+script = ExtResource("19")
+
+[node name="Fuzz20" type="Node" parent="."]
+script = ExtResource("20")
+
+[node name="Fuzz21" type="Node" parent="."]
+script = ExtResource("21")
+
+[node name="FuzzQuit" type="Node" parent="."]
+script = ExtResource("22")

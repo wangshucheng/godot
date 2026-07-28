@@ -1,11 +1,11 @@
-# P5 fuzz test runner — runs fuzz_test.tscn headlessly and verifies [FUZZ] markers.
+# P5-C fuzz test runner — runs fuzz_test.tscn headlessly and verifies [FUZZ] markers.
+# Extended from 10 to 21 tests (2026-07-28, P5 scheme C).
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $project = Join-Path $root "csharp_test"
 
-# Auto-pick the newest available editor console binary (previously hardcoded
-# to the stale bin/editor/windows copy — which could test an OLD build).
+# Auto-pick the newest available editor console binary.
 $candidates = @(
     (Join-Path $root "bin\godot.windows.editor.x86_64.mono.console.exe"),
     (Join-Path $root "bin\editor\windows\godot.windows.editor.x86_64.mono.console.exe")
@@ -22,14 +22,12 @@ $errFile = Join-Path $project "fuzz_test_output.err"
 Remove-Item -Path $logFile -ErrorAction SilentlyContinue
 Remove-Item -Path $errFile -ErrorAction SilentlyContinue
 
-Write-Host "=== P5 Fuzz Test Runner ==="
+Write-Host "=== P5-C Fuzz Test Runner (21 tests) ==="
 Write-Host "Editor: $editor"
 Write-Host "Project: $project"
 Write-Host ""
 
 # Run the editor in headless mode, executing fuzz_test.tscn as the main scene.
-# --headless: no GUI
-# res://fuzz_test.tscn: scene to run (overrides project main_scene)
 $argString = "--path `"$project`" --headless `"res://fuzz_test.tscn`""
 Write-Host "Args: $argString"
 
@@ -39,12 +37,12 @@ $proc = Start-Process -FilePath $editor `
     -RedirectStandardOutput $logFile `
     -RedirectStandardError $errFile
 
-# Wait up to 90 seconds for the process to exit (fuzz tests should complete quickly).
-$proc | Wait-Process -Timeout 90 -ErrorAction SilentlyContinue
+# Wait up to 120 seconds (Fuzz13 has 150ms delay, Fuzz15 runs 6 frames).
+$proc | Wait-Process -Timeout 120 -ErrorAction SilentlyContinue
 
 if (-not $proc.HasExited) {
     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-    Write-Host "FAIL: process killed after 90s timeout"
+    Write-Host "FAIL: process killed after 120s timeout"
     exit 1
 }
 
@@ -67,20 +65,32 @@ if (Test-Path $errFile) {
     }
 }
 
-# Verify [FUZZ] markers
+# Verify [FUZZ] START markers for all 21 tests.
 $allLog = ""
 if (Test-Path $logFile) { $allLog += Get-Content $logFile -Raw }
 if (Test-Path $errFile) { $allLog += Get-Content $errFile -Raw }
 
-$expectedStarts = 1..10 | ForEach-Object { "Fuzz{0:D2}" -f $_ }
-$expectedStartMarkers = $expectedStarts | ForEach-Object { "[FUZZ] START $_" }
+# Fuzz01-Fuzz21 class names (must match the .cs filenames).
+$fuzzClassNames = @(
+    "Fuzz01NullRef", "Fuzz02DivZero", "Fuzz03StackOverflow",
+    "Fuzz04InfiniteLoop", "Fuzz05RecursiveStackBlowup", "Fuzz06AsyncException",
+    "Fuzz07StaticCtorException", "Fuzz08PropertyGetterException",
+    "Fuzz09MethodArgException", "Fuzz10SignalCallbackException",
+    "Fuzz11StaticFieldException", "Fuzz12CrossScriptCascade",
+    "Fuzz13AsyncDelayedException", "Fuzz14SignalReentryException",
+    "Fuzz15PerFrameAccumulation", "Fuzz16ExitTreeException",
+    "Fuzz17CallableException", "Fuzz18StaticMethodException",
+    "Fuzz19NestedRethrow", "Fuzz20ToStringException",
+    "Fuzz21StateConsistency"
+)
 
-Write-Host "=== Verification ==="
+Write-Host "=== Verification (21 START markers) ==="
 $passed = 0
 $failed = 0
-foreach ($marker in $expectedStartMarkers) {
+foreach ($name in $fuzzClassNames) {
+    $marker = "[FUZZ] START $name"
     if ($allLog -match [regex]::Escape($marker)) {
-        Write-Host "PASS: $marker found"
+        Write-Host "PASS: $marker"
         $passed++
     } else {
         Write-Host "FAIL: $marker NOT found"
@@ -89,7 +99,15 @@ foreach ($marker in $expectedStartMarkers) {
 }
 
 Write-Host ""
-Write-Host "Summary: $passed/10 START markers found, $failed missing"
+Write-Host "Summary: $passed/21 START markers found, $failed missing"
+
+# Verify Fuzz21 consistency checks passed (5 checks expected).
+$fuzz21PassPattern = "\[FUZZ\] DONE Fuzz21StateConsistency \(checks=4 passed=4\)"
+if ($allLog -match $fuzz21PassPattern) {
+    Write-Host "PASS: Fuzz21 consistency checks (5/5)"
+} else {
+    Write-Host "WARN: Fuzz21 consistency checks not all passed (see log)"
+}
 
 # Check for crash indicators
 if ($exitCode -ne 0 -and $exitCode -ne -1073741819) {

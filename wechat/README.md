@@ -339,7 +339,54 @@ python wechat\convert_to_wechat.py `
 
 > ⚠️ **AppID 必须真实**：`touristappid` 游客模式在 DevTools 2.02.2607222+ 会触发项目类型识别回归，导致与 `compileType` 错误相同的 `__FULL__` 主包超限症状。当前已配置真实 AppID `wxc07c26935264a5e5`。
 
-## 八、参考文档
+## 八、WebAssembly shim 真机验证清单（P2.8）
+
+适配层对全局 `WebAssembly` 做了 shim 替换：优先使用原生 V8 `WebAssembly.instantiate(ArrayBuffer)`（接受 CDN/分包 ArrayBuffer），回退到 `WXWebAssembly.instantiate(path)`（仅接受主包裸文件名）。DevTools 模拟器与真机环境行为有差异，**真机验证不可省略**。下表为发布前必跑的最小验证矩阵。
+
+### 8.1 加载路径验证
+
+| # | 验证项 | DevTools 模拟器 | iOS 真机 | Android 真机 | PC 微信客户端 | 通过判据 |
+|---|--------|----------------|---------|-------------|--------------|---------|
+| 1 | 分包模式（`--no-cdn-only`）：`.wasm.br` 走 `wasm_pkg` 分包 | ✅ 主路径 | ✅ 必测 | ✅ 必测 | ✅ 必测 | Console 出现 `WASM in subpackage: wasm_pkg/Game2048.wasm.br` + 引擎启动 |
+| 2 | CDN 模式：`.wasm` 走 `wx.request(arraybuffer)` → `_nativeWA.instantiate` | ⚠️ 需勾选「不校验合法域名」 | ✅ 必测 | ✅ 必测 | ✅ 必测 | Console 出现 `[WeChat] Downloaded: Game2048.wasm` + 引擎启动 |
+| 3 | CDN 缓存命中（第二次启动） | N/A（DevTools 缓存语义不同） | ✅ 必测 | ✅ 必测 | ✅ 必测 | Console 出现 `Loading package from cache`，无再次下载 |
+| 4 | 原生 `WebAssembly.instantiate(ArrayBuffer)` 探测（适配层启动时） | ✅ | ✅ 必测 | ✅ 必测 | ✅ | Console 出现 `WA ctx: WXWebAssembly=yes, native=yes`（若 `native=no` 须回退分包模式） |
+
+### 8.2 内存与崩溃验证（真机重点）
+
+| # | 验证项 | 平台 | 通过判据 |
+|---|--------|------|---------|
+| 5 | 首次启动到主场景可见的内存峰值 | iOS / Android | iOS ≤ 1 GB；Android 因设备而异，需低于设备总内存 60% |
+| 6 | 连续玩 5 局后内存稳定（无泄漏） | iOS / Android | 第 5 局内存峰值不超过首局 +10% |
+| 7 | 后台切前台 3 次不崩溃 | iOS / Android | 切回前台后游戏可继续操作 |
+| 8 | 锁屏 30s 后解锁不崩溃 | iOS / Android | 解锁后游戏状态保留 |
+| 9 | 长时间运行（10 分钟）无 OOM | iOS / Android | 监控 `wx.getPerformance().memory` 趋势稳定 |
+
+### 8.3 WASM 调用路径验证
+
+| # | 验证项 | 平台 | 通过判据 |
+|---|--------|------|---------|
+| 10 | Mono 运行时初始化（`MONO_EE_MODE_INTERP` 解释器） | 全部 | Console 出现 `Mono runtime initialized (static linking): 6.12.0.206` |
+| 11 | C# 脚本加载与 `_Ready` 执行 | 全部 | Console 出现 `[2048] _Ready started` + `[2048] Game initialized` |
+| 12 | C# icall 调用不触发 `CANNOT HANDLE COOKIE` | 全部 | 控制台无 `CANNOT HANDLE COOKIE` 错误（出现即说明 m2n cookie 表覆盖不全） |
+| 13 | WASM `call_indirect` 编码兼容微信 MVP | 全部 | 控制台无 `CompileError: expected table index 0`（出现即说明 LINKFLAGS 误压了 `-O0`） |
+
+### 8.4 已知真机差异（非阻塞，记录在案）
+
+- **iOS 微信**：`WXWebAssembly.instantiate` 对 `.wasm.br` 自动解压；`wx.request` 响应体上限需测，19 MB `.data` 全量加载到内存对低端 iOS 设备有压力
+- **Android 微信**：`wx.getFileSystemManager().readFile({offset, length})` 在某些版本与 DevTools 一样存在 offset bug，适配层 fd-based 顺序读取兜底已覆盖
+- **PC 微信客户端**：物理键盘事件经 `wx.onKeyDown` 双路径生效；其他平台 `wx.onKeyDown` 为 stub
+- **DevTools 模拟器**：物理键盘完全不可用（框架拦截），仅触摸滑动可测；大文件 `readFile` offset bug 仅在此环境出现
+
+### 8.5 验证执行步骤
+
+1. 用真实 AppID `wxc07c26935264a5e5` 在 DevTools 中「编译」通过（基线 1）
+2. 点「预览」生成二维码 → 手机微信扫码 → iOS / Android 各测一次（基线 2 + 3）
+3. PC 微信客户端扫码登录预览（基线 4，键盘功能必测）
+4. 每个平台按 8.1 → 8.2 → 8.3 顺序执行，逐项打勾或记录失败现象
+5. 失败项附 Console 日志截图（开发者工具 → 调试 → vConsole）回传排查
+
+## 九、参考文档
 
 - [Godot 4 Web 导出文档](https://docs.godotengine.org/en/stable/tutorials/export/exporting_for_web.html)
 - [微信小游戏开发文档](https://developers.weixin.qq.com/minigame/dev/guide/)

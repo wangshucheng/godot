@@ -65,6 +65,12 @@ public:
 	bool initialize();
 	void cleanup();
 
+#if defined(ANDROID_ENABLED) && !defined(TOOLS_ENABLED)
+	// Android: 安装程序集 preload hook，从 APK 内 res:// 路径加载 .dll。
+	// 在 initialize() 内部调用，无需外部主动调用（声明为 public 便于测试 mock）。
+	void install_android_assembly_preload_hook();
+#endif
+
 	bool load_assembly(const String &p_path, bool p_is_proj_assembly = false);
 	void clear_user_assemblies();
 

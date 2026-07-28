@@ -84,6 +84,15 @@ if env["platform"] == "web":
     env_mono.add_source_files(env.modules_sources, "platform/mono_platform_web.cpp")
     env_mono.add_source_files(env.modules_sources, "platform/mini_wasm_stubs.c")
 
+# iOS/Android 平台胶水代码（参考 mono_platform_web.cpp 的模式）
+# 注意：iOS 与 Android 有真实线程，与 WASM 单线程不同，平台层需实现
+# GC 栈边界扫描、线程注册、文件系统适配、程序集加载 hook。
+if env["platform"] == "android":
+    env_mono.add_source_files(env.modules_sources, "platform/mono_platform_android.cpp")
+
+if env["platform"] == "ios":
+    env_mono.add_source_files(env.modules_sources, "platform/mono_platform_ios.cpp")
+
 if env.editor_build:
     env_mono.add_source_files(env.modules_sources, "editor/*.cpp")
 
@@ -186,6 +195,36 @@ elif mono_static:
         env.Append(LIBS=["mono-2.0-sgen", "pthread", "m", "dl"])
         env.Append(LIBPATH=[mono_lib_path])
         env.Append(LINKFLAGS=["-framework", "CoreFoundation", "-framework", "Foundation"])
+    elif env["platform"] == "ios":
+        # iOS 静态链接：用 -force_load 包含归档全部符号（参考 modules/mono/mono_configure.py:37-43）
+        # iOS 不支持动态库加载（dlopen 禁用），故必须静态链接
+        # App Store 禁止 JIT，运行时模式由 gd_mono.cpp 通过 MONO_EE_MODE_INTERP 设置
+        import os
+        _ios_lib = os.path.join(env.Dir(mono_lib_path).abspath, "libmonosgen-2.0.a")
+        if os.path.isfile(_ios_lib):
+            env.Append(LINKFLAGS=["-Wl,-force_load," + _ios_lib])
+        else:
+            env.Append(LIBS=["mono-2.0-sgen"])
+            env.Append(LIBPATH=[mono_lib_path])
+        env.Append(LIBS=["pthread", "m", "dl"])
+        env.Append(LINKFLAGS=["-framework", "CoreFoundation", "-framework", "Foundation"])
+        env_mono.Append(CPPDEFINES=["MONO_IOS=1"])
+        # iOS interpreter 模式（App Store 禁 JIT）
+        env_mono.Append(CPPDEFINES=["MONO_EE_MODE_INTERP_SUPPORTED"])
+    elif env["platform"] == "android":
+        # Android 静态链接：与 Linux 类似，用 --whole-archive 保留 Mono 全部符号
+        # Android 允许 JIT，但本项目沿用 interpreter 模式以复用 mono_new 的 WASM 路径
+        import os
+        _android_lib = os.path.join(env.Dir(mono_lib_path).abspath, "libmonosgen-2.0.a")
+        if os.path.isfile(_android_lib):
+            env.Append(LINKFLAGS=["-Wl,--whole-archive," + _android_lib, "-Wl,--no-whole-archive"])
+        else:
+            env.Append(LIBS=["mono-2.0-sgen"])
+            env.Append(LIBPATH=[mono_lib_path])
+        # NDK 必需库：log (LogCat)、dl (动态链接桩)、android (Activity 接口)
+        env.Append(LIBS=["log", "dl", "android"])
+        env_mono.Append(CPPDEFINES=["MONO_ANDROID=1"])
+        env_mono.Append(CPPDEFINES=["MONO_EE_MODE_INTERP_SUPPORTED"])
     else:
         env.Append(LIBS=["mono-2.0-sgen", "pthread", "m", "dl", "rt"])
         env.Append(LIBPATH=[mono_lib_path])
@@ -205,3 +244,16 @@ if env["platform"] == "web":
     env_mono.Append(CPPDEFINES=["MONO_DLL_IMPORT="])
     if mono_web:
         env_mono.Append(CPPDEFINES=["MONO_WEB_FULL"])
+
+# iOS/Android 平台宏定义（与 WEB_ENABLED 同级，供 gd_mono.cpp 平台分支使用）
+# 引擎本身已定义 IOS_ENABLED/ANDROID_ENABLED，这里补充 mono_new 内部使用的宏
+if env["platform"] == "ios":
+    env_mono.Append(CPPDEFINES=["UNIX_ENABLED"])
+    env_mono.Append(CPPDEFINES=["MONO_DLL_IMPORT="])
+    # iOS 用 interpreter 模式，与 WASM 共用 MONO_EE_MODE_INTERP 路径
+    env_mono.Append(CPPDEFINES=["DISABLE_APPDOMAINS"])  # 简化域管理，与 WASM 一致
+
+if env["platform"] == "android":
+    env_mono.Append(CPPDEFINES=["UNIX_ENABLED"])
+    env_mono.Append(CPPDEFINES=["MONO_DLL_IMPORT="])
+    env_mono.Append(CPPDEFINES=["DISABLE_APPDOMAINS"])  # 简化域管理，与 WASM 一致

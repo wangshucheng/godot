@@ -8,6 +8,14 @@
 #include "core/io/resource_saver.h"
 #include "core/os/os.h"
 
+// 平台胶水层初始化（与 MonoWeb::initialize 对应）
+#ifdef ANDROID_ENABLED
+#include "platform/mono_platform_android.h"
+#endif
+#ifdef IOS_ENABLED
+#include "platform/mono_platform_ios.h"
+#endif
+
 #ifdef TOOLS_ENABLED
 #include "editor/csharp_editor.h"
 #include "editor/csharp_project_editor_plugin.h"
@@ -29,6 +37,14 @@ void initialize_mono_new_module(ModuleInitializationLevel p_level) {
 	}
 
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SCENE) {
+		// 平台胶水层初始化（GC 栈扫描、线程注册必须在 GDMono::initialize 之前）
+#ifdef ANDROID_ENABLED
+		MonoAndroid::initialize();
+#endif
+#ifdef IOS_ENABLED
+		MonoiOS::initialize();
+#endif
+
 		_godot_mono = memnew(GDMono);
 		_csharp_language = memnew(CSharpLanguage);
 
@@ -84,6 +100,14 @@ void uninitialize_mono_new_module(ModuleInitializationLevel p_level) {
 			memdelete(_godot_mono);
 			_godot_mono = nullptr;
 		}
+
+		// 平台胶水层清理
+#ifdef ANDROID_ENABLED
+		MonoAndroid::cleanup();
+#endif
+#ifdef IOS_ENABLED
+		MonoiOS::cleanup();
+#endif
 	}
 
 #ifdef TOOLS_ENABLED

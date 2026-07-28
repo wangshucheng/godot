@@ -234,6 +234,17 @@ bool GDMono::initialize() {
 	// not a real filesystem path. Use "/" as base directory since BCL and assemblies
 	// are embedded into MEMFS via Emscripten --preload-file at build time.
 	String exe_dir = "/";
+#elif defined(ANDROID_ENABLED)
+	// Android: BCL 与用户程序集打包在 APK 内的 res:// 路径下。
+	// OS::get_executable_path() 在 Android 上返回 APK 内部路径，不可直接 fopen。
+	// 用 Godot 的全局化路径（FileAccess 会自动处理 APK 读取）。
+	// 程序集加载走 preload hook（load_assembly_from_pck，见下方）。
+	String exe_dir = OS::get_singleton()->get_global_config_dir();  // 通常为 /data/data/<pkg>/files
+#elif defined(IOS_ENABLED)
+	// iOS: BCL 与用户程序集打包在 NSBundle mainBundle 资源目录下。
+	// OS::get_executable_path() 在 iOS 上返回 mainBundle 可执行文件路径，
+	// 其 base_dir 即资源目录（如 .../MyApp.app/）。
+	String exe_dir = OS::get_singleton()->get_executable_path().get_base_dir();
 #else
 	String exe_dir = OS::get_singleton()->get_executable_path().get_base_dir();
 #endif
@@ -326,6 +337,24 @@ bool GDMono::initialize() {
 	setenv("MONO_NO_VERIFY", "1", 1);
 	MonoLogger::log_warning("MONO_NO_VERIFY=1 (WASM only) — CIL verification skipped, "
 	                        "load only trusted assemblies (BCL + editor-built user DLL)");
+#elif defined(IOS_ENABLED)
+	// iOS: App Store 禁止 JIT（W^X 内存保护），必须用 interpreter 模式。
+	// 与 WASM 复用 MONO_EE_MODE_INTERP，避免 Full AOT 的复杂工具链。
+	// interpreter 加载 BCL 同样会触发严格 CIL 验证失败，故沿用 MONO_NO_VERIFY 让步。
+	MonoLogger::log("Setting up interpreter mode for iOS (EE_MODE_INTERP, no JIT per App Store policy)...");
+	mono_jit_set_aot_mode(MONO_EE_MODE_INTERP);
+	setenv("MONO_NO_VERIFY", "1", 1);
+	MonoLogger::log_warning("MONO_NO_VERIFY=1 (iOS) — CIL verification skipped, "
+	                        "load only trusted assemblies (BCL + editor-built user DLL)");
+#elif defined(ANDROID_ENABLED)
+	// Android: 允许 JIT，但本项目沿用 interpreter 模式以复用 mono_new 的 WASM 路径
+	// （icall ABI、Variant 封送等已在 interpreter 下验证）。
+	// Android NDK 的 BCL 也无法通过严格 CIL 验证，沿用 MONO_NO_VERIFY 让步。
+	MonoLogger::log("Setting up interpreter mode for Android (EE_MODE_INTERP)...");
+	mono_jit_set_aot_mode(MONO_EE_MODE_INTERP);
+	setenv("MONO_NO_VERIFY", "1", 1);
+	MonoLogger::log_warning("MONO_NO_VERIFY=1 (Android) — CIL verification skipped, "
+	                        "load only trusted assemblies (BCL + editor-built user DLL)");
 #endif
 
 	MonoLogger::log(vformat("Calling mono_jit_init_version with runtime: %s", runtime_version));
@@ -388,6 +417,13 @@ bool GDMono::initialize() {
 	GDMonoInterop::variant_register_icalls();
 	GDMonoCallable::register_icalls();
 	GDSignalAwaiter::register_icalls();
+
+#if defined(ANDROID_ENABLED) && !defined(TOOLS_ENABLED)
+	// Android: 安装程序集 preload hook，从 APK 内 res:// 路径加载 BCL 与用户程序集。
+	// 参考 modules/mono/mono_gd/gd_mono.cpp:530-589 load_assembly_from_pck。
+	// desktop/WASM/iOS 不需要此 hook（文件系统可直接 fopen）。
+	install_android_assembly_preload_hook();
+#endif
 
 	// Register ClassDB-generated Node/Node2D/Node3D/Control/Resource/Timer icalls (see glue/glue_cpp/).
 	GDMonoInterop::register_node_icalls();
@@ -684,6 +720,64 @@ bool GDMono::initialize() {
 
 	return true;
 }
+
+#if defined(ANDROID_ENABLED) && !defined(TOOLS_ENABLED)
+// Android 程序集 preload hook：从 APK 内 res:// 路径加载程序集。
+// 参考 modules/mono/mono_gd/gd_mono.cpp:530-589 load_assembly_from_pck。
+//
+// Android 的文件系统不能直接 fopen APK 内的 res:// 路径，必须通过 Godot 的
+// FileAccess（内部走 AndroidAssetFileAccess）。安装此 hook 后，Mono 在
+// 解析程序集引用时会回调此函数，从 APK 内读取 .dll 字节流。
+static MonoAssembly *android_load_assembly_from_pck(MonoAssemblyName *p_name, char **p_assemblies_path, void *p_user_data) {
+	const char *name = mono_assembly_name_get_name(p_name);
+	const char *culture = mono_assembly_name_get_culture(p_name);
+	if (!name) return nullptr;
+
+	String assembly_name;
+	if (culture && culture[0]) {
+		assembly_name += String(culture) + "/";
+	}
+	assembly_name += String(name);
+	if (!assembly_name.ends_with(".dll")) {
+		assembly_name += ".dll";
+	}
+
+	// 优先在 res://.godot/mono/publish/<arch>/ 查找（参考 godotsharp_dirs.cpp:181）
+	String arch = Engine::get_singleton()->get_architecture_name();
+	Vector<String> candidates = {
+		"res://.godot/mono/publish/" + arch + "/" + assembly_name,
+		"res://.mono/assemblies/" + assembly_name,
+		"res://mono/lib/mono/4.5/" + assembly_name,
+	};
+
+	for (const String &path : candidates) {
+		if (!FileAccess::exists(path)) continue;
+		PackedByteArray data = FileAccess::get_file_as_bytes(path);
+		if (data.is_empty()) continue;
+
+		MonoImageOpenStatus status = MONO_IMAGE_OK;
+		MonoImage *image = mono_image_open_from_data_with_name(
+				reinterpret_cast<char *>(data.ptrw()), data.size(),
+				/*need_copy*/ true, &status, /*ref_only*/ false,
+				assembly_name.utf8().get_data());
+		if (status != MONO_IMAGE_OK || !image) continue;
+
+		status = MONO_IMAGE_OK;
+		MonoAssembly *assembly = mono_assembly_load_from_full(
+				image, assembly_name.utf8().get_data(), &status, /*ref_only*/ false);
+		if (status == MONO_IMAGE_OK && assembly) {
+			MonoLogger::log(vformat("Android preload hook loaded: %s from %s", assembly_name, path));
+			return assembly;
+		}
+	}
+	return nullptr;  // 让 Mono 继续走默认查找路径
+}
+
+void GDMono::install_android_assembly_preload_hook() {
+	mono_install_assembly_preload_hook(&android_load_assembly_from_pck, nullptr);
+	MonoLogger::log("Android assembly preload hook installed (loads from res://.godot/mono/publish/<arch>/)");
+}
+#endif  // ANDROID_ENABLED && !TOOLS_ENABLED
 
 void GDMono::cleanup() {
 	if (!initialized)

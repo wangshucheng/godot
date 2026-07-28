@@ -176,4 +176,9 @@ void* mono_class_get(void* image, uint32_t type_token) { return nullptr; }
 void* mono_property_get_value(void* prop, void* obj, void** params, void** exc) { return nullptr; }
 char* mono_object_to_string(void* obj, void** exc) { return (char*)""; }
 
+// P1.2/P2.1 stub 补全：字符串与数组 introspection API
+void* mono_string_chars(void* string) { return nullptr; }
+int mono_class_is_array(void* klass) { return 0; }
+void* mono_class_get_element_class(void* klass) { return nullptr; }
+
 }

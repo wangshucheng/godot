@@ -24,17 +24,11 @@ void mono_free(void *ptr);
 
 namespace {
 
-// Helpers: float/double 位模式互转（WASM 安全）
+// Helpers: float 位模式互转（WASM 安全）
 static inline int64_t float_to_int64_bits(float v) {
 	int32_t i32;
 	memcpy(&i32, &v, sizeof(int32_t));
 	return (int64_t)i32;
-}
-
-static inline int64_t double_to_int64_bits(double v) {
-	int64_t i64;
-	memcpy(&i64, &v, sizeof(int64_t));
-	return i64;
 }
 
 // Vector2 编码: x 在低 32 位, y 在高 32 位（与 Node2D 一致）
@@ -43,15 +37,6 @@ static inline int64_t vec2_to_int64(const Vector2 &v) {
 	memcpy(&x_bits, &v.x, sizeof(int32_t));
 	memcpy(&y_bits, &v.y, sizeof(int32_t));
 	return ((int64_t)y_bits << 32) | (uint32_t)x_bits;
-}
-
-static inline Vector2 int64_to_vec2(int64_t bits) {
-	Vector2 v;
-	int32_t x_bits = (int32_t)(bits & 0xFFFFFFFF);
-	int32_t y_bits = (int32_t)((bits >> 32) & 0xFFFFFFFF);
-	memcpy(&v.x, &x_bits, sizeof(int32_t));
-	memcpy(&v.y, &y_bits, sizeof(int32_t));
-	return v;
 }
 
 // Color 编码: 4 个 float 分别用 4 个 int32 透传，但 icall 参数最多 4 个，所以用全局调用 + 单值返回。

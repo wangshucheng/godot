@@ -775,6 +775,8 @@ protected:
 		bool is_macos = p_features.has("macos");
 		bool is_linux = p_features.has("linux");
 		bool is_web = p_features.has("web");
+		bool is_ios = p_features.has("ios");
+		bool is_android = p_features.has("android");
 
 		if (is_windows || is_macos || is_linux) {
 			_deploy_mono_desktop(exe_dir);
@@ -782,6 +784,14 @@ protected:
 		} else if (is_web) {
 			_deploy_mono_web(exe_dir);
 			_deploy_user_assemblies_web();
+		} else if (is_ios || is_android) {
+			// iOS/Android 骨架支持：打包 BCL + GodotSharp.dll + 用户程序集到 PCK。
+			// 运行时（gd_mono.cpp）已预设从 res://mono/lib/mono/4.5/ 和
+			// res://.mono/assemblies/ 加载，Android preload hook 也会从
+			// res://.godot/mono/publish/<arch>/ 查找。
+			// 注意：当前使用桌面版 BCL，真机可能需要平台专用 BCL（类似 WASM 专用 BCL）。
+			_deploy_mono_mobile(exe_dir, p_features);
+			_deploy_user_assemblies_mobile(p_features);
 		}
 	}
 
@@ -1075,6 +1085,140 @@ private:
 		PackedByteArray data = FileAccess::get_file_as_bytes(deploy_dll);
 		MonoLogger::log(vformat("Export (web): deploying GodotSharp.dll from %s (%d bytes)", deploy_dll, data.size()));
 		add_file(".mono/assemblies/GodotSharp.dll", data, false);
+	}
+
+	// --------------------------------------------------------------------------
+	// iOS/Android 移动端部署（骨架实现）
+	// --------------------------------------------------------------------------
+	// 运行时路径约定（与 gd_mono.cpp 的 android_load_assembly_from_pck 候选路径一致）：
+	//   1. res://.godot/mono/publish/<arch>/<name>.dll  (Android preload hook 优先)
+	//   2. res://.mono/assemblies/<name>.dll            (通用回退)
+	//   3. res://mono/lib/mono/4.5/<name>.dll           (BCL 回退)
+	//
+	// 本骨架实现把：
+	//   - BCL        → res://mono/lib/mono/4.5/
+	//   - GodotSharp → res://.mono/assemblies/
+	//   - 用户 DLL    → res://.mono/assemblies/（_deploy_user_assemblies_mobile）
+	//
+	// ⚠️ 当前使用桌面版 BCL。真机可能需要平台专用 BCL（类似 WASM 专用 BCL），
+	//    否则可能触发 "invalid CIL image" 或签名不匹配。待交叉编译 Mono 静态库
+	//    时一并产出平台专用 BCL 后替换。
+	void _deploy_mono_mobile(const String &p_exe_dir, const HashSet<String> &p_features) {
+		String platform_tag = p_features.has("android") ? "android" : "ios";
+
+		// 定位 BCL 目录（与 _deploy_mono_web 同样的查找逻辑）
+		String bcl_dir = p_exe_dir.path_join("mono").path_join("lib").path_join("mono").path_join("4.5");
+		if (!FileAccess::exists(bcl_dir.path_join("mscorlib.dll"))) {
+			bcl_dir = p_exe_dir.path_join("..").path_join("mono").path_join("lib").path_join("mono").path_join("4.5");
+		}
+		if (!FileAccess::exists(bcl_dir.path_join("mscorlib.dll"))) {
+			MonoLogger::log_warning(vformat("Export (%s): BCL not found at %s, C# runtime will fail to initialize",
+					platform_tag, bcl_dir));
+			return;
+		}
+
+		MonoLogger::log_warning(vformat("Export (%s): using desktop BCL as fallback — real device may require platform-specific BCL",
+				platform_tag));
+
+		// 打包 BCL 到 res://mono/lib/mono/4.5/
+		// 只打包运行时必需的核心 BCL 程序集，避免 PCK 膨胀
+		Vector<String> bcl_dlls = {
+			"mscorlib.dll",
+			"System.dll",
+			"System.Core.dll",
+			"System.Numerics.dll",
+			"System.Xml.dll",
+			"System.Xml.Linq.dll",
+			"I18N.dll",
+			"I18N.West.dll",
+		};
+
+		int bcl_count = 0;
+		for (const String &dll : bcl_dlls) {
+			String src = bcl_dir.path_join(dll);
+			if (FileAccess::exists(src)) {
+				PackedByteArray data = FileAccess::get_file_as_bytes(src);
+				if (data.size() > 0) {
+					String target = "mono/lib/mono/4.5/" + dll;
+					add_file(target, data, false);
+					bcl_count++;
+				}
+			}
+		}
+		MonoLogger::log(vformat("Export (%s): deployed %d BCL assemblies to res://mono/lib/mono/4.5/",
+				platform_tag, bcl_count));
+
+		// 打包 GodotSharp.dll 到 res://.mono/assemblies/
+		// 优先从 BCL 目录读取（与 _deploy_mono_web 同样的逻辑）
+		String godotsharp_src = bcl_dir.path_join("GodotSharp.dll");
+		if (!FileAccess::exists(godotsharp_src)) {
+			godotsharp_src = p_exe_dir.path_join("GodotSharp.dll");
+		}
+		if (FileAccess::exists(godotsharp_src)) {
+			PackedByteArray data = FileAccess::get_file_as_bytes(godotsharp_src);
+			if (data.size() > 0) {
+				add_file(".mono/assemblies/GodotSharp.dll", data, false);
+				MonoLogger::log(vformat("Export (%s): deployed GodotSharp.dll (%d bytes) to res://.mono/assemblies/",
+						platform_tag, data.size()));
+			}
+		} else {
+			MonoLogger::log_warning(vformat("Export (%s): GodotSharp.dll not found", platform_tag));
+		}
+	}
+
+	// 打包用户程序集 + NuGet 依赖到 res://.mono/assemblies/
+	// 同时尝试打包到 res://.godot/mono/publish/<arch>/（Android preload hook 优先路径）
+	void _deploy_user_assemblies_mobile(const HashSet<String> &p_features) {
+		String project_name = get_project_name();
+		String project_dir = get_project_dir();
+		String project_assemblies_dir = project_dir.path_join(".mono").path_join("assemblies");
+		String platform_tag = p_features.has("android") ? "android" : "ios";
+
+		String latest_dll = find_latest_project_dll(project_assemblies_dir, project_name);
+		if (latest_dll.is_empty() || !FileAccess::exists(latest_dll)) {
+			MonoLogger::log_warning(vformat("Export (%s): no compiled user assembly found, attempting compilation...", platform_tag));
+			if (csharp_editor_compile_project()) {
+				latest_dll = find_latest_project_dll(project_assemblies_dir, project_name);
+			}
+		}
+
+		if (!latest_dll.is_empty() && FileAccess::exists(latest_dll)) {
+			PackedByteArray data = FileAccess::get_file_as_bytes(latest_dll);
+			if (data.size() > 0) {
+				// 通用路径（preload hook 候选路径 2）
+				String target = ".mono/assemblies/" + project_name + ".dll";
+				add_file(target, data, false);
+				MonoLogger::log(vformat("Export (%s): deployed user assembly to %s (%d bytes)",
+						platform_tag, target, data.size()));
+
+				// 架构特定路径（Android preload hook 候选路径 1）
+				// 从 features 推断 Godot 架构名
+				String arch = _get_mobile_arch_name(p_features);
+				if (!arch.is_empty()) {
+					String arch_target = ".godot/mono/publish/" + arch + "/" + project_name + ".dll";
+					add_file(arch_target, data, false);
+					MonoLogger::log(vformat("Export (%s): deployed user assembly to %s", platform_tag, arch_target));
+				}
+			}
+		} else {
+			MonoLogger::log_warning(vformat("Export (%s): C# project compilation failed or no assembly found", platform_tag));
+		}
+
+		// NuGet 依赖
+		_deploy_nuget_assemblies();
+	}
+
+	// 从 export features 推断 Godot 内部架构名
+	//（与 Engine::get_architecture_name() 返回值一致）
+	static String _get_mobile_arch_name(const HashSet<String> &p_features) {
+		// Android ABI feature tags
+		if (p_features.has("arm64-v8a")) return "arm64";
+		if (p_features.has("armeabi-v7a")) return "arm32";
+		if (p_features.has("x86_64")) return "x86_64";
+		if (p_features.has("x86")) return "x86_32";
+		// iOS 只有 arm64（模拟器 arm64-x86_64 暂不区分）
+		if (p_features.has("ios") || p_features.has("android")) return "arm64";
+		return String();
 	}
 };
 

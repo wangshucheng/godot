@@ -658,30 +658,237 @@
   safeDefineGlobal('HTMLImageElement', HTMLImageElement);
 
   // ============================================================
-  // 模块 3: AudioContext polyfill
+  // 模块 3: AudioContext polyfill (P2.6 最小可用实现)
+  // ------------------------------------------------------------
+  // 目标：让 Godot WASM 音频驱动 (AudioDriverWeb) 不崩溃，并周期性触发
+  //       ScriptProcessorNode.onaudioprocess 回调以驱动引擎内部音频管线。
+  // 局限：微信小游戏无原生 WebAudio 输出设备，ScriptProcessor 输出的 PCM
+  //       无法实时路由到扬声器（InnerAudioContext 只能播放文件/URL，不能
+  //       播放内存 PCM 流）。因此本实现保证音频系统不阻塞、不崩溃，但
+  //       实际听不到声音。要听到声音需后续接入 AudioWorklet + 文件流式
+  //       写入播放方案（超出 P2.6 范围）。
   // ============================================================
-  function AudioContext() {
-    this._ctx = wx.createInnerAudioContext();
+
+  // AudioBuffer: 持有 PCM 数据（number[] x N 通道）
+  function AudioBuffer(numberOfChannels, length, sampleRate) {
+    this.numberOfChannels = numberOfChannels || 1;
+    this.length = length || 0;
+    this.sampleRate = sampleRate || 44100;
+    this.duration = this.length / this.sampleRate;
+    this._channels = [];
+    for (var i = 0; i < this.numberOfChannels; i++) {
+      this._channels.push(new Float32Array(this.length));
+    }
   }
+  AudioBuffer.prototype.getChannelData = function (channel) {
+    if (channel < 0 || channel >= this.numberOfChannels) {
+      return new Float32Array(0);
+    }
+    return this._channels[channel];
+  };
+  AudioBuffer.prototype.copyFromChannel = function (destination, channelNumber, bufferOffset) {
+    bufferOffset = bufferOffset || 0;
+    var src = this.getChannelData(channelNumber);
+    for (var i = 0; i < destination.length && (i + bufferOffset) < src.length; i++) {
+      destination[i] = src[i + bufferOffset];
+    }
+  };
+  AudioBuffer.prototype.copyToChannel = function (source, channelNumber, bufferOffset) {
+    bufferOffset = bufferOffset || 0;
+    var dst = this.getChannelData(channelNumber);
+    for (var i = 0; i < source.length && (i + bufferOffset) < dst.length; i++) {
+      dst[i + bufferOffset] = source[i];
+    }
+  };
+
+  function AudioContext() {
+    var self = this;
+    this.sampleRate = 44100;
+    this.state = 'running';
+    this.currentTime = 0;
+    this.destination = { channelCount: 2, maxChannelCount: 2, numberOfInputs: 1, numberOfOutputs: 0 };
+    this._listeners = {};
+    // currentTime 推进：每 100ms 推进 0.1s，足够 Godot 的音频驱动认为时间在流动
+    this._timer = setInterval(function () {
+      if (self.state === 'running') {
+        self.currentTime += 0.1;
+      }
+    }, 100);
+  }
+
+  AudioContext.prototype.addEventListener = function (type, listener) {
+    if (!this._listeners[type]) this._listeners[type] = [];
+    this._listeners[type].push(listener);
+  };
+  AudioContext.prototype.removeEventListener = function (type, listener) {
+    if (!this._listeners[type]) return;
+    this._listeners[type] = this._listeners[type].filter(function (fn) { return fn !== listener; });
+  };
+  AudioContext.prototype._emit = function (type) {
+    var ev = { type: type };
+    (this._listeners[type] || []).forEach(function (fn) { try { fn(ev); } catch (e) {} });
+  };
+
+  AudioContext.prototype.createBuffer = function (numberOfChannels, length, sampleRate) {
+    return new AudioBuffer(numberOfChannels, length, sampleRate);
+  };
+
   AudioContext.prototype.createBufferSource = function () {
-    return { buffer: null, loop: false, start: function () {}, stop: function () {}, connect: function () {}, disconnect: function () {} };
+    return {
+      buffer: null,
+      loop: false,
+      loopStart: 0,
+      loopEnd: 0,
+      playbackRate: { value: 1.0 },
+      detune: { value: 0 },
+      onended: null,
+      _started: false,
+      _stopped: false,
+      start: function () { this._started = true; },
+      stop: function () {
+        this._stopped = true;
+        if (typeof this.onended === 'function') {
+          try { this.onended(); } catch (e) {}
+        }
+      },
+      connect: function () { return this; },
+      disconnect: function () {},
+    };
   };
+
   AudioContext.prototype.createGain = function () {
-    return { gain: { value: 1 }, connect: function () {}, disconnect: function () {} };
+    return {
+      gain: { value: 1.0, defaultValue: 1.0, min: 0, max: 1,
+              setValueAtTime: function () {}, linearRampToValueAtTime: function () {},
+              exponentialRampToValueAtTime: function () {}, setTargetAtTime: function () {} },
+      connect: function () { return this; },
+      disconnect: function () {},
+    };
   };
-  AudioContext.prototype.createScriptProcessor = function () {
-    return { connect: function () {}, disconnect: function () {}, onaudioprocess: null };
+
+  // ScriptProcessorNode: 周期性调用 onaudioprocess，让 Godot 引擎的音频
+  // 回调有机会写入 PCM。输出 buffer 被丢弃（无音频设备）。
+  AudioContext.prototype.createScriptProcessor = function (bufferSize, numIn, numOut) {
+    var self = this;
+    bufferSize = bufferSize || 4096;
+    numIn = numIn || 0;
+    numOut = numOut || 2;
+    var node = {
+      bufferSize: bufferSize,
+      numberOfInputs: numIn,
+      numberOfOutputs: numOut,
+      onaudioprocess: null,
+      connect: function () { return this; },
+      disconnect: function () {},
+      _active: true,
+    };
+    // 周期：bufferSize / sampleRate 秒。4096/44100 ≈ 92.9ms。
+    var intervalMs = Math.max(20, Math.floor((bufferSize / self.sampleRate) * 1000));
+    var tick = setInterval(function () {
+      if (!node._active || self.state !== 'running') return;
+      if (typeof node.onaudioprocess !== 'function') return;
+      var inBuf = new AudioBuffer(numIn, bufferSize, self.sampleRate);
+      var outBuf = new AudioBuffer(numOut, bufferSize, self.sampleRate);
+      var ev = {
+        type: 'audioprocess',
+        inputBuffer: inBuf,
+        outputBuffer: outBuf,
+        playbackTime: self.currentTime,
+      };
+      try {
+        node.onaudioprocess(ev);
+      } catch (e) {
+        console.warn('[WeChat Audio] onaudioprocess threw: ' + (e && e.message));
+      }
+    }, intervalMs);
+    node.disconnect = function () {
+      node._active = false;
+      try { clearInterval(tick); } catch (e) {}
+    };
+    return node;
   };
+
+  // decodeAudioData: 最小 WAV (RIFF/PCM) 解析。其他格式直接回调空 buffer。
+  // 这让 Godot 的音频加载路径不阻塞，但实际听不到（见模块注释）。
   AudioContext.prototype.decodeAudioData = function (arrayBuffer, success, error) {
-    if (success) success({});
+    try {
+      var view = new DataView(arrayBuffer);
+      var isWav = (view.getUint32(0, true) === 0x46464952) && // 'RIFF'
+                  (view.getUint32(8, true) === 0x45564157);   // 'WAVE'
+      if (!isWav) {
+        // 非 WAV：返回空 buffer（保持回调链不断裂）
+        var empty = new AudioBuffer(2, 0, this.sampleRate);
+        if (success) success(empty);
+        return;
+      }
+      // 解析 fmt chunk
+      var sampleRate = view.getUint32(24, true);
+      var numChannels = view.getUint16(22, true);
+      var bitsPerSample = view.getUint16(34, true);
+      var dataOffset = 36;
+      while (dataOffset < view.buffer.byteLength - 8) {
+        var chunkId = view.getUint32(dataOffset, true);
+        var chunkSize = view.getUint32(dataOffset + 4, true);
+        if (chunkId === 0x61746164) break; // 'data'
+        dataOffset += 8 + chunkSize;
+      }
+      var numSamples = 0;
+      var buf = null;
+      if (dataOffset < view.buffer.byteLength - 8) {
+        var dataSize = view.getUint32(dataOffset + 4, true);
+        numSamples = Math.floor(dataSize / (numChannels * (bitsPerSample / 8)));
+        buf = new AudioBuffer(numChannels, numSamples, sampleRate);
+        var offset = dataOffset + 8;
+        for (var i = 0; i < numSamples; i++) {
+          for (var c = 0; c < numChannels; c++) {
+            var sample = 0;
+            if (bitsPerSample === 16) {
+              sample = view.getInt16(offset, true) / 32768;
+              offset += 2;
+            } else if (bitsPerSample === 8) {
+              sample = (view.getUint8(offset) - 128) / 128;
+              offset += 1;
+            } else if (bitsPerSample === 32) {
+              sample = view.getFloat32(offset, true);
+              offset += 4;
+            } else {
+              offset += bitsPerSample / 8;
+            }
+            buf._channels[c][i] = sample;
+          }
+        }
+      } else {
+        buf = new AudioBuffer(numChannels, 0, sampleRate);
+      }
+      if (success) success(buf);
+    } catch (e) {
+      console.warn('[WeChat Audio] decodeAudioData failed: ' + (e && e.message));
+      if (error) error(e);
+      else if (success) success(new AudioBuffer(2, 0, this.sampleRate));
+    }
   };
-  AudioContext.prototype.close = function () {};
-  AudioContext.prototype.resume = function () {};
-  AudioContext.prototype.suspend = function () {};
-  AudioContext.prototype.destination = {};
-  AudioContext.prototype.sampleRate = 44100;
+
+  AudioContext.prototype.close = function () {
+    this.state = 'closed';
+    if (this._timer) { try { clearInterval(this._timer); } catch (e) {} }
+    this._emit('statechange');
+  };
+  AudioContext.prototype.resume = function () {
+    if (this.state === 'suspended') {
+      this.state = 'running';
+      this._emit('statechange');
+    }
+    return Promise.resolve();
+  };
+  AudioContext.prototype.suspend = function () {
+    this.state = 'suspended';
+    this._emit('statechange');
+    return Promise.resolve();
+  };
+
   safeDefineGlobal('AudioContext', AudioContext);
   safeDefineGlobal('webkitAudioContext', AudioContext);
+  safeDefineGlobal('AudioBuffer', AudioBuffer);
 
   // ============================================================
   // 模块 4: FileSystem helpers (fileSystemManager 和 USER_DATA_PATH 已在文件顶部前置定义)

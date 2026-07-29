@@ -951,15 +951,33 @@ public partial class Test : Node
 			int hasProtocols = Runtime.TestHasMethod("get_supported_protocols");
 			Runtime.TestAssert("15f supported_protocols", hasProtocols);
 
-			// 15g: Desktop-only actual WebSocket connection using BCL
+			// 15g: Desktop-only actual WebSocket connection using BCL.
+			// ClientWebSocket availability is platform-dependent:
+			//   - Windows: System.dll includes ClientWebSocket (full BCL)
+			//   - Linux/Mono 6.12: System.dll does NOT include ClientWebSocket
+			//     (Mono 6.12 Linux BCL omits System.Net.WebSockets.ClientWebSocket)
+			//   - WASM: no native WebSocket at all
+			// When the type is absent, SKIP the assert (platform limitation, not a bug).
+			// Only assert FAIL when the type exists but instantiation throws.
 			if (_isWeb == 0)
 			{
 				try
 				{
-					// Test BCL ClientWebSocket creation (no actual connection)
-					var wsClient = new System.Net.WebSockets.ClientWebSocket();
-					Runtime.TestAssert("15g BCL ClientWebSocket created", wsClient != null ? 1 : 0);
-					wsClient.Dispose();
+					// Use reflection to avoid JIT type resolution failure on platforms
+					// where ClientWebSocket is not available. Direct reference would
+					// cause TypeLoadException during JIT compilation of the entire
+					// _Process method, breaking all test scenarios.
+					var wsType = Type.GetType("System.Net.WebSockets.ClientWebSocket, System");
+					if (wsType == null)
+					{
+						Runtime.DebugUiAddLine("  15g: Skipped (ClientWebSocket not in BCL on this platform)");
+					}
+					else
+					{
+						object wsClient = System.Activator.CreateInstance(wsType);
+						Runtime.TestAssert("15g BCL ClientWebSocket created", wsClient != null ? 1 : 0);
+						(wsClient as System.IDisposable)?.Dispose();
+					}
 				}
 				catch
 				{

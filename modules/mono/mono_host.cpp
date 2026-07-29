@@ -39,6 +39,28 @@ extern "C" void mono_method_builder_ilgen_init(void);
 extern "C" void mono_sgen_mono_ilgen_init(void);
 #endif
 
+// libmono-native.a 提供：注册 Unix System.Native interop 函数到 Mono 内部调用表
+// （LChflagsCanSetHiddenFlag / GetRandomBytes / 等数十个 SystemNative_* 函数）。
+// 缺失此调用，运行时通过 dlsym 查找会失败（静态链接符号未导出到 .dynsym），
+// 导致 .NET Core BCL 静态构造器 TypeInit 异常（System.Random 等）。
+// 必须在 mono_jit_init_version 之前调用，确保 P/Invoke 表已就绪。
+// 仅 Unix 平台需要（Windows 由 libmonosgen-2.0.dll 内部初始化）。
+#if defined(X11_ENABLED) || defined(MACOS_ENABLED)
+extern "C" void mono_native_initialize(void);
+#endif
+
+// mono_config_parse: 显式加载 mono.config（dllmap 重定向配置）。
+// 静态链接场景下，mono_jit_init_version 可能不会自动加载 mono.config，
+// 导致 dllmap（如 System.Native -> __Internal）不生效。
+// 必须在 mono_jit_init_version 之前调用，确保 P/Invoke 重定向已就绪。
+extern "C" void mono_config_parse(const char *filename);
+
+// mono_config_parse_memory: 解析 XML 字符串形式的 mono.config 并追加到
+// 全局 dllmap 列表。用于在加载系统 /etc/mono/config 之前注入我们的
+// __Internal 重定向条目，确保优先级高于系统的 libmono-native.so 映射。
+// （Mono dllmap 是顺序匹配列表，先加载的条目优先。）
+extern "C" void mono_config_parse_memory(const char *buffer);
+
 MonoHost *MonoHost::singleton = nullptr;
 
 MonoHost::MonoHost() {
@@ -87,6 +109,37 @@ static String find_mono_root(const String &p_start_dir) {
 			break;
 		}
 		dir = parent;
+	}
+
+	// 系统路径 fallback（Linux/macOS 桌面平台）
+	// 当 10 层上级目录搜索失败时，尝试系统标准路径。
+	// 注意：此处无需判断 dir 是否为空——若循环中找到根会已 return，
+	// 到这里表示所有父目录搜索都失败，必须尝试系统路径。
+	{
+		const char *system_paths[] = {
+#ifdef X11_ENABLED
+			"/usr/lib/mono",
+			"/usr/local/lib/mono",
+			"/usr/lib",
+			"/usr/local",
+#endif
+#ifdef MACOS_ENABLED
+			"/Library/Frameworks/Mono.framework/Versions/Current",
+			"/usr/local/lib/mono",
+			"/usr/local",
+#endif
+			nullptr
+		};
+		for (int i = 0; system_paths[i]; i++) {
+			String try_root = system_paths[i];
+			for (int p = 0; profiles[p] != nullptr; p++) {
+				String mscorlib = try_root.path_join("lib").path_join("mono")
+										  .path_join(profiles[p]).path_join("mscorlib.dll");
+				if (FileAccess::exists(mscorlib)) {
+					return try_root;
+				}
+			}
+		}
 	}
 
 	return String();
@@ -228,6 +281,12 @@ Error MonoHost::initialize() {
 	const char *path_sep = ":";
 #endif
 	String search_path = bcl_dir + String(path_sep) + exe_dir;
+	// 添加 Facades 目录到搜索路径（netstandard.dll 等 facade 程序集所在）
+	// 缺失此路径会导致 TypeLoadException: Could not resolve type 'System.Net.WebSockets.ClientWebSocket'
+	String facades_dir = bcl_dir.path_join("Facades");
+	if (DirAccess::exists(facades_dir)) {
+		search_path = search_path + path_sep + facades_dir;
+	}
 	if (DirAccess::exists(godotsharp_api_debug)) {
 		search_path = search_path + path_sep + godotsharp_api_debug;
 	}
@@ -248,6 +307,51 @@ Error MonoHost::initialize() {
 
 	printf("[Mono] Initializing C# / Mono runtime...\n");
 	fflush(stdout);
+
+	// Unix 平台（Linux/macOS）：显式调用 mono_native_initialize() 注册
+	// libmono-native.a 中的 SystemNative_* 函数（LChflags/GetRandomBytes 等）到
+	// Mono 内部调用表。这是静态链接场景的必备步骤 —— 动态链接 .so 时由 ELF
+	// 构造函数自动调用，静态链接 .a 时构造函数不会被触发，必须手动调用。
+	// 必须在 mono_jit_init_version 之前执行，确保 P/Invoke 查找表已就绪。
+#if defined(X11_ENABLED) || defined(MACOS_ENABLED)
+	printf("[Mono] Registering System.Native interop (mono_native_initialize)...\n");
+	fflush(stdout);
+	mono_native_initialize();
+	printf("[Mono] System.Native interop registered.\n");
+	fflush(stdout);
+#endif
+
+	// Unix 平台（Linux/macOS）：加载系统配置后，注入 __Internal dllmap 覆盖。
+	// 问题根因：系统的 /etc/mono/config 包含
+	//   <dllmap dll="System.Native" target="$mono_libdir/libmono-native.so" os="!windows" />
+	// 静态链接场景下没有 libmono-native.so，运行时 DllNotFoundException。
+	//
+	// Mono dllmap 查找逻辑：后添加的条目优先（LIFO），所以我们在
+	// mono_config_parse(NULL) 加载系统配置之后，用 mono_config_parse_memory()
+	// 注入我们的 __Internal 条目，覆盖系统的 libmono-native.so 映射。
+	//
+	// 必须在 mono_jit_init_version 之前调用，确保 P/Invoke 重定向已就绪。
+	printf("[Mono] Loading default mono.config (system dllmaps)...\n");
+	fflush(stdout);
+	mono_config_parse(NULL);
+	printf("[Mono] mono.config loaded.\n");
+	fflush(stdout);
+
+#if defined(X11_ENABLED) || defined(MACOS_ENABLED)
+	printf("[Mono] Injecting dllmap redirects (System.Native -> __Internal)...\n");
+	fflush(stdout);
+	static const char *kMonoDllmapXml =
+		"<configuration>"
+		"  <dllmap dll=\"System.Native\" target=\"__Internal\" />"
+		"  <dllmap dll=\"System.Net.Security\" target=\"__Internal\" />"
+		"  <dllmap dll=\"System.Net.Security.Native\" target=\"__Internal\" />"
+		"  <dllmap dll=\"System.Security.Cryptography.Native\" target=\"__Internal\" />"
+		"  <dllmap dll=\"System.Security.Cryptography.Native.Apple\" target=\"__Internal\" />"
+		"</configuration>";
+	mono_config_parse_memory(kMonoDllmapXml);
+	printf("[Mono] dllmap redirects injected (override system libmono-native.so).\n");
+	fflush(stdout);
+#endif
 
 	// Enable Mono trace logging for type loading to debug mono_class_init failures.
 	// Wrapped in DEBUG_ENABLED to avoid excessive logging in release builds.

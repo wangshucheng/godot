@@ -478,16 +478,72 @@ elif env["platform"] in ["x11", "linuxbsd"]:
         ("MONO_JIT_MODE", 1),
     ])
     mono_lib_path = mono_root + "/libs/linux/x64"
+    env.Prepend(LIBPATH=[mono_lib_path])
     env_mono.Prepend(LIBPATH=[mono_lib_path])
-    env_mono.Append(LIBS=["mono-2.0", "pthread", "dl", "m", "rt"])
+    # 静态链接 Mono SGen runtime（与 Windows 一致策略）
+    # Linux Clang/GCC 不产生 __imp_ 前缀，无需 mono_static_compat.c
+    # 顺序：mono-native 必须用 --whole-archive 强制包含所有 .o
+    # （否则未引用的 SystemNative_* 符号会被 ld 丢弃，运行时 dlsym
+    # 找不到 SystemNative_LChflagsCanSetHiddenFlag 等函数，导致
+    # System.Random 等 BCL 类型 DllNotFoundException）
+    env.Append(LIBS=[
+        "monosgen-2.0",   # libmonosgen-2.0.a（SGen GC runtime）
+        "monoutils",       # libmonoutils.a（工具库）
+        "eglib",           # libeglib.a（Mono 基础库）
+    ])
+    # libmono-native.a 包含 Unix System.Native interop（LChflags/GetRandomBytes 等）
+    # 缺失会导致 .NET Core BCL 静态构造器 TypeInit 异常（System.Random 等）
+    # 见 mono.config: dllmap System.Native -> __Internal
+    # 必须用 --whole-archive 强制包含所有 .o（否则未引用符号会被 ld 丢弃，
+    # 运行时 dlsym 找不到 SystemNative_LChflagsCanSetHiddenFlag 等函数）
+    env.Append(LINKFLAGS=[
+        "-Wl,--whole-archive",
+        "-lmono-native",
+        "-Wl,--no-whole-archive",
+    ])
+    env.Append(LIBS=[
+        "pthread", "dl", "m", "rt",
+        # GSSAPI/Kerberos 系统库：libmono-native.a 的 pal_gssapi.o 引用
+        # gss_* / GSS_C_* 符号（System.Net.Security.Native 依赖）。
+        # --whole-archive 强制包含 pal_gssapi.o，必须链接这些系统库。
+        # 仅 Linux 平台原生系统库，允许动态链接（与 Windows 链接 ws2_32.dll
+        # 等系统 DLL 等价策略）。Godot 游戏运行时不调用 GSSAPI，但链接器
+        # 需要解析符号以生成可执行文件。
+        "gssapi_krb5", "krb5", "k5crypto", "com_err",
+        # 注意：Linux/glibc 中 iconv 是 libc 的一部分，无需 -liconv
+        # macOS 才需要单独链接 libiconv（见下方 macos 分支）
+    ])
+    # 导出可执行文件符号到动态符号表，使 mono 的 __Internal dllmap
+    # 能通过 dlsym(RTLD_DEFAULT, ...) 找到 libmono-native.a 的 SystemNative_*
+    # 符号（如 SystemNative_LChflagsCanSetHiddenFlag / SystemNative_GetRandomBytes）。
+    # 缺失会导致 System.Random 等 BCL 类型 DllNotFoundException。
+    env.Append(LINKFLAGS=["-Wl,--export-dynamic"])
 
 elif env["platform"] == "macos":
     env_mono.Append(CPPDEFINES=[
         ("MONO_JIT_MODE", 1),
     ])
     mono_lib_path = mono_root + "/libs/macos/universal"
+    env.Prepend(LIBPATH=[mono_lib_path])
     env_mono.Prepend(LIBPATH=[mono_lib_path])
-    env_mono.Append(LIBS=["mono-2.0"])
+    # 静态链接 Mono SGen runtime（universal .a 文件，x64+arm64）
+    env.Append(LIBS=[
+        "monosgen-2.0",
+        "monoutils",
+        "eglib",
+    ])
+    # macOS ld64 不支持 --whole-archive，使用 -force_load 强制包含全部对象
+    # （语义等价于 GNU ld 的 --whole-archive -l<lib> --no-whole-archive）
+    env.Append(LINKFLAGS=[
+        "-Wl,-force_load," + mono_lib_path + "/libmono-native.a",
+    ])
+    env.Append(LIBS=[
+        "-framework", "Foundation",
+        "-framework", "CoreFoundation",
+        "iconv",
+    ])
+    # macOS ld64 使用 -export_dynamic 导出符号（语义同 Linux --export-dynamic）
+    env.Append(LINKFLAGS=["-Wl,-export_dynamic"])
 
 elif env["platform"] == "web":
     common_defines = [

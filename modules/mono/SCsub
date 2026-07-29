@@ -545,6 +545,55 @@ elif env["platform"] == "macos":
     # macOS ld64 使用 -export_dynamic 导出符号（语义同 Linux --export-dynamic）
     env.Append(LINKFLAGS=["-Wl,-export_dynamic"])
 
+elif env["platform"] == "android":
+    # Android 原生 Mono 支持（JIT 模式，静态链接 libmonosgen-2.0.a + libmono-native.a）
+    # 策略与 Linux 桌面一致：全静态链接，--whole-archive 强制包含 libmono-native.a
+    env_mono.Append(CPPDEFINES=[("MONO_JIT_MODE", 1)])
+
+    # Android ABI 映射：Godot android_arch -> Mono libs 子目录
+    android_abi = env.get("android_arch", "arm64")
+    abi_map = {
+        "arm64": "arm64-v8a",
+        "arm32": "armeabi-v7a",
+        "x86_32": "x86",
+        "x86_64": "x86_64",
+    }
+    mono_abi = abi_map.get(android_abi, "arm64-v8a")
+    mono_lib_path = mono_root + "/libs/android/" + mono_abi
+
+    env.Prepend(LIBPATH=[mono_lib_path])
+    env_mono.Prepend(LIBPATH=[mono_lib_path])
+
+    # 静态链接 Mono SGen runtime（与 Linux 桌面一致策略）
+    env.Append(LIBS=[
+        "monosgen-2.0",   # libmonosgen-2.0.a（SGen GC runtime）
+        "monoutils",       # libmonoutils.a（工具库）
+        "eglib",           # libeglib.a（Mono 基础库）
+    ])
+
+    # libmono-native.a 必须用 --whole-archive 强制包含所有 .o
+    # （与 Linux 桌面相同模式：否则 SystemNative_* 符号被 linker 丢弃，
+    # 运行时 dlsym 找不到 SystemNative_GetRandomBytes 等函数，
+    # 导致 System.Random 等 BCL 类型 DllNotFoundException）
+    env.Append(LINKFLAGS=[
+        "-Wl,--whole-archive",
+        "-lmono-native",
+        "-Wl,--no-whole-archive",
+    ])
+
+    # Android NDK 系统库
+    # log: __android_log_print（Mono 运行时日志输出到 logcat）
+    # android: AssetManager（Godot 文件访问）
+    # dl: dlsym（Mono __Internal dllmap 符号查找）
+    # m: 数学库（Mono 运行时数学运算）
+    # z: zlib（Mono 内部压缩）
+    env.Append(LIBS=["log", "android", "dl", "m", "z"])
+
+    # 导出符号到动态符号表，使 mono 的 __Internal dllmap
+    # 能通过 dlsym(RTLD_DEFAULT, ...) 找到 libmono-native.a 的符号
+    # （与 Linux 桌面一致的 --export-dynamic 策略）
+    env.Append(LINKFLAGS=["-Wl,--export-dynamic"])
+
 elif env["platform"] == "web":
     common_defines = [
         ("MONO_STATIC", 1),

@@ -45,7 +45,8 @@ extern "C" void mono_sgen_mono_ilgen_init(void);
 // 导致 .NET Core BCL 静态构造器 TypeInit 异常（System.Random 等）。
 // 必须在 mono_jit_init_version 之前调用，确保 P/Invoke 表已就绪。
 // 仅 Unix 平台需要（Windows 由 libmonosgen-2.0.dll 内部初始化）。
-#if defined(X11_ENABLED) || defined(MACOS_ENABLED)
+// Android 同样使用静态链接 libmono-native.a，需手动注册。
+#if defined(X11_ENABLED) || defined(MACOS_ENABLED) || defined(ANDROID_ENABLED)
 extern "C" void mono_native_initialize(void);
 #endif
 
@@ -124,11 +125,17 @@ static String find_mono_root(const String &p_start_dir) {
 			"/usr/local",
 #endif
 #ifdef MACOS_ENABLED
-			"/Library/Frameworks/Mono.framework/Versions/Current",
-			"/usr/local/lib/mono",
-			"/usr/local",
+		"/Library/Frameworks/Mono.framework/Versions/Current",
+		"/usr/local/lib/mono",
+		"/usr/local",
 #endif
-			nullptr
+#ifdef ANDROID_ENABLED
+		// Android 开发调试 fallback：BCL 可通过 adb push 到 /sdcard/mono/
+		// 生产环境应通过 PCK 嵌入或 APK assets 打包 BCL
+		"/sdcard/mono",
+		"/data/local/tmp/mono",
+#endif
+		nullptr
 		};
 		for (int i = 0; system_paths[i]; i++) {
 			String try_root = system_paths[i];
@@ -308,12 +315,13 @@ Error MonoHost::initialize() {
 	printf("[Mono] Initializing C# / Mono runtime...\n");
 	fflush(stdout);
 
-	// Unix 平台（Linux/macOS）：显式调用 mono_native_initialize() 注册
+	// Unix 平台（Linux/macOS/Android）：显式调用 mono_native_initialize() 注册
 	// libmono-native.a 中的 SystemNative_* 函数（LChflags/GetRandomBytes 等）到
 	// Mono 内部调用表。这是静态链接场景的必备步骤 —— 动态链接 .so 时由 ELF
 	// 构造函数自动调用，静态链接 .a 时构造函数不会被触发，必须手动调用。
 	// 必须在 mono_jit_init_version 之前执行，确保 P/Invoke 查找表已就绪。
-#if defined(X11_ENABLED) || defined(MACOS_ENABLED)
+	// Android 同样使用静态链接 libmono-native.a，需手动注册。
+#if defined(X11_ENABLED) || defined(MACOS_ENABLED) || defined(ANDROID_ENABLED)
 	printf("[Mono] Registering System.Native interop (mono_native_initialize)...\n");
 	fflush(stdout);
 	mono_native_initialize();
@@ -321,7 +329,7 @@ Error MonoHost::initialize() {
 	fflush(stdout);
 #endif
 
-	// Unix 平台（Linux/macOS）：加载系统配置后，注入 __Internal dllmap 覆盖。
+	// Unix 平台（Linux/macOS/Android）：加载系统配置后，注入 __Internal dllmap 覆盖。
 	// 问题根因：系统的 /etc/mono/config 包含
 	//   <dllmap dll="System.Native" target="$mono_libdir/libmono-native.so" os="!windows" />
 	// 静态链接场景下没有 libmono-native.so，运行时 DllNotFoundException。
@@ -331,13 +339,15 @@ Error MonoHost::initialize() {
 	// 注入我们的 __Internal 条目，覆盖系统的 libmono-native.so 映射。
 	//
 	// 必须在 mono_jit_init_version 之前调用，确保 P/Invoke 重定向已就绪。
+	// Android 虽无 /etc/mono/config，但 mono_config_parse(NULL) 是 no-op，
+	// dllmap 注入仍然必需（将 System.Native 重定向到 __Internal）。
 	printf("[Mono] Loading default mono.config (system dllmaps)...\n");
 	fflush(stdout);
 	mono_config_parse(NULL);
 	printf("[Mono] mono.config loaded.\n");
 	fflush(stdout);
 
-#if defined(X11_ENABLED) || defined(MACOS_ENABLED)
+#if defined(X11_ENABLED) || defined(MACOS_ENABLED) || defined(ANDROID_ENABLED)
 	printf("[Mono] Injecting dllmap redirects (System.Native -> __Internal)...\n");
 	fflush(stdout);
 	static const char *kMonoDllmapXml =

@@ -43,9 +43,16 @@ MonoObject *mono_field_get_value_object(MonoDomain *domain, MonoClassField *fiel
 typedef uint16_t mono_unichar2;
 int mono_string_length(MonoString *s);
 mono_unichar2 *mono_string_chars(MonoString *s);
-// P2.1: Array introspection (stock mono 新版 API，精简头文件缺)
-int mono_class_is_array(MonoClass *klass);
+// P2.1: Array introspection（stock mono 新版 API，精简头文件缺）
+// 注意：mono_class_is_array 在 stock mono 是 class-inlines.h 中的 static inline，
+// 不在静态库里。这里用 mono_class_get_rank 实现（rank > 0 即数组）。
+int mono_class_get_rank(MonoClass *klass);
 MonoClass *mono_class_get_element_class(MonoClass *klass);
+}
+
+// mono_class_is_array 替代实现（不导出符号，避免与 inline 版本冲突）
+static inline bool mono_class_is_array_inline(MonoClass *klass) {
+	return mono_class_get_rank(klass) > 0;
 }
 
 using namespace GDMonoInterop;
@@ -850,7 +857,7 @@ Variant mono_object_to_variant(MonoObject *p_obj, VariantTypeManaged p_hint_type
 	// --- Mono arrays → PackedXxxArray / Array (P2.1 反向封送) ---
 	// 数组没有 "Godot" 命名空间，必须在命名空间检查之前处理。
 	// 通过元素 class 鉴别 byte/int32/int64/single/double/string。
-	if (mono_class_is_array(cls)) {
+	if (mono_class_is_array_inline(cls)) {
 		MonoClass *elem_cls = mono_class_get_element_class(cls);
 		intptr_t n = mono_array_length((MonoArray *)p_obj);
 		if (elem_cls == mono_get_byte_class()) {

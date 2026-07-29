@@ -58,9 +58,38 @@ echo "  DEPLOY_DIR  = $DEPLOY_DIR"
 echo ""
 
 # -----------------------------------------------------------------------------
+# 关键修复：MSYS2/Git Bash 路径转换
+# -----------------------------------------------------------------------------
+# Windows 驱动器路径（如 "E:/workspace/..."）会破坏 GNU make 的目标解析——
+# make 把 "E:" 当作 target pattern 的分隔符，报 "multiple target patterns"。
+# 必须把所有传入 configure 的路径转为 Unix 风格 (/e/workspace/...)。
+# MSYS2 在调用 Windows 二进制（如 clang.exe）时会自动把 Unix 路径转回
+# Windows 路径，所以交叉编译器仍能正确解析 -I/-L 参数。
+if command -v cygpath >/dev/null 2>&1; then
+    echo "=== 路径转换（Windows -> MSYS Unix 风格）==="
+    MONO_SRC="$(cygpath -u "$MONO_SRC")"
+    NDK_ROOT="$(cygpath -u "$NDK_ROOT")"
+    BUILD_DIR="$(cygpath -u "$BUILD_DIR")"
+    DEPLOY_DIR="$(cygpath -u "$DEPLOY_DIR")"
+    SYSTEM_MONO="$(cygpath -u "$SYSTEM_MONO")"
+    echo "  MONO_SRC    = $MONO_SRC"
+    echo "  NDK_ROOT    = $NDK_ROOT"
+    echo "  BUILD_DIR   = $BUILD_DIR"
+    echo "  DEPLOY_DIR  = $DEPLOY_DIR"
+    echo "  SYSTEM_MONO = $SYSTEM_MONO"
+    echo ""
+fi
+
+# -----------------------------------------------------------------------------
 # Step 1: 创建 NDK standalone toolchain（首次运行约 2 分钟）
 # -----------------------------------------------------------------------------
 TOOLCHAIN_DIR="$NDK_ROOT/../standalone-$ARCH"
+# 关键修复：Git Bash/MSYS2 把 PATH 中的 ':' 当作分隔符，导致 Windows 驱动器路径
+# (如 "D:/software/...") 被拆成 "D" + "/software/..." 两段，configure 找不到
+# aarch64-linux-android-clang。必须用 cygpath 转 Unix 风格 (/d/software/...)。
+if command -v cygpath >/dev/null 2>&1; then
+    TOOLCHAIN_DIR="$(cygpath -u "$TOOLCHAIN_DIR")"
+fi
 if [ ! -d "$TOOLCHAIN_DIR" ]; then
     echo "=== Step 1: 创建 NDK standalone toolchain ==="
     python "$NDK_ROOT/build/tools/make_standalone_toolchain.py" \
@@ -72,6 +101,15 @@ else
     echo "=== Step 1: toolchain 已存在，跳过 ==="
 fi
 export PATH="$TOOLCHAIN_DIR/bin:$PATH"
+
+# 验证 clang 可被 shell 找到（防止 PATH 配置再次出错）
+if ! command -v aarch64-linux-android-clang >/dev/null 2>&1; then
+    echo "ERROR: aarch64-linux-android-clang not found in PATH"
+    echo "  PATH=$PATH"
+    exit 1
+fi
+echo "  clang 路径: $(command -v aarch64-linux-android-clang)"
+echo "  clang 版本: $(aarch64-linux-android-clang --version | head -1)"
 
 # -----------------------------------------------------------------------------
 # Step 2: autogen.sh（若 configure 不存在）
@@ -105,12 +143,45 @@ if [ ! -f Makefile ]; then
         --enable-threads=posix \
         --disable-debug-helpers \
         --disable-boehm \
+        --disable-btls \
         --without-ikvm-native \
         --without-x \
         CFLAGS="-fPIE -fPIC -O2 -g -D__ANDROID__ -D__BIONIC__" \
         CXXFLAGS="-fPIE -fPIC -O2 -g -D__ANDROID__ -D__BIONIC__" \
-        LDFLAGS="-fPIE -pie"
+        LDFLAGS="-fPIE -pie" \
+        CC="$HOST_TRIPLE-clang" \
+        CXX="$HOST_TRIPLE-clang++" \
+        LD="$HOST_TRIPLE-ld" \
+        AR="$HOST_TRIPLE-ar" \
+        RANLIB="$HOST_TRIPLE-ranlib" \
+        STRIP="$HOST_TRIPLE-strip"
     echo "  configure done"
+
+    # 关键修复：综合修复 Makefile（用 Python 脚本，比 sed 更可靠）。
+    # 解决三个问题：
+    # 1. autotools recipe 调用 $(SHELL)，路径含空格 → 替换为 @true
+    # 2. config.status recipe 同样问题 → 替换为 @true
+    # 3. NDK make 不理解 MSYS 路径 /e/... → 转为 Windows 路径 E:/...
+    # 4. 精简 SUBDIRS（移除 po 等翻译目录）
+    FIX_SCRIPT="$(dirname "$0")/fix_mono_makefiles.py"
+    if [ -f "$FIX_SCRIPT" ]; then
+        echo "  修复 Makefile（autotools/config.status/路径/SUBDIRS）..."
+        # NDK python.exe 是 Windows 原生程序，不认 MSYS 路径 /c/...
+        # 用 cygpath 转为 Windows 路径；优先用系统 Python（C:/Python313）
+        FIX_SCRIPT_WIN="$(cygpath -w "$FIX_SCRIPT" 2>/dev/null || echo "$FIX_SCRIPT")"
+        BUILD_DIR_WIN="$(cygpath -w "$BUILD_DIR" 2>/dev/null || echo "$BUILD_DIR")"
+        SYS_PY=""
+        for cand in /c/Python313/python.exe /c/Python312/python.exe /c/Python311/python.exe; do
+            if [ -x "$cand" ]; then SYS_PY="$cand"; break; fi
+        done
+        if [ -n "$SYS_PY" ]; then
+            "$SYS_PY" "$FIX_SCRIPT_WIN" "$BUILD_DIR_WIN"
+        else
+            python "$FIX_SCRIPT_WIN" "$BUILD_DIR_WIN"
+        fi
+    else
+        echo "  WARNING: fix_mono_makefiles.py not found, skip Makefile fixes"
+    fi
 else
     echo "=== Step 3: Makefile 已存在，跳过 configure ==="
 fi
@@ -119,8 +190,14 @@ fi
 # Step 4: make（约 20-40 分钟）
 # -----------------------------------------------------------------------------
 echo "=== Step 4: make -j$(nproc) ==="
-make -j"$(nproc)" 2>&1 | tee "$BUILD_DIR/build.log"
-echo "  make done"
+# Makefile 中的 autotools/config.status recipe 已被禁用（@true），
+# 不需要 -o 标志或 AUTO*=true 覆盖。
+# PYTHON 覆盖：configure 可能检测到含空格的 TRAE IDE Python 路径，
+# 导致 genmdesc.py 等脚本调用失败。用系统 Python 替代。
+SYS_PYTHON="${SYS_PYTHON:-C:/Python313/python.exe}"
+make -j"$(nproc)" PYTHON="$SYS_PYTHON" \
+    2>&1 | tee "$BUILD_DIR/build.log"
+MAKE_EXIT=${PIPESTATUS[0]}
 
 # -----------------------------------------------------------------------------
 # Step 5: 收集静态库产物
@@ -129,12 +206,17 @@ echo "=== Step 5: 收集静态库到 $DEPLOY_DIR ==="
 mkdir -p "$DEPLOY_DIR"
 
 # 关键库（必须）
+# 注意：libmonosgen-2.0.a 在 mono/mini/.libs/ 下（不是 mono/sgen/）
+#       libmonoutils.a 在 mono/utils/.libs/ 下（不是 mono/mini/）
 LIBS_TO_COLLECT=(
-    "mono/sgen/.libs/libmonosgen-2.0.a"
+    "mono/mini/.libs/libmonosgen-2.0.a"
     "mono/mini/.libs/libmono-ee-interp.a"
-    "mono/mini/.libs/libmonoutils.a"
+    "mono/utils/.libs/libmonoutils.a"
     "mono/eglib/.libs/libeglib.a"
-    "external/zlib/.libs/libz.a"
+    "mono/metadata/.libs/libmonoruntimesgen.a"
+    "mono/sgen/.libs/libmonosgen.a"
+    "mono/mini/.libs/libmono-dbg.a"
+    "mono/utils/.libs/libmonomath.a"
 )
 
 for lib in "${LIBS_TO_COLLECT[@]}"; do

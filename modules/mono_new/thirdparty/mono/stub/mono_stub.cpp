@@ -138,6 +138,7 @@ void mono_free(void* ptr) {}
 
 void mono_jit_parse_options(int argc, char** argv) {}
 int mono_jit_set_trace_options(const char* options) { return 0; }
+void mono_jit_set_aot_mode(int mode) {}
 void mono_security_set_core_clr_platform_callback(void* cb) {}
 
 const char* mono_environment_exitcode_get(void) { return nullptr; }
@@ -180,5 +181,16 @@ char* mono_object_to_string(void* obj, void** exc) { return (char*)""; }
 void* mono_string_chars(void* string) { return nullptr; }
 int mono_class_is_array(void* klass) { return 0; }
 void* mono_class_get_element_class(void* klass) { return nullptr; }
+
+// Android/iOS stub 补全：gd_mono.cpp extern "C" 块声明的 API
+const char* mono_check_corlib_version(void) { return "stub"; }
+void* mono_image_open_full(const char* fname, int* status, int refonly) { if (status) *status = 0; return nullptr; }
+void* mono_image_open_from_data(char* data, uint32_t data_len, int need_copy, int* status) { if (status) *status = 0; return nullptr; }
+const char* mono_image_strerror(int status) { return "stub"; }
+void mono_trace_set_level_string(const char* value) {}
+void mono_trace_set_mask_string(const char* value) {}
+void* mono_assembly_load_from(void* image, const char* fname, int* status) { if (status) *status = 0; return nullptr; }
+void mono_debug_cleanup(void) {}
+int mono_debug_enabled(void) { return 0; }
 
 }

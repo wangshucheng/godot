@@ -52,6 +52,13 @@ const void *mono_image_get_table_info(MonoImage *image, int table_id);
 int mono_table_info_get_rows(const void *table);
 MonoClass *mono_class_get(MonoImage *image, uint32_t type_token);
 MonoAssembly *mono_assembly_load_from(MonoImage *image, const char *fname, MonoImageOpenStatus *status);
+// Android assembly preload hook APIs（精简头文件缺少声明，见 mono/metadata/assembly.h）
+typedef MonoAssembly *(*MonoAssemblyPreloadFunc)(MonoAssemblyName *aname, char **assemblies_path, void *user_data);
+const char *mono_assembly_name_get_name(MonoAssemblyName *aname);
+const char *mono_assembly_name_get_culture(MonoAssemblyName *aname);
+MonoImage *mono_image_open_from_data_with_name(char *data, uint32_t data_len, mono_bool need_copy, MonoImageOpenStatus *status, mono_bool refonly, const char *name);
+MonoAssembly *mono_assembly_load_from_full(MonoImage *image, const char *fname, MonoImageOpenStatus *status, mono_bool refonly);
+void mono_install_assembly_preload_hook(MonoAssemblyPreloadFunc func, void *user_data);
 // Debug APIs
 void mono_debug_init(int format);
 void mono_debug_cleanup(void);
@@ -237,9 +244,9 @@ bool GDMono::initialize() {
 #elif defined(ANDROID_ENABLED)
 	// Android: BCL 与用户程序集打包在 APK 内的 res:// 路径下。
 	// OS::get_executable_path() 在 Android 上返回 APK 内部路径，不可直接 fopen。
-	// 用 Godot 的全局化路径（FileAccess 会自动处理 APK 读取）。
+	// 用 Godot 的 user data 目录（FileAccess 会自动处理 APK 读取）。
 	// 程序集加载走 preload hook（load_assembly_from_pck，见下方）。
-	String exe_dir = OS::get_singleton()->get_global_config_dir();  // 通常为 /data/data/<pkg>/files
+	String exe_dir = OS::get_singleton()->get_user_data_dir();  // 通常为 /data/data/<pkg>/files
 #elif defined(IOS_ENABLED)
 	// iOS: BCL 与用户程序集打包在 NSBundle mainBundle 资源目录下。
 	// OS::get_executable_path() 在 iOS 上返回 mainBundle 可执行文件路径，
@@ -418,10 +425,11 @@ bool GDMono::initialize() {
 	GDMonoCallable::register_icalls();
 	GDSignalAwaiter::register_icalls();
 
-#if defined(ANDROID_ENABLED) && !defined(TOOLS_ENABLED)
+#if defined(ANDROID_ENABLED) && !defined(TOOLS_ENABLED) && !defined(MONO_STUB)
 	// Android: 安装程序集 preload hook，从 APK 内 res:// 路径加载 BCL 与用户程序集。
 	// 参考 modules/mono/mono_gd/gd_mono.cpp:530-589 load_assembly_from_pck。
 	// desktop/WASM/iOS 不需要此 hook（文件系统可直接 fopen）。
+	// stub 模式跳过（无真实 Mono 符号）。
 	install_android_assembly_preload_hook();
 #endif
 
@@ -721,7 +729,7 @@ bool GDMono::initialize() {
 	return true;
 }
 
-#if defined(ANDROID_ENABLED) && !defined(TOOLS_ENABLED)
+#if defined(ANDROID_ENABLED) && !defined(TOOLS_ENABLED) && !defined(MONO_STUB)
 // Android 程序集 preload hook：从 APK 内 res:// 路径加载程序集。
 // 参考 modules/mono/mono_gd/gd_mono.cpp:530-589 load_assembly_from_pck。
 //

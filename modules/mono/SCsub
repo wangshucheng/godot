@@ -545,6 +545,83 @@ elif env["platform"] == "macos":
     # macOS ld64 使用 -export_dynamic 导出符号（语义同 Linux --export-dynamic）
     env.Append(LINKFLAGS=["-Wl,-export_dynamic"])
 
+elif env["platform"] == "ios":
+    # iOS Mono 支持（Interpreter 模式，Apple App Store 禁止 JIT）
+    #
+    # iOS 限制：
+    #   - 不允许 JIT（App Store 政策 + iOS 沙箱 W^X 内存保护）
+    #   - 应用必须静态库（不能动态库，最终打包成 .app）
+    #   - 必须使用 Full AOT 模式或 Interpreter 模式
+    #
+    # 阶段 1 实现：Interpreter 模式
+    #   - Apple 2020+ 允许 interpreter-only iOS 应用
+    #   - 无需 AOT 交叉编译工具链（mono-aot-cross-ios）
+    #   - 与 WASM Interpreter 分支结构一致
+    # TODO 阶段 2：Full AOT 模式（待 mono-aot-cross-ios 工具链 + Mac 硬件验证）
+    #
+    # 链接策略：静态链接 + -force_load（Apple ld64，与 macOS 一致）
+    env_mono.Append(CPPDEFINES=[
+        ("MONO_INTERP_MODE", 1),
+        ("MONO_STATIC", 1),
+    ])
+
+    # iOS 架构映射
+    # arm64: iOS device + Apple Silicon (M1+) Mac simulator
+    # x86_64: Intel Mac simulator（仅开发调试，App Store 不需要）
+    ios_arch = env.get("arch", "arm64")
+    arch_map = {
+        "arm64": "arm64",
+        "x86_64": "x86_64",
+    }
+    mono_arch = arch_map.get(ios_arch, "arm64")
+    mono_lib_path = mono_root + "/libs/ios/" + mono_arch
+
+    env.Prepend(LIBPATH=[mono_lib_path])
+    env_mono.Prepend(LIBPATH=[mono_lib_path])
+
+    # Interpreter 模式需要的 Mono 库（与 WASM Interpreter 一致）
+    # mini: Mono JIT 编译器核心（包含 AOT/Interpreter 入口）
+    # monoruntimesgen: SGen GC runtime
+    # monosgen-2.0: SGen GC 主库
+    # mono-ee-interp: Interpreter 引擎（解释执行 IL）
+    # mono-ilgen: IL 生成器（Interpreter 运行时 IL 构建）
+    # monoutils: Mono 工具库
+    # eglib: Mono 基础库（glib 替代）
+    # mono-profiler-aot: AOT profiler（用于 AOT 模式分析，Interpreter 模式也链接）
+    env.Append(LIBS=[
+        "mini",
+        "monoruntimesgen",
+        "monosgen-2.0",
+        "mono-ee-interp",
+        "mono-ilgen",
+        "monoutils",
+        "eglib",
+        "mono-profiler-aot",
+    ])
+
+    # libmono-native.a 必须用 -force_load 强制包含所有 .o
+    # （Apple ld64 不支持 GNU ld 的 --whole-archive；-force_load 是 Apple 等价物）
+    # 与 macOS 分支一致策略：否则 SystemNative_* 符号被 linker 丢弃，
+    # 运行时 dlsym 找不到 SystemNative_GetRandomBytes 等函数，
+    # 导致 System.Random 等 BCL 类型 DllNotFoundException。
+    env.Append(LINKFLAGS=[
+        "-Wl,-force_load," + mono_lib_path + "/libmono-native.a",
+    ])
+
+    # iOS 系统库（与 macOS 一致）
+    # Foundation / CoreFoundation: Mono 运行时基础（NSString, NSDate, NSDateFormatter 等）
+    # iconv: Mono 字符编码转换（System.Text.Encoding 依赖）
+    # 注意：iOS 通过 -framework 链接（Apple 平台标准方式）
+    env.Append(LIBS=[
+        "-framework", "Foundation",
+        "-framework", "CoreFoundation",
+        "iconv",
+    ])
+
+    # 注意：iOS 最终产物是 libgodot.a（静态归档），不是可执行文件。
+    # -export_dynamic 仅对可执行文件有效，对 .a 无意义。
+    # 符号导出由最终 .app 链接时的 Xcode 项目处理（见 platform/ios/export/export_plugin.cpp）。
+
 elif env["platform"] == "android":
     # Android 原生 Mono 支持（JIT 模式，静态链接 libmonosgen-2.0.a + libmono-native.a）
     # 策略与 Linux 桌面一致：全静态链接，--whole-archive 强制包含 libmono-native.a

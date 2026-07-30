@@ -65,9 +65,11 @@ public:
 	bool initialize();
 	void cleanup();
 
-#if defined(ANDROID_ENABLED) && !defined(TOOLS_ENABLED)
+#if defined(ANDROID_ENABLED) && !defined(MONO_STUB)
 	// Android: 安装程序集 preload hook，从 APK 内 res:// 路径加载 .dll。
-	// 在 initialize() 内部调用，无需外部主动调用（声明为 public 便于测试 mock）。
+	// 在 initialize() 内部调用，无需外部主动调用。
+	// 条件必须与 gd_mono.cpp 实现/调用处一致：ANDROID_ENABLED && !MONO_STUB。
+	// editor 与 template_release 均需此 hook（APK 内 res:// 路径无法 fopen）。
 	void install_android_assembly_preload_hook();
 #endif
 

@@ -112,6 +112,32 @@ echo "  clang 路径: $(command -v aarch64-linux-android-clang)"
 echo "  clang 版本: $(aarch64-linux-android-clang --version | head -1)"
 
 # -----------------------------------------------------------------------------
+# Step 1.5: 修补 mono-context.c 的 ARM64 FPSIMD 断言崩溃
+# -----------------------------------------------------------------------------
+# 问题：mono_sigctx_to_monoctx() 的 g_assert (fpctx->head.magic == FPSIMD_MAGIC)
+#       在 VkThread 等无浮点上下文的线程上失败，触发 SIGABRT。
+# 修复：遍历 ucontext reserved 区查找 FPSIMD section，找不到则跳过（GC 安全）。
+echo "=== Step 1.5: 修补 mono-context.c (ARM64 FPSIMD assertion) ==="
+PATCH_SCRIPT="$(dirname "$0")/patch_mono_context_arm64.py"
+MONO_CONTEXT_C="$MONO_SRC/mono/utils/mono-context.c"
+if [ -f "$PATCH_SCRIPT" ] && [ -f "$MONO_CONTEXT_C" ]; then
+    PATCH_SCRIPT_WIN="$(cygpath -w "$PATCH_SCRIPT" 2>/dev/null || echo "$PATCH_SCRIPT")"
+    MONO_CONTEXT_C_WIN="$(cygpath -w "$MONO_CONTEXT_C" 2>/dev/null || echo "$MONO_CONTEXT_C")"
+    SYS_PY=""
+    for cand in /c/Python313/python.exe /c/Python312/python.exe /c/Python311/python.exe; do
+        if [ -x "$cand" ]; then SYS_PY="$cand"; break; fi
+    done
+    if [ -n "$SYS_PY" ]; then
+        "$SYS_PY" "$PATCH_SCRIPT_WIN" "$MONO_CONTEXT_C_WIN"
+    else
+        python "$PATCH_SCRIPT_WIN" "$MONO_CONTEXT_C_WIN"
+    fi
+else
+    echo "  WARNING: patch script or mono-context.c not found, skip patch"
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
 # Step 2: autogen.sh（若 configure 不存在）
 # -----------------------------------------------------------------------------
 cd "$MONO_SRC"

@@ -362,18 +362,14 @@ bool GDMono::initialize() {
 	setenv("MONO_NO_VERIFY", "1", 1);
 	MonoLogger::log_warning("MONO_NO_VERIFY=1 (Android) — CIL verification skipped, "
 	                        "load only trusted assemblies (BCL + editor-built user DLL)");
-#endif
-
-// 诊断：确认 TOOLS_ENABLED 和 MONO_STUB 的定义状态（排查 preload hook 未安装问题）
-#if defined(ANDROID_ENABLED)
-	#if defined(TOOLS_ENABLED)
-		MonoLogger::log_warning("DIAG: ANDROID_ENABLED + TOOLS_ENABLED defined — preload hook will be SKIPPED");
-	#else
-		MonoLogger::log("DIAG: ANDROID_ENABLED + TOOLS_ENABLED NOT defined — preload hook condition OK");
-	#endif
-	#if defined(MONO_STUB)
-		MonoLogger::log_warning("DIAG: MONO_STUB defined — preload hook will be SKIPPED");
-	#endif
+	// 线程挂起策略：切换到协作式（cooperative），避免 SGen GC 通过信号挂起
+	// Godot 的 VkThread 等非 Mono 线程。ARM64 上信号挂起会读取 FPSIMD 上下文，
+	// 若线程未使用浮点指令则 magic 不匹配，触发 mono-context.c 断言 SIGABRT。
+	// 协作式模式下，只有注册到 Mono 的线程（运行 C# 代码）会在安全点被挂起，
+	// 未注册线程（VkThread 等）不被挂起也不被扫描——正好是我们想要的行为。
+	setenv("MONO_THREADS_SUSPEND_POLICY", "cooperative", 1);
+	MonoLogger::log("MONO_THREADS_SUSPEND_POLICY=cooperative (Android) — avoids FPSIMD "
+	                "assertion in VkThread during GC signal-based suspend");
 #endif
 
 #if defined(ANDROID_ENABLED) && !defined(MONO_STUB)
@@ -383,9 +379,6 @@ bool GDMono::initialize() {
 	// FileAccess（内部走 AndroidAssetFileAccess）。若 hook 在 JIT init 之后才安装，
 	// Mono 会因找不到 mscorlib.dll 调用 exit() 终止进程。
 	// 参考 modules/mono/mono_gd/gd_mono.cpp:589-594（在 coreclr_initialize 之前安装）。
-	// 注意：去掉 !defined(TOOLS_ENABLED) 条件，因为 template_release 不应定义
-	// TOOLS_ENABLED，但实际运行时 hook 未被调用，改为只检查 ANDROID_ENABLED。
-	MonoLogger::log("DIAG: calling install_android_assembly_preload_hook()");
 	install_android_assembly_preload_hook();
 #endif
 
@@ -477,9 +470,10 @@ bool GDMono::initialize() {
 		for (const String &path : search_paths) {
 			if (FileAccess::exists(path)) {
 				MonoLogger::log(vformat("Loading GodotSharp from: %s", path));
-#ifdef WEB_ENABLED
+#if defined(WEB_ENABLED) || defined(ANDROID_ENABLED)
 				// In WASM, mono_pe_file_map fails because the library's internal
 				// mono_file_map_size returns 0 for MEMFS files. Load from buffer instead.
+				// Android 同样无法直接 fopen APK 内的 res:// 路径，需用 FileAccess 读取字节流。
 				PackedByteArray gs_data = FileAccess::get_file_as_bytes(path);
 				if (gs_data.size() > 0) {
 					MonoLogger::log(vformat("Reading GodotSharp.dll into buffer: %d bytes", gs_data.size()));
@@ -536,9 +530,9 @@ bool GDMono::initialize() {
 
 		for (const String &search_dir : search_dirs) {
 			String abs_dir;
-#ifdef WEB_ENABLED
-			// In WASM, keep res:// prefix so DirAccess can scan PCK directories.
-			// globalize_path strips res:// prefix which breaks PCK directory access.
+#if defined(WEB_ENABLED) || defined(ANDROID_ENABLED)
+			// In WASM/Android, keep res:// prefix so DirAccess can scan PCK/APK directories.
+			// globalize_path strips res:// prefix which breaks PCK/APK directory access.
 			if (search_dir.begins_with("res://")) {
 				abs_dir = search_dir;
 			} else {
@@ -661,9 +655,9 @@ bool GDMono::initialize() {
 			MonoLogger::log(vformat("Loading user assembly from: %s", path));
 			MonoAssembly *assy = nullptr;
 			CharString path_utf8 = path.utf8();
-#ifdef WEB_ENABLED
-			// In WASM, Mono's fopen can only access MEMFS, not PCK.
-			// If the path is res:// (PCK), copy the assembly to MEMFS first.
+#if defined(WEB_ENABLED) || defined(ANDROID_ENABLED)
+			// In WASM/Android, Mono's fopen cannot access PCK/APK internal res:// paths.
+			// Read via FileAccess (which handles PCK/APK) and load from byte buffer.
 			if (path.begins_with("res://")) {
 				PackedByteArray data = FileAccess::get_file_as_bytes(path);
 				if (data.size() > 0) {
@@ -690,9 +684,9 @@ bool GDMono::initialize() {
 					MonoLogger::log_error(vformat("Failed to read from PCK: %s", path));
 				}
 			} else {
-#ifdef WEB_ENABLED
-				// Also load non-res:// paths from buffer in WASM
-				PackedByteArray data = FileAccess::get_file_as_bytes(path);
+#if defined(WEB_ENABLED) || defined(ANDROID_ENABLED)
+			// Also load non-res:// paths from buffer in WASM/Android
+			PackedByteArray data = FileAccess::get_file_as_bytes(path);
 				if (data.size() > 0) {
 					MonoLogger::log(vformat("Loading assembly from buffer: %s (%d bytes)", path, data.size()));
 					MonoImageOpenStatus status = MONO_IMAGE_OK;
@@ -811,6 +805,7 @@ void GDMono::cleanup() {
 	if (!initialized)
 		return;
 
+	// 1. 释放所有 GC handle（安全，不涉及线程）
 	for (KeyValue<ObjectID, uint32_t> &E : object_gchandles) {
 		if (E.value != 0) {
 			mono_gchandle_free(E.value);
@@ -827,6 +822,7 @@ void GDMono::cleanup() {
 	godotsharp_assembly = nullptr;
 	godotsharp_image = nullptr;
 
+	// 2. 卸载 scripts domain（DISABLE_APPDOMAINS 模式下 scripts_domain == root_domain，跳过）
 	if (scripts_domain) {
 #ifndef DISABLE_APPDOMAINS
 		mono_domain_set(root_domain, true);
@@ -835,10 +831,22 @@ void GDMono::cleanup() {
 		scripts_domain = nullptr;
 	}
 
+	// 3. JIT cleanup
+	// Android 平台跳过 mono_jit_cleanup()：该函数会销毁 Mono 内部 mutex/hash table，
+	// 但 Godot 的 VkThread 等非 Mono 线程可能仍在运行，线程退出时触发 Mono 的
+	// thread detach 回调，访问已销毁的 mutex 导致
+	// "pthread_mutex_lock called on a destroyed mutex" 崩溃。
+	// Android 进程退出时 OS 会回收所有资源（包括 mutex/内存），跳过 jit_cleanup
+	// 不会造成资源泄漏。桌面/WASM/iOS 仍正常调用以保持干净的关闭语义。
+#if !defined(ANDROID_ENABLED)
 	if (root_domain) {
 		mono_jit_cleanup(root_domain);
 		root_domain = nullptr;
 	}
+#else
+	// Android: 不调用 mono_jit_cleanup()，仅清空指针避免悬垂引用
+	root_domain = nullptr;
+#endif
 
 	initialized = false;
 	MonoLogger::log("Mono runtime cleaned up");
@@ -852,16 +860,29 @@ bool GDMono::load_assembly(const String &p_path, bool p_is_proj_assembly) {
 
 	MonoAssembly *assembly = nullptr;
 	CharString p_path_utf8 = p_path.utf8();
-#ifdef WEB_ENABLED
+// Android 与 WASM 一样，无法直接 fopen APK 内的 res:// 路径，
+// 必须用 FileAccess 读取字节流后通过 mono_image_open_from_data 加载。
+// 桌面平台（windows/linux/macos）可直接 fopen，走 mono_domain_assembly_open。
+#if defined(WEB_ENABLED) || defined(ANDROID_ENABLED)
 	{
 		PackedByteArray data = FileAccess::get_file_as_bytes(p_path);
+		MonoLogger::log(vformat("Loading assembly from bytes: %s (size=%d)", p_path, data.size()));
 		if (data.size() > 0) {
 			MonoImageOpenStatus status = MONO_IMAGE_OK;
 			MonoImage *img = mono_image_open_from_data(
 				(char *)data.ptrw(), (unsigned int)data.size(), 1, &status);
 			if (img && status == 0) {
 				assembly = mono_assembly_load_from(img, p_path_utf8.get_data(), &status);
+				if (!assembly) {
+					MonoLogger::log_error(vformat("mono_assembly_load_from failed: status=%d (%s)",
+							status, mono_image_strerror(status)));
+				}
+			} else {
+				MonoLogger::log_error(vformat("mono_image_open_from_data failed: status=%d (%s), img=%s",
+						status, mono_image_strerror(status), img ? "non-null" : "null"));
 			}
+		} else {
+			MonoLogger::log_error(vformat("FileAccess returned empty data for: %s", p_path));
 		}
 		if (!assembly) {
 			assembly = mono_domain_assembly_open(scripts_domain, p_path_utf8.get_data());

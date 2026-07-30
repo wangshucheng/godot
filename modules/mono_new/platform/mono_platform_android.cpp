@@ -29,7 +29,9 @@
 #include <unistd.h>
 #include <sched.h>
 #include <stdio.h>
+#include <fcntl.h>
 #include <langinfo.h>
+#include <sys/prctl.h>
 
 // Android log tag（与 platform/android/java 的 GodotApp 共用前缀）
 #define MONO_ANDROID_LOG_TAG "Godot/Mono"
@@ -98,6 +100,73 @@ int fputs_unlocked(const char *s, FILE *stream) {
 int fflush_unlocked(FILE *stream) {
 	return fflush(stream);
 }
+
+// ---------------------------------------------------------------------------
+// nl_langinfo / pthread_getname_np 桩实现
+// ---------------------------------------------------------------------------
+// Bionic libc 从 API 26 起才提供这两个函数，而本项目 minSdk=24。
+// Mono 的 eglib (gunicode.c) 调用 nl_langinfo(CODESET) 检测字符集，
+// mono-threads-posix.c 调用 pthread_getname_np 获取线程名。
+// Android 上所有 locale 均为 UTF-8，线程名可通过 prctl(PR_GET_NAME) 获取。
+
+#if __ANDROID_API__ < 26
+
+// nl_langinfo: 仅处理 CODESET（Mono 唯一调用的 item），返回 UTF-8
+char *nl_langinfo(nl_item item) {
+	// CODESET 在 <langinfo.h> 中定义为 49（Bionic）
+	if (item == 49 /* CODESET */) {
+		static char utf8[] = "UTF-8";
+		return utf8;
+	}
+	return const_cast<char *>("");
+}
+
+// pthread_getname_np: 通过 prctl(PR_GET_NAME) 获取线程名
+int pthread_getname_np(pthread_t thread, char *buf, size_t buflen) {
+	if (!buf || buflen == 0) return -1;
+	// prctl(PR_GET_NAME) 获取当前线程名；Android 上 pthread_t 指向线程结构
+	// 对于非当前线程，Bionic 无 API 24 以下方案，返回空名
+	char name[16] = {0};
+	if (prctl(PR_GET_NAME, (unsigned long)name, 0, 0, 0) == 0) {
+		strncpy(buf, name, buflen - 1);
+		buf[buflen - 1] = '\0';
+		return 0;
+	}
+	buf[0] = '\0';
+	return -1;
+}
+
+#endif  // __ANDROID_API__ < 26
+
+// ---------------------------------------------------------------------------
+// pthread_mutexattr_setprotocol / getrandom 桩实现
+// ---------------------------------------------------------------------------
+// pthread_mutexattr_setprotocol: Bionic 从 API 28 起提供，但 Android 内核不支持
+// PRIO_INHERIT/PRIO_PROTECT，故 no-op 返回 0 即可（Mono 仅用于递归互斥锁初始化）。
+// getrandom: Bionic 从 API 28 起提供；低版本通过 /dev/urandom 回退。
+#if __ANDROID_API__ < 28
+
+int pthread_mutexattr_setprotocol(pthread_mutexattr_t *attr, int protocol) {
+	// no-op: Android 内核不支持 mutex priority inheritance
+	return 0;
+}
+
+int getrandom(void *buf, size_t buflen, unsigned int flags) {
+	// 回退到 /dev/urandom（flags 忽略，Android 无 GRND_* 需求差异）
+	int fd = open("/dev/urandom", 0 /* O_RDONLY */);
+	if (fd < 0) return -1;
+	ssize_t n = 0;
+	char *p = (char *)buf;
+	while (n < (ssize_t)buflen) {
+		ssize_t r = read(fd, p + n, buflen - n);
+		if (r <= 0) { close(fd); return -1; }
+		n += r;
+	}
+	close(fd);
+	return (int)buflen;
+}
+
+#endif  // __ANDROID_API__ < 28
 
 }  // extern "C"
 

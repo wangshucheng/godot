@@ -36,24 +36,13 @@ android {
         }
     }
 
-    externalNativeBuild {
-        cmake {
-            path "CMakeLists.txt"
-        }
-    }
-
-    libraryVariants.all { variant ->
-        def buildType = variant.buildType.name.capitalize()
-
-        def taskPrefix = ""
-        if (project.path != ":") {
-            taskPrefix = project.path + ":"
-        }
-
-        // Disable the externalNativeBuild* task as it would cause build failures since the cmake build
-        // files is only setup for editing support.
-        gradle.startParameter.excludedTaskNames += taskPrefix + "externalNativeBuild" + buildType
-    }
+    // 注意：externalNativeBuild { cmake { path "CMakeLists.txt" } } 已移除。
+    // CMakeLists.txt 仅用于 Android Studio IDE 编辑支持（代码导航/补全），不参与实际构建。
+    // 真正的原生库 libgodot_android.so 由 SCons 构建并放置在 libs/release/ 下，
+    // Gradle 通过 app/build.gradle 的 jniLibs.srcDirs 打包进 APK。
+    // 保留 externalNativeBuild 块会导致 AGP 创建 buildCMake<BuildType>[<abi>] 任务，
+    // 该任务会尝试用 CMake 编译整个 Godot C++ 源码树（C++17），既慢又会失败。
+    // 如需 IDE 支持，在 Android Studio 中临时恢复此块即可。
 }
 
 dependencies {}

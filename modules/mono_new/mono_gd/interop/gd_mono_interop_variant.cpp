@@ -575,7 +575,9 @@ static MonoClass *get_mono_class_for_variant_type(MonoDomain *p_domain, VariantT
 // ---------------------------------------------------------------------------
 
 MonoObject *variant_to_mono_object(MonoDomain *p_domain, const Variant &p_variant) {
-	if (p_variant.is_null())
+	// 注意: 本引擎的 Variant::is_null() 语义是"非有效 Object 即为 null"
+	// （INT/BOOL/STRING 等全部返回 true），不能用于 NIL 判断。
+	if (p_variant.get_type() == Variant::NIL)
 		return nullptr;
 
 	Variant::Type type = p_variant.get_type();

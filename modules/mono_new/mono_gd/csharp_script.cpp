@@ -739,13 +739,20 @@ bool CSharpInstance::set(const StringName &p_name, const Variant &p_value) {
 			String s = p_value;
 			CharString s_utf8 = s.utf8();
 			MonoString *mstr = mono_string_new(mono_domain_get(), s_utf8.get_data());
-			mono_field_set_value(mono_object, field, &mstr);
+			// 引用类型字段 mono_field_set_value 约定为"直接传指针"而非指针的地址
+			// （与值类型相反，见 mono samples/embed/test-invoke.c）
+			mono_field_set_value(mono_object, field, mstr);
 			return true;
 		}
 		case MONO_TYPE_VALUETYPE: {
 			// H7 扩展: 支持 Vector2/Vector3/Color 等 Godot 值类型字段
 			MonoClass *field_class = mono_type_get_class(ftype);
 			if (!field_class) return false;
+			if (mono_class_is_enum(field_class)) {
+				int32_t val = (int32_t)(int64_t)p_value;
+				mono_field_set_value(mono_object, field, &val);
+				return true;
+			}
 			Variant::Type vt = mono_class_name_to_variant_type(field_class);
 			switch (vt) {
 				case Variant::VECTOR2: {
@@ -826,13 +833,13 @@ bool CSharpInstance::set(const StringName &p_name, const Variant &p_value) {
 			// P1.1: 支持 GodotObject 引用类型字段（如 [Export] Node Target）
 			Object *obj = p_value;
 			if (!obj) {
-				MonoObject *null_obj = nullptr;
-				mono_field_set_value(mono_object, field, &null_obj);
+				mono_field_set_value(mono_object, field, nullptr);
 				return true;
 			}
 			MonoObject *mono_obj = GDMono::get_singleton()->get_mono_object_for_godot_object(obj);
 			if (mono_obj) {
-				mono_field_set_value(mono_object, field, &mono_obj);
+				// 引用类型字段直接传指针（同 STRING 分支）
+				mono_field_set_value(mono_object, field, mono_obj);
 				return true;
 			}
 			return false;
@@ -910,6 +917,12 @@ bool CSharpInstance::get(const StringName &p_name, Variant &r_ret) const {
 			// H7 扩展: 支持 Vector2/Vector3/Color 等 Godot 值类型字段读取
 			MonoClass *field_class = mono_type_get_class(ftype);
 			if (!field_class) return false;
+			if (mono_class_is_enum(field_class)) {
+				int32_t val = 0;
+				mono_field_get_value(mono_object, field, &val);
+				r_ret = Variant((int64_t)val);
+				return true;
+			}
 			Variant::Type vt = mono_class_name_to_variant_type(field_class);
 			switch (vt) {
 				case Variant::VECTOR2: {

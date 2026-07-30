@@ -364,6 +364,31 @@ bool GDMono::initialize() {
 	                        "load only trusted assemblies (BCL + editor-built user DLL)");
 #endif
 
+// 诊断：确认 TOOLS_ENABLED 和 MONO_STUB 的定义状态（排查 preload hook 未安装问题）
+#if defined(ANDROID_ENABLED)
+	#if defined(TOOLS_ENABLED)
+		MonoLogger::log_warning("DIAG: ANDROID_ENABLED + TOOLS_ENABLED defined — preload hook will be SKIPPED");
+	#else
+		MonoLogger::log("DIAG: ANDROID_ENABLED + TOOLS_ENABLED NOT defined — preload hook condition OK");
+	#endif
+	#if defined(MONO_STUB)
+		MonoLogger::log_warning("DIAG: MONO_STUB defined — preload hook will be SKIPPED");
+	#endif
+#endif
+
+#if defined(ANDROID_ENABLED) && !defined(MONO_STUB)
+	// Android: 必须在 mono_jit_init_version() 之前安装 preload hook。
+	// 原因：mono_jit_init_version() 内部会加载 mscorlib.dll，而 Android 上 BCL
+	// 文件打包在 APK 的 assets/ 内，无法通过 fopen 直接访问，必须通过 Godot 的
+	// FileAccess（内部走 AndroidAssetFileAccess）。若 hook 在 JIT init 之后才安装，
+	// Mono 会因找不到 mscorlib.dll 调用 exit() 终止进程。
+	// 参考 modules/mono/mono_gd/gd_mono.cpp:589-594（在 coreclr_initialize 之前安装）。
+	// 注意：去掉 !defined(TOOLS_ENABLED) 条件，因为 template_release 不应定义
+	// TOOLS_ENABLED，但实际运行时 hook 未被调用，改为只检查 ANDROID_ENABLED。
+	MonoLogger::log("DIAG: calling install_android_assembly_preload_hook()");
+	install_android_assembly_preload_hook();
+#endif
+
 	MonoLogger::log(vformat("Calling mono_jit_init_version with runtime: %s", runtime_version));
 
 
@@ -425,13 +450,8 @@ bool GDMono::initialize() {
 	GDMonoCallable::register_icalls();
 	GDSignalAwaiter::register_icalls();
 
-#if defined(ANDROID_ENABLED) && !defined(TOOLS_ENABLED) && !defined(MONO_STUB)
-	// Android: 安装程序集 preload hook，从 APK 内 res:// 路径加载 BCL 与用户程序集。
-	// 参考 modules/mono/mono_gd/gd_mono.cpp:530-589 load_assembly_from_pck。
+	// Note: Android preload hook 已在 mono_jit_init_version() 之前安装（见上方）。
 	// desktop/WASM/iOS 不需要此 hook（文件系统可直接 fopen）。
-	// stub 模式跳过（无真实 Mono 符号）。
-	install_android_assembly_preload_hook();
-#endif
 
 	// Register ClassDB-generated Node/Node2D/Node3D/Control/Resource/Timer icalls (see glue/glue_cpp/).
 	GDMonoInterop::register_node_icalls();
@@ -729,7 +749,7 @@ bool GDMono::initialize() {
 	return true;
 }
 
-#if defined(ANDROID_ENABLED) && !defined(TOOLS_ENABLED) && !defined(MONO_STUB)
+#if defined(ANDROID_ENABLED) && !defined(MONO_STUB)
 // Android 程序集 preload hook：从 APK 内 res:// 路径加载程序集。
 // 参考 modules/mono/mono_gd/gd_mono.cpp:530-589 load_assembly_from_pck。
 //
@@ -785,7 +805,7 @@ void GDMono::install_android_assembly_preload_hook() {
 	mono_install_assembly_preload_hook(&android_load_assembly_from_pck, nullptr);
 	MonoLogger::log("Android assembly preload hook installed (loads from res://.godot/mono/publish/<arch>/)");
 }
-#endif  // ANDROID_ENABLED && !TOOLS_ENABLED
+#endif  // ANDROID_ENABLED && !MONO_STUB
 
 void GDMono::cleanup() {
 	if (!initialized)

@@ -337,6 +337,9 @@ namespace Godot
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal extern static string godot_icall_GD_StringConcat3(string a, string b, string c);
 
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal extern static bool godot_icall_GD_HotReloadAssembly(string dllPath);
+
         // Safe ToString for numeric types - avoids Double.ToString() crash in WASM
         public static string ToString(double val)
         {
@@ -401,6 +404,14 @@ namespace Godot
         {
             if (str == null) return '\0';
             return godot_icall_GD_StringCharAt(str, index);
+        }
+
+        // Hot reload: 加载新版本的用户程序集并更新所有 C# 脚本。
+        // 调用后应重新加载当前场景以让新 class 实例化生效。
+        // 桌面走 AppDomain 卸载+重建；Android/WASM 走伪热更（clear+load）。
+        public static bool HotReloadAssembly(string dllPath)
+        {
+            return godot_icall_GD_HotReloadAssembly(dllPath);
         }
     }
 

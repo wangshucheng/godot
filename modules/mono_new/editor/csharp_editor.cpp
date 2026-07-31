@@ -1174,7 +1174,29 @@ private:
 		String project_assemblies_dir = project_dir.path_join(".mono").path_join("assemblies");
 		String platform_tag = p_features.has("android") ? "android" : "ios";
 
+		MonoLogger::log(vformat("Export (%s): project_name='%s', project_dir='%s', assemblies_dir='%s'",
+				platform_tag, project_name, project_dir, project_assemblies_dir));
+
+		// 列出 assemblies_dir 下的所有文件，便于诊断
+		{
+			Ref<DirAccess> diag_dir = DirAccess::open(project_assemblies_dir);
+			if (diag_dir.is_valid()) {
+				diag_dir->list_dir_begin();
+				String fname = diag_dir->get_next();
+				while (!fname.is_empty()) {
+					if (!diag_dir->current_is_dir()) {
+						MonoLogger::log(vformat("Export (%s): assemblies_dir entry: %s", platform_tag, fname));
+					}
+					fname = diag_dir->get_next();
+				}
+				diag_dir->list_dir_end();
+			} else {
+				MonoLogger::log_warning(vformat("Export (%s): assemblies_dir NOT accessible: %s", platform_tag, project_assemblies_dir));
+			}
+		}
+
 		String latest_dll = find_latest_project_dll(project_assemblies_dir, project_name);
+		MonoLogger::log(vformat("Export (%s): find_latest_project_dll result: '%s'", platform_tag, latest_dll));
 		if (latest_dll.is_empty() || !FileAccess::exists(latest_dll)) {
 			MonoLogger::log_warning(vformat("Export (%s): no compiled user assembly found, attempting compilation...", platform_tag));
 			if (csharp_editor_compile_project()) {
@@ -1202,6 +1224,23 @@ private:
 			}
 		} else {
 			MonoLogger::log_warning(vformat("Export (%s): C# project compilation failed or no assembly found", platform_tag));
+		}
+
+		// 热更新演示：若项目根目录存在 <project_name>_v2.dll（如 048_v2.dll），
+		// 将其作为 res://<project_name>_v2.dll 部署到 PCK。Godot 默认不会导出
+		// 项目根目录下的 .dll 文件（非已导入资源），需在此显式 add_file。
+		// C# 代码启动后从 res:// 读取该 v2 dll 字节，写入 user:// 触发热更新。
+		String v2_dll_src = project_dir.path_join(project_name + "_v2.dll");
+		if (FileAccess::exists(v2_dll_src)) {
+			PackedByteArray v2_data = FileAccess::get_file_as_bytes(v2_dll_src);
+			if (v2_data.size() > 0) {
+				String v2_target = project_name + "_v2.dll";
+				add_file(v2_target, v2_data, false);
+				MonoLogger::log(vformat("Export (%s): deployed v2 hot-reload assembly to res://%s (%d bytes)",
+						platform_tag, v2_target, v2_data.size()));
+			} else {
+				MonoLogger::log_warning(vformat("Export (%s): %s_v2.dll is empty", platform_tag, project_name));
+			}
 		}
 
 		// NuGet 依赖

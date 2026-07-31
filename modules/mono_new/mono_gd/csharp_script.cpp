@@ -1143,6 +1143,11 @@ bool CSharpInstance::has_method(const StringName &p_method) const {
 	StringName pascal_name = snake_to_pascal_case(p_method);
 	if (pascal_name != p_method) {
 		bool found = mono_class->has_method(pascal_name);
+		// 诊断日志：输入相关方法检查
+		String method_str = String(p_method);
+		if (method_str.find("input") != -1 || method_str.find("Input") != -1) {
+			MonoLogger::log(vformat("has_method DIAG: '%s' -> '%s' found=%d", method_str, String(pascal_name), found ? 1 : 0));
+		}
 		return found;
 	}
 	return false;
@@ -1154,15 +1159,25 @@ Variant CSharpInstance::callp(const StringName &p_method, const Variant **p_args
 		return Variant();
 	}
 
+	// 诊断日志：输入相关方法调用
+	String method_str = String(p_method);
+	if (method_str.find("input") != -1 || method_str.find("Input") != -1) {
+		MonoLogger::log(vformat("callp DIAG: method='%s' argcount=%d", method_str, p_argcount));
+	}
+
 	MonoMethod *method = mono_class->get_method(p_method, p_argcount);
 	if (!method) {
 		// Try PascalCase conversion for snake_case names from GDVIRTUAL
 		StringName pascal_name = snake_to_pascal_case(p_method);
 		if (pascal_name != p_method) {
 			method = mono_class->get_method(pascal_name, p_argcount);
+			if (method) {
+				MonoLogger::log(vformat("callp DIAG: found via PascalCase '%s' -> '%s'", method_str, String(pascal_name)));
+			}
 		}
 	}
 	if (!method) {
+		MonoLogger::log(vformat("callp DIAG: method NOT FOUND '%s' argcount=%d", method_str, p_argcount));
 		r_error.error = Callable::CallError::CALL_ERROR_INVALID_METHOD;
 		return Variant();
 	}

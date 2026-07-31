@@ -5,10 +5,27 @@ using System.Collections.Generic;
 public partial class Main : Control
 {
 	private const int GRID = 4;
+
+	// 热更新演示：APP 启动 8 秒后自动从 res://048_v2.dll 复制到 user://048.dll，
+	// 写 user://reload.trigger 触发热更新，重载场景让 v2 class 生效。
+	// 用 res:// + user:// 绕过 Android scoped storage 对 /sdcard/ 的限制。
+	// v1: 红色标题 + "Arrow keys or swipe to move tiles"
+	// v2: 绿色标题 + "v2 HOT-RELOADED - swipe to move"（验证热更后可见）
+	private const string VERSION = "v1";
+	private const string HOTRELOAD_TRIGGER = "user://reload.trigger";
+	private const string USER_DLL_PATH = "user://048.dll";
+	private const string V2_DLL_RES = "res://048_v2.dll";
+	private const double AUTO_RELOAD_DELAY = 8.0;
+
 	private int[] board;
 	private int score;
 	private int best;
 	private bool gameOver;
+
+	// 触摸滑动状态：按下时记录起点，抬起时计算方向并触发 Move
+	private float touchStartX = 0;
+	private float touchStartY = 0;
+	private bool touchActive = false;
 
 	private static readonly Color BOARD_BG_COLOR = new Color(0.71f, 0.65f, 0.60f);
 	private static readonly Color EMPTY_CELL_COLOR = new Color(0.78f, 0.73f, 0.68f);
@@ -44,6 +61,10 @@ public partial class Main : Control
 	private ColorRect[] tileRects;
 	private Label[] tileLabels;
 
+	// 自动热更新状态：v1 启动 AUTO_RELOAD_DELAY 秒后从 res://048_v2.dll 复制并触发
+	private double autoReloadTimer = 0;
+	private bool autoReloadStarted = false;
+
 	private static int GetTileIndex(int val)
 	{
 		int idx = 0;
@@ -58,12 +79,16 @@ public partial class Main : Control
 
 	public override void _Ready()
 	{
-		GD.Print("[2048] _Ready started (dynamic build)");
+		GD.Print(GD.Concat("[2048] _Ready started ", VERSION, " (hot reload demo)"));
 
 		// WASM 下实例字段初始化器不执行，需在 _Ready 中手动初始化
 		board = new int[GRID * GRID];
 		tileRects = new ColorRect[GRID * GRID];
 		tileLabels = new Label[GRID * GRID];
+
+		// 关键修复：Main 作为 Control 默认 MouseFilter=Stop 会消费触摸事件，
+		// 导致 _UnhandledInput 收不到触摸。设为 Ignore 让事件穿透到 unhandled_input 通道。
+		this.MouseFilter = MouseFilterEnum.Ignore;
 
 		// Background - FullRect cream
 		var bg = new ColorRect();
@@ -79,15 +104,15 @@ public partial class Main : Control
 		vbox.OffsetTop = 24;
 		vbox.OffsetRight = -16;
 		vbox.OffsetBottom = -24;
-		vbox.MouseFilter = MouseFilterEnum.Pass;
+		vbox.MouseFilter = MouseFilterEnum.Ignore;
 		AddChild(vbox);
 
-		// Title "2048"
+		// Title "2048" + version (v1: 红色标题; v2 热更后变绿色)
 		var title = new Label();
-		title.Text = "2048";
+		title.Text = GD.Concat("2048 ", VERSION);
 		title.HorizontalAlignment = 1;
 		title.AddThemeFontSizeOverride("font_size", 48);
-		title.AddThemeColorOverride("font_color", TEXT_DARK);
+		title.AddThemeColorOverride("font_color", new Color(0.9f, 0.2f, 0.2f));
 		title.MouseFilter = MouseFilterEnum.Ignore;
 		vbox.AddChild(title);
 
@@ -95,7 +120,7 @@ public partial class Main : Control
 		var scoreRow = new HBoxContainer();
 		scoreRow.SizeFlagsHorizontal = 3;
 		scoreRow.AddThemeConstantOverride("separation", 12);
-		scoreRow.MouseFilter = MouseFilterEnum.Pass;
+		scoreRow.MouseFilter = MouseFilterEnum.Ignore;
 		vbox.AddChild(scoreRow);
 
 		BuildScoreBox(scoreRow, "SCORE", out scoreLabel);
@@ -106,7 +131,7 @@ public partial class Main : Control
 		boardParent.CustomMinimumSize = new Vector2(340, 340);
 		boardParent.SizeFlagsHorizontal = 3;
 		boardParent.SizeFlagsVertical = 3;
-		boardParent.MouseFilter = MouseFilterEnum.Pass;
+		boardParent.MouseFilter = MouseFilterEnum.Ignore;
 		vbox.AddChild(boardParent);
 
 		// Tip label
@@ -192,6 +217,35 @@ public partial class Main : Control
 
 	public override void _Process(double delta)
 	{
+		// 热更新轮询：检测 user://reload.trigger 文件是否存在
+		// 触发来源：① DoAutoReload 自动写入；② 外部 adb push（如有权限）
+		if (FileAccess.FileExists(HOTRELOAD_TRIGGER))
+		{
+			GD.Print(GD.Concat("[2048] Hot reload triggered, VERSION=", VERSION));
+			// 删除触发文件（避免循环触发）
+			FileAccess.Remove(HOTRELOAD_TRIGGER);
+			// 加载新 DLL + reload_all_scripts
+			bool ok = GD.HotReloadAssembly(USER_DLL_PATH);
+			GD.Print(GD.Concat("[2048] HotReloadAssembly result: ", ok ? "true" : "false"));
+			// 重载当前场景，让新 class 实例化生效。
+			// ChangeSceneToFile 内部用 call_deferred，在 _Process 中调用安全。
+			GetTree().ChangeSceneToFile("res://Main.tscn");
+			return;
+		}
+
+		// 自动热更新：v1 启动 AUTO_RELOAD_DELAY 秒后，从 res://048_v2.dll 复制到 user://
+		// 并写 trigger 触发热更新。autoReloadStarted 防止重复触发。
+		if (!autoReloadStarted && VERSION == "v1")
+		{
+			autoReloadTimer += delta;
+			if (autoReloadTimer > AUTO_RELOAD_DELAY)
+			{
+				autoReloadStarted = true;
+				DoAutoReload();
+				return;
+			}
+		}
+
 		if (gameOver)
 		{
 			if (Input.IsActionJustPressed("ui_accept"))
@@ -205,6 +259,95 @@ public partial class Main : Control
 		else if (Input.IsActionJustPressed("ui_down")) { Move(1); }
 		else if (Input.IsActionJustPressed("ui_left")) { Move(2); }
 		else if (Input.IsActionJustPressed("ui_right")) { Move(3); }
+	}
+
+	// 触摸滑动处理：_UnhandledInput 在 GUI 系统之后接收事件。
+	// 已在 _Ready 中将 Main 及所有子 Control 的 MouseFilter 设为 Ignore，
+	// 确保触摸事件不被 GUI 消费，能到达 unhandled_input 通道。
+	public override void _UnhandledInput(InputEvent @event)
+	{
+		if (@event == null || gameOver)
+		{
+			return;
+		}
+		string className = @event.GetClass();
+		// 只处理触摸和鼠标按键事件，过滤掉 drag/move 等
+		if (className != "InputEventScreenTouch" && className != "InputEventMouseButton")
+		{
+			return;
+		}
+
+		bool pressed = @event.Get<bool>("pressed");
+		Vector2 pos = @event.Get<Vector2>("position");
+		GD.Print(GD.Concat("[2048] touch pressed=", pressed ? "1" : "0",
+			" x=", GD.ToString((int)pos.x), " y=", GD.ToString((int)pos.y)));
+
+		if (pressed)
+		{
+			touchStartX = pos.x;
+			touchStartY = pos.y;
+			touchActive = true;
+		}
+		else if (touchActive)
+		{
+			HandleSwipe(pos.x, pos.y);
+			touchActive = false;
+		}
+	}
+
+	// 根据起止点计算滑动方向并触发 Move
+	private void HandleSwipe(float endX, float endY)
+	{
+		float dx = endX - touchStartX;
+		float dy = endY - touchStartY;
+		float absX = dx < 0 ? -dx : dx;
+		float absY = dy < 0 ? -dy : dy;
+
+		GD.Print(GD.Concat("[2048] swipe dx=", GD.ToString((int)dx), " dy=", GD.ToString((int)dy)));
+
+		// 太短的滑动忽略（避免误触）
+		if (absX < 30 && absY < 30)
+		{
+			return;
+		}
+
+		if (absX > absY)
+		{
+			if (dx > 0) { Move(3); } // right
+			else { Move(2); }        // left
+		}
+		else
+		{
+			if (dy > 0) { Move(1); } // down
+			else { Move(0); }        // up
+		}
+	}
+
+	// 自动热更新：从 res://048_v2.dll 读字节，写到 user://048.dll，再写 trigger。
+	// 用 res://（APK 内资源）和 user://（APP 内部存储）绕过 Android scoped storage。
+	private void DoAutoReload()
+	{
+		GD.Print(GD.Concat("[2048] Auto-reload starting after ", GD.ToString((int)AUTO_RELOAD_DELAY), "s, checking ", V2_DLL_RES));
+		if (!FileAccess.FileExists(V2_DLL_RES))
+		{
+			GD.Print(GD.Concat("[2048] Auto-reload: ", V2_DLL_RES, " NOT FOUND in APK"));
+			return;
+		}
+		byte[] v2Bytes = FileAccess.GetFileAsBytes(V2_DLL_RES);
+		if (v2Bytes == null || v2Bytes.Length == 0)
+		{
+			GD.Print("[2048] Auto-reload: v2 dll empty or null");
+			return;
+		}
+		GD.Print(GD.Concat("[2048] Auto-reload: v2 dll size=", GD.ToString(v2Bytes.Length)));
+		Error writeErr = FileAccess.WriteFile(USER_DLL_PATH, v2Bytes);
+		GD.Print(GD.Concat("[2048] Auto-reload: write to ", USER_DLL_PATH, " err=", GD.ToString((int)writeErr)));
+		if (writeErr != Error.OK)
+		{
+			return;
+		}
+		Error triggerErr = FileAccess.WriteString(HOTRELOAD_TRIGGER, "auto");
+		GD.Print(GD.Concat("[2048] Auto-reload: trigger write err=", GD.ToString((int)triggerErr)));
 	}
 
 	private void BuildBoard()

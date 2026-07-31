@@ -3,6 +3,7 @@
 #include "gd_mono_callable.h"
 #include "../../mono_runtime/gd_mono.h"
 #include "../../utils/mono_logger.h"
+#include "../csharp_script.h"
 
 #include "core/object/object.h"
 #include "core/os/os.h"
@@ -1663,6 +1664,49 @@ static MonoString *icall_FileAccess_GetUserDataDir() {
 	return mono_string_new(mono_domain_get(), cs.ptr());
 }
 
+// ===== Hot Reload icall =====
+// 触发 C# 程序集热更新：卸载旧 assembly → 加载新 DLL → reload_all_scripts。
+// Android (DISABLE_APPDOMAINS) 走伪热更分支：clear_user_assemblies + load_assembly。
+// 调用方（C#）应在调用后重新加载场景以让新 class 生效。
+static mono_bool icall_GD_HotReloadAssembly(MonoString *p_dll_path) {
+	if (!p_dll_path) return false;
+	char *utf8 = mono_string_to_utf8(p_dll_path);
+	if (!utf8) return false;
+	String dll_path = String::utf8(utf8);
+	mono_free(utf8);
+
+	GDMono *gdmono = GDMono::get_singleton();
+	if (!gdmono) {
+		MonoLogger::log("HotReloadAssembly: GDMono not initialized");
+		return false;
+	}
+
+	if (!FileAccess::exists(dll_path)) {
+		MonoLogger::log(vformat("HotReloadAssembly: DLL not found: %s", dll_path));
+		return false;
+	}
+
+	MonoLogger::log(vformat("HotReloadAssembly: reloading from %s", dll_path));
+
+	// reload_assembly 内部：
+	//   桌面（!DISABLE_APPDOMAINS）→ reload_domain（域卸载+重建）+ load_assembly
+	//   Android/WASM（DISABLE_APPDOMAINS）→ clear_user_assemblies + load_assembly（伪热更）
+	bool ok = gdmono->reload_assembly(dll_path);
+	if (!ok) {
+		MonoLogger::log("HotReloadAssembly: reload_assembly returned false (pseudo-reload fallback)");
+	}
+
+	// 更新所有已注册 CSharpScript 的 mono_class 指针，使其指向新 assembly 中的类。
+	// 否则场景重载时缓存的 CSharpScript 仍引用旧 class。
+	CSharpLanguage *lang = CSharpLanguage::get_singleton();
+	if (lang) {
+		lang->reload_all_scripts();
+	}
+
+	MonoLogger::log("HotReloadAssembly: completed");
+	return true;
+}
+
 // ===== Node icalls =====
 
 static int icall_Node_GetChildCount(int64_t p_node) {
@@ -1884,6 +1928,7 @@ static const ICallEntry icall_entries[] = {
 	{ "Godot.GD::godot_icall_GD_StringCharAt",         (const void *)icall_GD_StringCharAt },
 	{ "Godot.GD::godot_icall_GD_StringConcat",         (const void *)icall_GD_StringConcat },
 	{ "Godot.GD::godot_icall_GD_StringConcat3",        (const void *)icall_GD_StringConcat3 },
+	{ "Godot.GD::godot_icall_GD_HotReloadAssembly",    (const void *)icall_GD_HotReloadAssembly },
 
 	// GodotObject / Object
 	{ "Godot.GodotObject::godot_icall_CreateObject",         (const void *)icall_CreateObject },

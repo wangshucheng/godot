@@ -1,0 +1,6 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://export_test.cs" id="1_export_test"]
+
+[node name="ExportTest" type="Node2D"]
+script = ExtResource("1_export_test")

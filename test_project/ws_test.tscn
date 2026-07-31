@@ -1,0 +1,6 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://ws_test.cs" id="1_wstest"]
+
+[node name="WebSocketTest" type="Node2D"]
+script = ExtResource("1_wstest")

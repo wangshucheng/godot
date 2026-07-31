@@ -1,0 +1,37 @@
+{
+  "compileType": "minigame",
+  "libVersion": "3.17.0",
+  "projectname": "2048-minigame",
+  "appid": "wxc07c26935264a5e5",
+  "condition": {},
+  "packOptions": {
+    "ignore": [],
+    "include": [
+      {
+        "type": "folder",
+        "value": "wasm_pkg"
+      },
+      {
+        "type": "folder",
+        "value": "data_pkg"
+      }
+    ]
+  },
+  "setting": {
+    "urlCheck": false,
+    "coverView": true,
+    "lazyloadPlaceholderEnable": false,
+    "skylineRenderEnable": false,
+    "preloadBackgroundData": false,
+    "autoAudits": false,
+    "useApiHook": true,
+    "showShadowRootInWxmlPanel": false,
+    "useStaticServer": false,
+    "useLanDebug": false,
+    "showES6CompileOption": false,
+    "compileHotReLoad": false,
+    "checkInvalidKey": true,
+    "ignoreDevUnusedFiles": false,
+    "useIsolateContext": true
+  }
+}

@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    W5 SG PoC (v3 pre-research): SourceGenerators project skeleton.
+    Loaded by Roslyn (dotnet 7.0.401 SDK confirmed in
+    eval_2026-07-26_v3_sourcegenerators.md §2.2) when compiling user game
+    assemblies. netstandard2.0 per eval — same target as GodotSharp.
+
+    Output goes to bin/GodotSharp/SourceGenerators/ so game projects can
+    reference it as an Analyzer (consumption wiring is part of the PoC
+    validation on the dev machine; see docs/poc_2026-08-18_v3_sourcegenerators.md).
+  -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <AssemblyName>GodotSharp.SourceGenerators</AssemblyName>
+    <RootNamespace>GodotSharp.SourceGenerators</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <IsRoslynComponent>true</IsRoslynComponent>
+    <EnableDefaultItems>true</EnableDefaultItems>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <OutputPath>..\..\..\..\bin\GodotSharp\SourceGenerators\</OutputPath>
+    <!-- Enforce analyzer packaging rules: no unintended content into the nupkg/lib. -->
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 4.7.0 per eval §6.2 阶段 1 (matches dotnet 7.0.401 SDK compiler version). -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.7.0" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!-- Ship the generator dll (and deps) as analyzer assets. -->
+  <ItemGroup>
+    <None Include="$(OutputPath)\$(AssemblyName).dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+  </ItemGroup>
+</Project>

@@ -1,8 +1,8 @@
 # Mono Editor 项目状态总览
 
-> **最后更新**：2026-07-26
+> **最后更新**：2026-08-18
 > **当前里程碑**：B 级 P1-P7 全部完成 + H9 WASM 运行时修复完成 + P2 v2 typedef 重构完成
-> **下一节奏**：v2 推进 P4 异步化 / A2 代码补全（待 GodotTools 移植）
+> **下一节奏**：v2 收尾（W0-W6 执行中：P4 异步化/A2 引擎数据补全代码已落地，待六平台回归后完结 → v3 启动）
 
 ---
 
@@ -52,8 +52,8 @@
 | 任务 | 提交 | 状态 |
 |------|------|------|
 | P2 typedef 重构 | `3547fcff27` | ✅ 已完成（2026-07-26） |
-| P4 异步化 | — | ⏸️ 未开始 |
-| A2 代码补全 | — | ⏸️ 等 GodotTools 移植 |
+| P4 异步化 | W3 | ✅ 代码完成（2026-08-18）：BuildState 状态机 + worker 线程跑 OS::execute(dotnet build) + 互斥锁邮箱 + frame() 主线程轮询收尾（Mono reload 全程主线程），finish() 带 wait_to_finish UAF 防护；构建按钮 BUILDING 期间禁用。构建验证待开发机 |
+| A2 代码补全（引擎数据层） | W4 | ✅ 代码完成（2026-08-18）：`editor/code_completion.{h,cpp}`（TOOLS_ENABLED）+ `godot_icall_Editor_GetCodeCompletion`（\n 连接单字符串封送）+ `glue/GodotSharp/CodeCompletion.cs`（导出模板缺 icall 时 EntryPointNotFoundException → 空数组）。覆盖 input actions / node paths / 资源与场景路径 / signals / theme 五类。语义级成员补全仍等 GodotTools（永久延后项不变） |
 
 ### H9 WASM 运行时修复 — 全部完成
 
@@ -71,14 +71,14 @@
 
 ## 三、v2 / v3 待办清单
 
-### v2 节奏（高优先级）
+### v2 节奏（高优先级）— 2026-08-18 全收口
 
-| 任务 | 优先级 | 前置依赖 | 来源 |
-|------|--------|---------|------|
-| P4 异步化 | 高 | 无 | phase3 评审 §4 + spec §4.P4 |
-| P5 .pdb 反查路径 | 中 | WASM 端 .pdb 可用性评估 | spec §4.P2.2 [REV-#06] |
-| P5 崩溃隔离 v2 子 domain 评估 | 中 | Mono embedding appdomain 卸载语义评估 | spec [REV-#11] |
-| P7 sdb spike 报告补全 | 低 | P7 已实施，spike 报告可能未补 | spec [REV-#07] |
+| 任务 | 优先级 | 结论 |
+|------|--------|------|
+| P4 异步化 | 高 | ✅ 代码完成（W3，见 C 级表）；六平台回归在 W6 |
+| P5 .pdb 反查路径 | 中 | ✅ 关闭：桌面端已实施（提交 `82354fee59`）；WASM 端 NO-GO（[spike_2026-07-26_p5_pdb.md](file:///C:/Users/Administrator/AppData/Roaming/TRAE%20SOLO%20CN/ModularData/ai-agent/work-mode-projects/6a47fad25801ac16b9570799/godot4.7_mono/docs/spike_2026-07-26_p5_pdb.md) 结论维持） |
+| P5 崩溃隔离 v2 子 domain 评估 | 中 | ❌ **NO-GO 关闭，不投入**（[eval_2026-07-26_p5_subdomain.md](file:///C:/Users/Administrator/AppData/Roaming/TRAE%20SOLO%20CN/ModularData/ai-agent/work-mode-projects/6a47fad25801ac16b9570799/godot4.7_mono/docs/eval_2026-07-26_p5_subdomain.md)：Mono 6.12 AppDomain 卸载语义不完整 + GC bridge 单 domain 耦合 + WASM 单线程硬约束 + Unity 已弃用）；进程外沙箱仅作中长期备选记录 |
+| P7 sdb spike 报告补全 | 低 | ✅ 已补全（2026-07-28，[spike_2026-07-26_p7_sdb.md](file:///C:/Users/Administrator/AppData/Roaming/TRAE%20SOLO%20CN/ModularData/ai-agent/work-mode-projects/6a47fad25801ac16b9570799/godot4.7_mono/docs/spike_2026-07-26_p7_sdb.md)：sdb 支持 PASS 间接证明 + 桌面/WASM 库分离 PASS） |
 
 ### v2 可选延后
 
@@ -89,9 +89,9 @@
 
 ### v3 探索项
 
-| 任务 | 优先级 | 前置依赖 | 来源 |
-|------|--------|---------|------|
-| SourceGenerators 评估（编译期生成替代反射） | 探索 | B 级稳定 | spec [REV-#15] |
+| 任务 | 优先级 | 前置依赖 | 来源 | 状态 |
+|------|--------|---------|------|------|
+| SourceGenerators（编译期生成替代反射） | P2 | B 级稳定 | spec [REV-#15] | 评估 **GO**（[eval_2026-07-26_v3_sourcegenerators.md](file:///C:/Users/Administrator/AppData/Roaming/TRAE%20SOLO%20CN/ModularData/ai-agent/work-mode-projects/6a47fad25801ac16b9570799/godot4.7_mono/docs/eval_2026-07-26_v3_sourcegenerators.md)）；W5 垂直切片：`GodotSharp.SourceGenerators` 项目骨架 + `[GlobalClass]` 注册表生成器 + C++ 消费链路打通 |
 
 ### 永久延后
 
@@ -115,6 +115,9 @@
 | H9 WASM 修复 | `docs/review_2026-07-26_h9_wasm.md` | H9 5 个问题根因与修复方案 |
 | 测试审查 | `docs/csharp_test_review.md` | csharp_test 项目测试覆盖审查 |
 | 修复轮次 | `docs/review_2026-07-26_fix_round.md` | 多轮修复追踪 |
+| Git 历史审查 | `docs/review_2026-08-17_git_history_audit.md` | 7/1 以来 91 提交系统性审查（质量/风险/路线） |
+| v2 收尾计划 | `docs/v2_收尾计划.md` | W0-W6 周级排期：微信链路 + P4 异步化 + A2 补全 + v3 预研 |
+| SG PoC | `docs/poc_2026-08-18_v3_sourcegenerators.md` | W5 垂直切片：GlobalClass 注册表生成器 + C++ 消费链路 + partial 迁移成本发现 |
 
 ---
 
@@ -152,5 +155,5 @@ python godot-mono-wasm/tools/sync_to_godot.py
 - **v1**（已完成）：A 级 + B 级 P1-P7
 - **v1.1**（已完成）：spec 评审修订（15 处 [REV-#01] 至 [REV-#15]）
 - **v1.2**（已完成）：P2 v2 typedef 重构 + H9 WASM 修复
-- **v2**（进行中）：P4 异步化 + P5 .pdb 反查 + P5 崩溃隔离 v2 评估
-- **v3**（探索）：SourceGenerators 评估
+- **v2**（收尾中，W0-W6 执行）：P4 异步化 ✅ + A2 引擎数据补全 ✅ + P5 子 domain NO-GO 关闭 ✅ + P5 .pdb 反查收口 ✅ + P7 spike 补全 ✅ —— 待 W6 六平台回归后标记完结
+- **v3**（预研启动）：SourceGenerators PoC 垂直切片（W5）

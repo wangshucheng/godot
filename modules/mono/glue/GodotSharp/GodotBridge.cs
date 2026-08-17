@@ -534,6 +534,12 @@ namespace Godot {
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern string godot_icall_Editor_GetCodeCompletion(int kind, string scriptFile);
 
+        // W5 SG PoC: compile-time [GlobalClass] registry push, called from
+        // SourceGenerators-generated module initializers at assembly load.
+        // int flags instead of bool — WASM interpreter icall convention.
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_ScriptRegistry_RegisterGlobalClass(string className, string baseType, int isTool, int isAbstract, string iconPath);
+
         // M10: Godot.Collections.Array icalls
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern IntPtr godot_icall_Array_Ctor();

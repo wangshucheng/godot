@@ -43,9 +43,11 @@
 //   [Build button] [status label]
 //   [RichTextLabel output (BBCode, scroll-follow)]
 //
-// build_project() routes stdout/stderr here via append_output().
+// build_project_async() runs dotnet on a worker thread; output is routed
+// here via append_output() from the main thread when the build completes.
 // Lines containing ": error " are highlighted red (BBCode).
-// v1 is synchronous-blocking; the status label shows "构建中…" during build.
+// v2 is non-blocking (P4/W3): the Build button is disabled while building
+// and the status label shows "Building..." until frame() finishes the reload.
 class MonoBuildPanel : public EditorDock {
 	GDCLASS(MonoBuildPanel, EditorDock);
 
@@ -72,6 +74,10 @@ public:
 
 	// Set the status label text (e.g., "构建中…", "构建成功", "构建失败").
 	void set_status(const String &p_text, bool p_error = false);
+
+	// P4 v2: toggle the building state — disables the Build button while a
+	// worker-thread build is in flight (CSharpLanguage::build_project_async).
+	void set_building(bool p_building);
 
 	MonoBuildPanel();
 	~MonoBuildPanel();

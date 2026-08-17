@@ -49,9 +49,18 @@ void MonoBuildPanel::_bind_methods() {
 }
 
 void MonoBuildPanel::_on_build_pressed() {
-	// Delegate to CSharpLanguage::build_project() which routes output here.
+	// P4 v2: non-blocking build — dotnet runs on a worker thread; output and
+	// the Mono reload sequence land back here via CSharpLanguage::frame().
+	// build_project_async() falls back to the synchronous path internally
+	// when the worker thread cannot start.
 	if (CSharpLanguage::get_singleton()) {
-		CSharpLanguage::get_singleton()->build_project();
+		CSharpLanguage::get_singleton()->build_project_async();
+	}
+}
+
+void MonoBuildPanel::set_building(bool p_building) {
+	if (build_button) {
+		build_button->set_disabled(p_building);
 	}
 }
 

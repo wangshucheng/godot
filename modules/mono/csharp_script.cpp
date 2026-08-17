@@ -1664,6 +1664,17 @@ void CSharpLanguage::init() {
 }
 
 void CSharpLanguage::finish() {
+#ifdef TOOLS_ENABLED
+	// P4 v2 (W3): if an async build is still in flight, block until the
+	// worker returns (OS::execute completes or fails) — prevents destroying
+	// the language while the thread reads its members (UAF guard).
+	if (build_thread_started) {
+		build_thread.wait_to_finish();
+		build_thread_started = false;
+	}
+	build_state = BuildState::IDLE;
+#endif
+
 	// N2 fix: do NOT mono_assembly_close() the opened assemblies here. The
 	// whole point of the P0-1 "never close" strategy is that CSharpScript /
 	// CSharpInstance may still hold raw MonoClass*/MonoObject* pointers into
@@ -1858,10 +1869,23 @@ void CSharpLanguage::frame() {
 	mono_gc_bridge::flush_deferred_free();
 
 #ifdef TOOLS_ENABLED
+	// P4 v2 (W3): poll the async build mailbox; on completion this joins the
+	// worker and runs the Mono reload sequence right here on the main thread.
+	if (build_state == BuildState::BUILDING) {
+		_poll_async_build();
+	}
+
 	if (build_pending && Engine::get_singleton() && Engine::get_singleton()->is_editor_hint()) {
-		print_verbose("[Mono] frame() consuming build_pending, calling build_project()");
-		build_pending = false;
-		build_project();
+		if (build_state == BuildState::IDLE) {
+			print_verbose("[Mono] frame() consuming build_pending, calling build_project_async()");
+			build_pending = false;
+			// Async path; falls back to the synchronous build internally when
+			// the worker thread cannot start.
+			build_project_async();
+		}
+		// else: a build is in flight — keep build_pending queued; it is
+		// consumed on a later frame after the current build completes
+		// (request merging, W3 D2-D3 requirement).
 	}
 #endif
 }
@@ -2229,28 +2253,45 @@ bool CSharpLanguage::build_project() {
 	int exit_code = -1;
 	Error err = OS::get_singleton()->execute(dotnet_cmd, args, &pipe_output, &exit_code, true, nullptr, false);
 
-	if (err != OK) {
+	String exec_err = (err != OK) ? pipe_output : String();
+	return _complete_build(err == OK && exit_code == 0, pipe_output, exec_err);
+#else
+	return true;
+#endif
+}
+
+#ifdef TOOLS_ENABLED
+// P4 v2 (W3): shared post-build path — output routing + Mono reload sequence.
+// Called ONLY on the main thread (by the synchronous build_project() or by
+// _poll_async_build() when the async worker finishes). All Mono API calls
+// live here, keeping the worker thread Mono-free.
+bool CSharpLanguage::_complete_build(bool p_ok, const String &p_output, const String &p_exec_err) {
+	MonoBuildPanel *panel = MonoBuildPanel::get_singleton();
+
+	if (!p_exec_err.is_empty()) {
 		String msg = "[Mono] WARNING: Failed to execute dotnet build. Is .NET SDK installed?";
 		printf("%s\n", msg.utf8().get_data());
 		fflush(stdout);
 		if (panel) {
 			panel->append_output(msg);
-			panel->append_output(pipe_output);
+			if (!p_output.is_empty()) {
+				panel->append_output(p_output);
+			}
 			panel->set_status("Build failed", true);
 		}
 		return false;
 	}
 
-	if (!pipe_output.is_empty()) {
-		printf("%s\n", pipe_output.utf8().get_data());
+	if (!p_output.is_empty()) {
+		printf("%s\n", p_output.utf8().get_data());
 		fflush(stdout);
 		if (panel) {
-			panel->append_output(pipe_output);
+			panel->append_output(p_output);
 		}
 	}
 
-	if (exit_code != 0) {
-		String msg = "[Mono] C# build failed with exit code: " + itos(exit_code);
+	if (!p_ok) {
+		String msg = "[Mono] C# build failed.";
 		printf("%s\n", msg.utf8().get_data());
 		fflush(stdout);
 		if (panel) {
@@ -2316,8 +2357,143 @@ bool CSharpLanguage::build_project() {
 		panel->set_status("Build succeeded");
 	}
 
-	return exit_code == 0;
-#else
 	return true;
-#endif
 }
+
+// P4 v2 (W3): thread thunk — keeps the csproj path alive across the thread
+// boundary (String is COW; copied by value into the lambda-equivalent struct).
+void CSharpLanguage::_build_thread_func(void *p_ud) {
+	String *csproj = static_cast<String *>(p_ud);
+	CSharpLanguage *self = CSharpLanguage::get_singleton();
+	if (self && csproj) {
+		self->_build_worker(*csproj);
+	}
+	memdelete(csproj);
+}
+
+// Worker: runs the blocking dotnet build WITHOUT touching Mono, the panel,
+// or any engine Object — the result is marshalled through the mailbox and
+// consumed by _poll_async_build() on the main thread.
+void CSharpLanguage::_build_worker(const String &p_csproj_path) {
+	List<String> args;
+	args.push_back("build");
+	args.push_back(p_csproj_path);
+	args.push_back("-c");
+	args.push_back("Debug");
+	args.push_back("-v:minimal");
+
+	String pipe_output;
+	int exit_code = -1;
+	Error err = OS::get_singleton()->execute("dotnet", args, &pipe_output, &exit_code, true, nullptr, false);
+
+	MutexLock lock(build_result_lock);
+	build_result_ok = (err == OK && exit_code == 0);
+	build_result_output = pipe_output;
+	build_result_exec_err = (err != OK) ? pipe_output : String();
+	build_result_ready = true;
+}
+
+// P4 v2 (W3): launch a non-blocking build. Returns false when a build is
+// already running (the caller's build_pending stays queued and will be
+// consumed by frame() after completion — request merging) or prerequisites
+// are missing. Falls back to the synchronous path if the thread cannot start.
+bool CSharpLanguage::build_project_async() {
+	if (!Engine::get_singleton() || !Engine::get_singleton()->is_editor_hint()) {
+		return true;
+	}
+	if (build_state == BuildState::BUILDING) {
+		print_verbose("[Mono] build_project_async: build already in progress, request merged");
+		return false;
+	}
+
+	MonoBuildPanel *panel = MonoBuildPanel::get_singleton();
+
+	ensure_project_file();
+
+	String csproj_path = get_project_csproj_path();
+	if (!FileAccess::exists(csproj_path)) {
+		String msg = "[Mono] Cannot build: .csproj not found: " + csproj_path;
+		ERR_PRINT(msg);
+		if (panel) {
+			panel->append_output(msg);
+			panel->set_status("Build failed", true);
+		}
+		return false;
+	}
+
+	{
+		MutexLock lock(build_result_lock);
+		build_result_ready = false;
+		build_result_ok = false;
+		build_result_output = String();
+		build_result_exec_err = String();
+	}
+
+	build_state = BuildState::BUILDING;
+
+	String header = "[Mono] Building C# project (async): " + csproj_path;
+	printf("%s\n", header.utf8().get_data());
+	fflush(stdout);
+	if (panel) {
+		panel->clear_output();
+		panel->append_output(header);
+		panel->set_status("Building...");
+		panel->set_building(true);
+	}
+
+	String *ud = memnew(String(csproj_path));
+	Error thr_err = build_thread.start(_build_thread_func, ud);
+	if (thr_err != OK) {
+		// Thread start failed — degrade gracefully to the synchronous path.
+		memdelete(ud);
+		build_state = BuildState::IDLE;
+		if (panel) {
+			panel->append_output("[Mono] WARNING: worker thread unavailable, falling back to synchronous build.");
+			panel->set_building(false);
+		}
+		print_verbose("[Mono] build_project_async: thread start failed, fallback to sync");
+		return build_project();
+	}
+	build_thread_started = true;
+	return true;
+}
+
+// Main-thread poll: called from frame() while BUILDING. On completion, joins
+// the worker, runs the Mono reload sequence, and re-enables the panel button.
+void CSharpLanguage::_poll_async_build() {
+	if (build_state != BuildState::BUILDING) {
+		return;
+	}
+
+	bool ready = false;
+	bool ok = false;
+	String output;
+	String exec_err;
+	{
+		MutexLock lock(build_result_lock);
+		ready = build_result_ready;
+		if (ready) {
+			ok = build_result_ok;
+			output = build_result_output;
+			exec_err = build_result_exec_err;
+			build_result_ready = false;
+		}
+	}
+	if (!ready) {
+		return;
+	}
+
+	if (build_thread_started) {
+		build_thread.wait_to_finish();
+		build_thread_started = false;
+	}
+	build_state = BuildState::IDLE;
+
+	MonoBuildPanel *panel = MonoBuildPanel::get_singleton();
+	if (panel) {
+		panel->set_building(false);
+	}
+
+	_complete_build(ok, output, exec_err);
+}
+#endif // TOOLS_ENABLED

@@ -7,6 +7,9 @@
 
 #include "csharp_notify_dispatch.h"
 
+#include "core/os/mutex.h"
+#include "core/os/thread.h"
+
 typedef struct _MonoClass MonoClass;
 typedef struct _MonoObject MonoObject;
 typedef struct _MonoImage MonoImage;
@@ -198,6 +201,32 @@ class CSharpLanguage : public ScriptLanguage {
 	HashMap<String, String> global_class_source_map;
 	bool global_classes_valid = false;
 
+#ifdef TOOLS_ENABLED
+	// P4 v2: asynchronous build (W3). Godot 4.7's OS::create_process has no
+	// output pipe, so the "streaming + cancel" path is not available; instead
+	// a worker Thread runs the blocking OS::execute(dotnet build) and stores
+	// the whole output in a mutex-guarded mailbox. frame() (main thread)
+	// polls the mailbox, and on completion runs _complete_build() — ALL Mono
+	// calls (open_versioned_assembly / refresh_global_classes /
+	// reload_all_pending_scripts) stay on the main thread, honoring the
+	// single-domain coupling documented in eval_2026-07-26_p5_subdomain.md.
+	enum class BuildState { IDLE, BUILDING };
+	BuildState build_state = BuildState::IDLE;
+	Thread build_thread;
+	bool build_thread_started = false;
+	Mutex build_result_lock;
+	// Mailbox written by _build_worker() under lock, read+cleared by
+	// _poll_async_build() on the main thread.
+	bool build_result_ready = false;
+	bool build_result_ok = false;
+	String build_result_output;
+	String build_result_exec_err;
+
+	static void _build_thread_func(void *p_ud);
+	void _build_worker(const String &p_csproj_path);
+	void _poll_async_build();
+#endif
+
 public:
 	static CSharpLanguage *get_singleton() { return singleton; }
 	void set_language_index(int p_idx) { lang_idx = p_idx; }
@@ -223,6 +252,17 @@ public:
 
 	void ensure_project_file();
 	bool build_project();
+#ifdef TOOLS_ENABLED
+	// P4 v2: non-blocking build. Runs dotnet build on a worker thread; the
+	// Mono reload sequence executes on the main thread from frame() when the
+	// worker finishes. Returns false when a build is already in progress or
+	// prerequisites are missing. Repeated request_build() during BUILDING are
+	// merged: build_pending stays queued and is consumed after completion.
+	bool build_project_async();
+	bool is_build_in_progress() const { return build_state == BuildState::BUILDING; }
+	// Shared post-build path (output routing + Mono reload). Main thread only.
+	bool _complete_build(bool p_ok, const String &p_output, const String &p_exec_err);
+#endif
 	void request_build() { build_pending = true; }
 	// P6: EditorFileSystem::filesystem_changed handler — request a build
 	// subject to a 500ms cooldown (spec §4.P6.3).

@@ -1,0 +1,23 @@
+; Game2048 Demo - Pure C# Android hot update demo
+config_version=5
+
+[application]
+
+config/name="Game2048 Demo"
+run/main_scene="res://main.tscn"
+config/features=PackedStringArray("4.7", "C#")
+config/description="2048 game with pure C# hot update flow"
+
+[dotnet]
+
+project/assembly_name="Game2048Demo"
+
+[rendering]
+
+renderer/rendering_method="mobile"
+renderer/rendering_method.mobile="gl_compatibility"
+textures/vram_compression/import_etc2_astc=true
+
+[input_devices]
+
+pointing/emulate_touch_from_mouse=true

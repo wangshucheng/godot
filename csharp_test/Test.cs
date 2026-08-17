@@ -114,6 +114,26 @@ public partial class Test : Node
 		_physicsCount++;
 	}
 
+	// Summary phase: exit after 10s or any key press. Set in state 25.
+	// Uses real-time (delta accumulation) instead of frame count, because
+	// Android devices often run at 120fps making 600 frames = ~5s, not 10s.
+	private double _summaryElapsed;
+	private int _lastSecsShown;
+	private bool _keyPressedToExit;
+
+	// Any input (key/mouse/touch) sets the exit flag.
+	public override void _UnhandledInput(InputEvent @event)
+	{
+		if (_state == 26)
+		{
+			if (@event is InputEventKey || @event is InputEventMouseButton ||
+				@event is InputEventScreenTouch)
+			{
+				_keyPressedToExit = true;
+			}
+		}
+	}
+
 	// Scenario 24e: method-group signal handler (mirrors Fuzz10's proven path).
 	private int _signalReceived = -1;
 	private void OnHealthChangedForTest(int v) { _signalReceived = v; }
@@ -1578,47 +1598,57 @@ public partial class Test : Node
 				Runtime.DebugUiAddLine("Platform: Desktop");
 			}
 			Runtime.DebugUiAddSeparator();
-			Runtime.DebugUiAddLine("All 24 scenarios complete.");
-			// Desktop/headless: exit with a verdict code so CI runners can
-			// fail the build. WASM stays alive for the JS-side Debug UI
-			// polling used by the H9 harness.
+		Runtime.DebugUiAddLine("All 24 scenarios complete.");
+	Runtime.DebugUiAddLine("Exit in 10s or press any key...");
+	// Print Summary to logcat/stdout so native logs capture the verdict.
+	GD.Print($"[TEST SUMMARY] Passed={passCount} Failed={failCount} PhysicsFrames={_physicsCount} ProcessFrames={_frameCount}");
+	GD.Print(_isWeb == 1 ? "[TEST SUMMARY] Platform: Web (WASM)" : "[TEST SUMMARY] Platform: Native");
+	GD.Print("[TEST SUMMARY] All 24 scenarios complete. Exit in 10s or any key.");
+	// Reset elapsed timer; exit happens in state 26 after 10s or any key.
+	_summaryElapsed = 0;
+	_lastSecsShown = -1;
+	_keyPressedToExit = false;
+	SetProcessInput(true);
+	_state = 26;
+	return;
+	}
+
+		// State 26: Wait phase - exit after 10s (real-time) or any key.
+		// Uses delta accumulation instead of frame count so the wait is
+		// exactly 10s regardless of device frame rate (60/120/144 fps).
+	if (_state == 26)
+	{
+		_summaryElapsed += delta;
+		// Refresh countdown every ~1s of real time
+		int secsLeft = (int)(10.0 - _summaryElapsed);
+		if (secsLeft != _lastSecsShown && secsLeft >= 0)
+		{
+			_lastSecsShown = secsLeft;
+			Runtime.DebugUiClear();
+			int passCount = Runtime.TestGetPassCount();
+			int failCount = Runtime.TestGetFailCount();
+			Runtime.DebugUiAddLine("=== Test Summary ===");
+			Runtime.DebugUiAddLineInt("Passed: ", passCount);
+			Runtime.DebugUiAddLineInt("Failed: ", failCount);
+			Runtime.DebugUiAddSeparator();
+			Runtime.DebugUiAddLine($"Exit in {secsLeft}s or press any key...");
+		}
+		// Exit conditions: 10s elapsed OR any key pressed.
+		bool timeout = _summaryElapsed >= 10.0;
+		if (timeout || _keyPressedToExit)
+		{
+			int failCount = Runtime.TestGetFailCount();
+			GD.Print(_keyPressedToExit
+				? "[TEST SUMMARY] Key pressed, exiting."
+				: "[TEST SUMMARY] 10s timeout, exiting.");
+			// WASM stays alive (JS-side H9 harness polls Debug UI).
 			if (_isWeb == 0)
 			{
 				GetTree().Quit(failCount > 0 ? 1 : 0);
 			}
-			_state = 26;
-			return;
+			_state = 27;
 		}
-
-		// State 26: Idle - periodic display refresh (WASM only)
-		if (_state == 26)
-		{
-			_waitFrames++;
-			if (_waitFrames >= 600)
-			{
-				_waitFrames = 0;
-				int passCount = Runtime.TestGetPassCount();
-				int failCount = Runtime.TestGetFailCount();
-				Runtime.DebugUiClear();
-				Runtime.DebugUiAddLine("=== Godot 4.7 C# Workflow Tests ===");
-				Runtime.DebugUiAddSeparator();
-				Runtime.DebugUiAddLine("All 24 scenarios completed.");
-				Runtime.DebugUiAddLineInt("Passed: ", passCount);
-				Runtime.DebugUiAddLineInt("Failed: ", failCount);
-				Runtime.DebugUiAddLineInt("Physics frames: ", _physicsCount);
-				Runtime.DebugUiAddLineInt("Process frames: ", _frameCount);
-				if (_isWeb == 1)
-				{
-					Runtime.DebugUiAddLine("Platform: Web (WASM)");
-				}
-				else
-				{
-					Runtime.DebugUiAddLine("Platform: Desktop");
-				}
-				Runtime.DebugUiAddSeparator();
-				Runtime.DebugUiAddLine("Idle - tests already run.");
-			}
-			return;
-		}
+		return;
+	}
 	}
 }

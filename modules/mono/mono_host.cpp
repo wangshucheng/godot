@@ -17,6 +17,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
 #include <mono/utils/mono-logger.h>
 #include <mono/metadata/mono-debug.h>
 
@@ -75,6 +78,59 @@ MonoHost::~MonoHost() {
 		singleton = nullptr;
 	}
 }
+
+#ifdef ANDROID_ENABLED
+// Extract BCL files from APK assets (res://mono/) to internal storage using
+// a manifest file. DirAccess::open() fails for APK asset directories on some
+// Android versions (AssetManager.list() returns empty), so we use a manifest
+// file (bcl_manifest.txt) that lists all BCL file paths. Each file is then
+// extracted individually via FileAccess::open(), which works reliably.
+static int extract_bcl_manifest(const String &p_res_root, const String &p_dst_root) {
+	String manifest_path = p_res_root.path_join("bcl_manifest.txt");
+	Ref<FileAccess> manifest = FileAccess::open(manifest_path, FileAccess::READ);
+	if (manifest.is_null()) {
+		ERR_PRINT(String("[Mono] extract_bcl: manifest not found at ") + manifest_path);
+		return 0;
+	}
+
+	int extracted = 0;
+	while (!manifest->eof_reached()) {
+		String rel_path = manifest->get_line().strip_edges();
+		if (rel_path.is_empty() || rel_path.begins_with("#")) {
+			continue;
+		}
+
+		String res_path = p_res_root.path_join(rel_path);
+		String dst_path = p_dst_root.path_join(rel_path);
+
+		// Ensure destination directory exists
+		String dst_dir = dst_path.get_base_dir();
+		Ref<DirAccess> da = DirAccess::create(DirAccess::ACCESS_FILESYSTEM);
+		if (da.is_valid()) {
+			da->make_dir_recursive(dst_dir);
+		}
+
+		Ref<FileAccess> src = FileAccess::open(res_path, FileAccess::READ);
+		if (src.is_null()) {
+			ERR_PRINT(String("[Mono] extract_bcl: cannot read ") + res_path);
+			continue;
+		}
+
+		Vector<uint8_t> data;
+		data.resize(src->get_length());
+		src->get_buffer(data.ptrw(), data.size());
+
+		Ref<FileAccess> dst = FileAccess::open(dst_path, FileAccess::WRITE);
+		if (dst.is_null()) {
+			ERR_PRINT(String("[Mono] extract_bcl: cannot write ") + dst_path);
+			continue;
+		}
+		dst->store_buffer(data.ptr(), data.size());
+		extracted++;
+	}
+	return extracted;
+}
+#endif
 
 static String find_mono_root(const String &p_start_dir) {
 	const char *profiles[] = {"4.5", "4.5-api", "4.5.2-api", "v4.0", nullptr};
@@ -161,6 +217,84 @@ static String find_mono_root(const String &p_start_dir) {
 			}
 		}
 	}
+
+#ifdef ANDROID_ENABLED
+	// Android BCL detection strategy (in priority order):
+	//
+	// 1. Internal storage (/data/data/<package>/files/mono/)
+	//    - Always accessible by native code, no SELinux issues
+	//    - BCL may have been extracted here on a previous launch
+	//
+	// 2. PCK extraction (res://mono/ -> internal storage)
+	//    - BCL is bundled in the PCK and extracted on first launch
+	//    - This is the production approach
+	//
+	// 3. External storage (/sdcard/Android/data/<package>/files/mono/)
+	//    - BCL pushed via adb for development/debugging
+	//    - May be blocked by SELinux on Android 16+ (errno=13 EACCES)
+	//    - Kept as a last-resort fallback
+	{
+		String user_data_dir = OS::get_singleton()->get_user_data_dir();
+		ERR_PRINT(String("[Mono] find_mono_root: user_data_dir='") + user_data_dir + "'");
+
+		if (!user_data_dir.is_empty()) {
+			String internal_mono = user_data_dir.path_join("mono");
+
+			// 1. Check internal storage first (always accessible)
+			for (int p = 0; profiles[p] != nullptr; p++) {
+				String mscorlib = internal_mono.path_join("lib").path_join("mono")
+										.path_join(profiles[p]).path_join("mscorlib.dll");
+				int fd = open(mscorlib.utf8().get_data(), O_RDONLY | O_CLOEXEC);
+				if (fd >= 0) {
+					close(fd);
+					ERR_PRINT(String("[Mono] Found BCL at internal storage: ") + internal_mono);
+					return internal_mono;
+				}
+			}
+
+			// 2. Check if BCL is in PCK, extract to internal storage using manifest
+			String res_bcl_check = "res://mono/lib/mono/4.5/mscorlib.dll";
+			if (FileAccess::exists(res_bcl_check)) {
+				ERR_PRINT("[Mono] BCL found in APK assets, extracting to internal storage...");
+				int count = extract_bcl_manifest("res://mono", internal_mono);
+				ERR_PRINT(String("[Mono] BCL extraction complete: ") + itos(count) + " files extracted");
+
+				// Verify extraction succeeded
+				for (int p = 0; profiles[p] != nullptr; p++) {
+					String mscorlib = internal_mono.path_join("lib").path_join("mono")
+											.path_join(profiles[p]).path_join("mscorlib.dll");
+					int fd = open(mscorlib.utf8().get_data(), O_RDONLY | O_CLOEXEC);
+					if (fd >= 0) {
+						close(fd);
+						ERR_PRINT(String("[Mono] BCL extracted to internal storage: ") + internal_mono);
+						return internal_mono;
+					}
+				}
+				ERR_PRINT("[Mono] BCL extraction verification failed");
+			} else {
+				ERR_PRINT("[Mono] BCL not found in PCK");
+			}
+
+			// 3. Fall back to external storage (may be blocked by SELinux)
+			String package_name = user_data_dir.get_base_dir().get_file();
+			if (!package_name.is_empty()) {
+				String external_mono = "/sdcard/Android/data/" + package_name + "/files/mono";
+				for (int p = 0; profiles[p] != nullptr; p++) {
+					String mscorlib = external_mono.path_join("lib").path_join("mono")
+											.path_join(profiles[p]).path_join("mscorlib.dll");
+					int fd = open(mscorlib.utf8().get_data(), O_RDONLY | O_CLOEXEC);
+					if (fd >= 0) {
+						close(fd);
+						ERR_PRINT(String("[Mono] Found BCL at external storage: ") + external_mono);
+						return external_mono;
+					} else {
+						ERR_PRINT(String("[Mono] open() failed: errno=") + itos(errno) + " path=" + mscorlib);
+					}
+				}
+			}
+		}
+	}
+#endif
 
 	return String();
 }
@@ -255,6 +389,9 @@ Error MonoHost::initialize() {
 	setenv("MONO_PATH", search_path.utf8().get_data(), 1);
 #else
 	String mono_root = find_mono_root(exe_dir);
+#ifdef ANDROID_ENABLED
+	ERR_PRINT(String("[Mono] mono_root = '") + mono_root + "', exe_dir = '" + exe_dir + "'");
+#endif
 
 #ifdef WINDOWS_ENABLED
 	// SetDllDirectoryA replaces (not appends) the previous setting, so only the
@@ -290,6 +427,317 @@ Error MonoHost::initialize() {
 
 	mono_set_dirs(assemblies_dir.utf8().get_data(), etc_dir.utf8().get_data());
 
+#ifdef ANDROID_ENABLED
+	// Android: res:// paths are virtual (inside PCK/APK assets). Mono's
+	// mono_domain_assembly_open() needs real filesystem paths. Extract
+	// GodotSharp.dll and project assembly from PCK to user_data_dir
+	// (/data/data/<package>/files/.mono/assemblies/), which is writable.
+	{
+		String user_data_dir = OS::get_singleton()->get_user_data_dir();
+		String assemblies_extract_dir = user_data_dir.path_join(".mono").path_join("assemblies");
+
+		// Create the extraction directory
+		Ref<DirAccess> da = DirAccess::create(DirAccess::ACCESS_FILESYSTEM);
+		if (da.is_valid()) {
+			da->make_dir_recursive(assemblies_extract_dir);
+		}
+
+		ERR_PRINT(String("[Mono] Android: extracting assemblies to ") + assemblies_extract_dir);
+
+		// Hot update support: check staging area for updated DLLs.
+		// C# code downloads new DLL -> saves to .hot_update/ -> restarts app.
+		// On restart, we copy staged DLLs to assemblies/ before Mono loads.
+		// IMPORTANT: Staged files are KEPT (not deleted) after copying. This serves
+		// as a marker so the subsequent PCK/APK extraction step knows to skip
+		// overwriting with the older APK-bundled version.
+		// When the APK itself is upgraded (newer DLL in assets), the staged marker
+		// will be gone (app data cleared on reinstall or staged file removed by
+		// the C# HotUpdater when it detects a new base version).
+		String hot_update_dir = user_data_dir.path_join(".mono").path_join("hot_update");
+
+		// =====================================================================
+		// HOT-UPDATE SOURCE PICKUP (C++ side, avoids C# System.IO which requires
+		// the missing Mono.SafeStringMarshal::StringToUtf8 icall).
+		//
+		// Whenever the C# app pushes a new DLL to the app-specific external dir:
+		//   /sdcard/Android/data/<pkg>/files/update/<ProjectName>.dll
+		// we copy it into the hot_update staging area BEFORE the staging-area check
+		// runs below. This keeps the C# HotUpdater class working even when the
+		// bundled mscorlib.dll is out of sync with the runtime (which prevents
+		// any System.IO / System.Environment BCL call from succeeding in C#).
+		// =====================================================================
+		{
+			// Extract package name from user_data_dir: "/data/data/<pkg>/files"
+			String pkg;
+			if (user_data_dir.begins_with("/data/data/") && user_data_dir.ends_with("/files")) {
+				int start = 11;                              // strlen("/data/data/")
+				int len   = user_data_dir.length() - start - 6; // -strlen("/files")
+				if (len > 0) {
+					pkg = user_data_dir.substr(start, len);
+				}
+			}
+			if (pkg.is_empty()) {
+				// Fallback to the package name used by the base APK (csharp_test).
+				pkg = "org.godotengine.csharp_test";
+				ERR_PRINT(String("[Mono] Could not parse pkg from user_data_dir='") + user_data_dir + "', using fallback: " + pkg);
+			}
+
+			String project_name = Path::get_csharp_project_name();
+			String update_dir   = "/sdcard/Android/data/" + pkg + "/files/update";
+			String update_src   = update_dir + "/" + project_name + ".dll";
+			String update_dst   = hot_update_dir + "/" + project_name + ".dll";
+
+			ERR_PRINT(String("[Mono] Hot-update source path probe: ") + update_src);
+
+			if (FileAccess::exists(update_src)) {
+				uint64_t src_size = FileAccess::get_file_as_bytes(update_src).size();
+				ERR_PRINT(String("[Mono] Hot-update SOURCE FOUND: ") + update_src + " (" + itos((int)src_size) + " bytes)");
+				ERR_PRINT(String("[Mono] Copying hot-update DLL -> staging area: ") + update_dst);
+
+				// Make sure staging directory exists
+				{
+					Ref<DirAccess> uda = DirAccess::create(DirAccess::ACCESS_FILESYSTEM);
+					if (uda.is_valid()) {
+						uda->make_dir_recursive(hot_update_dir);
+					}
+				}
+
+				// Read source DLL and write to staging directory (overwrite)
+				Ref<FileAccess> src = FileAccess::open(update_src, FileAccess::READ);
+				if (src.is_valid()) {
+					Vector<uint8_t> data;
+					data.resize(src->get_length());
+					src->get_buffer(data.ptrw(), data.size());
+
+					Ref<FileAccess> dst = FileAccess::open(update_dst, FileAccess::WRITE);
+					if (dst.is_valid()) {
+						dst->store_buffer(data.ptr(), data.size());
+						ERR_PRINT(String("[Mono] Hot-update source staged: ") + update_dst +
+						          " (" + itos((int)data.size()) + " bytes)");
+
+						// Clean up the source file so a future restart without
+						// a newly pushed DLL doesn't re-stage the same bytes.
+						// (Analogous to HotUpdater.CleanUpUpdateSource()).
+						Error del_err = DirAccess::remove_absolute(update_src);
+						if (del_err == OK) {
+							ERR_PRINT(String("[Mono] Hot-update source cleaned up (removed): ") + update_src);
+						} else {
+							ERR_PRINT(String("[Mono] Warning: could not remove hot-update source file: ") + update_src);
+						}
+					} else {
+						ERR_PRINT(String("[Mono] ERROR: could not open staging destination for write: ") + update_dst);
+					}
+				} else {
+					ERR_PRINT(String("[Mono] ERROR: could not open hot-update source for read: ") + update_src);
+				}
+			} else {
+				ERR_PRINT(String("[Mono] No hot-update source at ") + update_src + " (none staged)");
+			}
+		}
+		// =====================================================================
+		// END HOT-UPDATE SOURCE PICKUP
+		// =====================================================================
+
+		{
+			// Hot update: copy staged DLLs from hot_update/ -> assemblies/
+			// Strategy: FIRST try explicit DLL names (robust, avoids list_dir_begin quirks on some Android versions).
+			// Fallback to directory listing if explicit names don't cover everything.
+			ERR_PRINT(String("[Mono] Hot update: checking staging area: ") + hot_update_dir);
+
+			// Build the list of DLLs to check explicitly
+			Vector<String> explicit_dlls;
+			explicit_dlls.push_back(Path::get_csharp_project_name() + ".dll");
+			explicit_dlls.push_back("GodotSharp.dll");
+
+			int applied_count = 0;
+			for (int i = 0; i < explicit_dlls.size(); i++) {
+				const String &dll_name = explicit_dlls[i];
+				String src_path = hot_update_dir.path_join(dll_name);
+				String dst_path = assemblies_extract_dir.path_join(dll_name);
+
+				ERR_PRINT(String("[Mono] Hot update probe: ") + dll_name + " src_exists=" + itos((int)FileAccess::exists(src_path)));
+
+				if (FileAccess::exists(src_path)) {
+					// Ensure assemblies dir exists (already made above but just in case)
+					{
+						Ref<DirAccess> md = DirAccess::create(DirAccess::ACCESS_FILESYSTEM);
+						if (md.is_valid()) md->make_dir_recursive(assemblies_extract_dir);
+					}
+
+					Ref<FileAccess> src = FileAccess::open(src_path, FileAccess::READ);
+					if (src.is_valid()) {
+						Vector<uint8_t> data;
+						data.resize(src->get_length());
+						uint64_t read_n = src->get_buffer(data.ptrw(), data.size());
+						ERR_PRINT(String("[Mono] Hot update read ") + dll_name + ": expected=" + itos((int)data.size()) + " read=" + itos((int)read_n));
+
+						Ref<FileAccess> dst = FileAccess::open(dst_path, FileAccess::WRITE);
+						if (dst.is_valid()) {
+							dst->store_buffer(data.ptr(), data.size());
+							uint64_t dst_size_check = FileAccess::get_file_as_bytes(dst_path).size();
+							ERR_PRINT(String("[Mono] Hot update APPLIED: ") + dll_name + " (" + itos((int)data.size()) + " bytes), written_size=" + itos((int)dst_size_check));
+							applied_count++;
+						} else {
+							ERR_PRINT(String("[Mono] Hot update ERROR: cannot open dst for write: ") + dst_path);
+						}
+					} else {
+						ERR_PRINT(String("[Mono] Hot update ERROR: cannot open staged src: ") + src_path);
+					}
+					// KEEP the staged file (marker) — do NOT delete.
+					ERR_PRINT(String("[Mono] Hot update marker retained: ") + src_path);
+				}
+			}
+			ERR_PRINT(String("[Mono] Hot update explicit-apply complete: ") + itos(applied_count) + " DLL(s) applied");
+
+			// Fallback: also try directory listing (catches additional DLLs like netstandard.dll facades)
+			Ref<DirAccess> huda = DirAccess::create(DirAccess::ACCESS_FILESYSTEM);
+			if (huda.is_valid() && huda->dir_exists(hot_update_dir)) {
+				Error listerr = huda->list_dir_begin();
+				ERR_PRINT(String("[Mono] Hot update fallback list_dir_begin result=") + itos((int)listerr));
+				if (listerr == OK) {
+					int seen = 0;
+					String file = huda->get_next();
+					while (!file.is_empty()) {
+						seen++;
+						if (!file.begins_with(".") && !file.ends_with(".tmp")) {
+							bool already_done = false;
+							for (int k = 0; k < explicit_dlls.size(); k++) {
+								if (explicit_dlls[k] == file) { already_done = true; break; }
+							}
+							if (!already_done) {
+								String src_path = hot_update_dir.path_join(file);
+								String dst_path = assemblies_extract_dir.path_join(file);
+								if (FileAccess::exists(src_path)) {
+									Ref<FileAccess> src = FileAccess::open(src_path, FileAccess::READ);
+									if (src.is_valid()) {
+										Vector<uint8_t> data;
+										data.resize(src->get_length());
+										src->get_buffer(data.ptrw(), data.size());
+										Ref<FileAccess> dst = FileAccess::open(dst_path, FileAccess::WRITE);
+										if (dst.is_valid()) {
+											dst->store_buffer(data.ptr(), data.size());
+											ERR_PRINT(String("[Mono] Hot update (fallback) applied: ") + file + " (" + itos((int)data.size()) + " bytes)");
+										}
+									}
+									ERR_PRINT(String("[Mono] Hot update (fallback) marker retained: ") + src_path);
+								}
+							}
+						}
+						file = huda->get_next();
+					}
+					huda->list_dir_end();
+					ERR_PRINT(String("[Mono] Hot update fallback list complete, ") + itos(seen) + " entries seen");
+				} else {
+					ERR_PRINT(String("[Mono] Hot update fallback list_dir_begin FAILED (ignored, explicit apply already ran)"));
+				}
+			} else {
+				ERR_PRINT(String("[Mono] Hot update fallback DirAccess invalid or dir not exist (huda_valid=") + itos((int)huda.is_valid()) + ")");
+			}
+		}
+
+		// Extract GodotSharp.dll from APK/PCK assets.
+		// Skip if a hot-update marker exists in staging area (staged version takes priority).
+		// Otherwise, extract if local copy missing OR if APK version differs in size
+		// (handles APK upgrade scenarios where the bundled DLL was updated).
+		{
+			String res_path = "res://.mono/assemblies/GodotSharp.dll";
+			String dst_path = assemblies_extract_dir.path_join("GodotSharp.dll");
+			String staged_marker = hot_update_dir.path_join("GodotSharp.dll");
+
+			bool has_staged_marker = FileAccess::exists(staged_marker);
+			bool dst_exists = FileAccess::exists(dst_path);
+			bool need_extract = false;
+
+			if (has_staged_marker) {
+				ERR_PRINT("[Mono] GodotSharp.dll: staged marker present, skipping APK extraction (hot update version preserved)");
+			} else if (!dst_exists) {
+				need_extract = true;
+			} else {
+				// Both exist — compare sizes to detect APK upgrade
+				Ref<FileAccess> src = FileAccess::open(res_path, FileAccess::READ);
+				if (src.is_valid()) {
+					uint64_t src_size = src->get_length();
+					uint64_t dst_size = FileAccess::get_file_as_bytes(dst_path).size();
+					if (src_size != dst_size) {
+						ERR_PRINT(String("[Mono] GodotSharp.dll size mismatch (APK=") + itos((int)src_size) +
+						          " vs local=" + itos((int)dst_size) + ") — APK upgrade detected, re-extracting");
+						need_extract = true;
+					} else {
+						ERR_PRINT(String("[Mono] GodotSharp.dll size matches APK (") + itos((int)src_size) + " bytes), skipping extraction");
+					}
+				}
+			}
+
+			if (need_extract) {
+				Ref<FileAccess> src = FileAccess::open(res_path, FileAccess::READ);
+				if (src.is_valid()) {
+					Vector<uint8_t> data;
+					data.resize(src->get_length());
+					src->get_buffer(data.ptrw(), data.size());
+					Ref<FileAccess> dst = FileAccess::open(dst_path, FileAccess::WRITE);
+					if (dst.is_valid()) {
+						dst->store_buffer(data.ptr(), data.size());
+						ERR_PRINT(String("[Mono] Extracted GodotSharp.dll (") + itos((int)data.size()) + " bytes)");
+					}
+				} else {
+					ERR_PRINT(String("[Mono] GodotSharp.dll not found in PCK at ") + res_path);
+				}
+			}
+		}
+
+		// Extract project assembly from APK/PCK assets.
+		// Skip if a hot-update marker exists in staging area (staged version takes priority).
+		// Otherwise, extract if local copy missing OR if APK version differs in size
+		// (handles APK upgrade scenarios where the bundled DLL was updated).
+		{
+			String project_name = Path::get_csharp_project_name();
+			String res_path = "res://.mono/assemblies/" + project_name + ".dll";
+			String dst_path = assemblies_extract_dir.path_join(project_name + ".dll");
+			String staged_marker = hot_update_dir.path_join(project_name + ".dll");
+
+			bool has_staged_marker = FileAccess::exists(staged_marker);
+			bool dst_exists = FileAccess::exists(dst_path);
+			bool need_extract = false;
+
+			if (has_staged_marker) {
+				ERR_PRINT(String("[Mono] ") + project_name + ".dll: staged marker present, skipping APK extraction (hot update version preserved)");
+			} else if (!dst_exists) {
+				need_extract = true;
+			} else {
+				// Both exist — compare sizes to detect APK upgrade
+				Ref<FileAccess> src = FileAccess::open(res_path, FileAccess::READ);
+				if (src.is_valid()) {
+					uint64_t src_size = src->get_length();
+					uint64_t dst_size = FileAccess::get_file_as_bytes(dst_path).size();
+					if (src_size != dst_size) {
+						ERR_PRINT(String("[Mono] ") + project_name + ".dll size mismatch (APK=" + itos((int)src_size) +
+						          " vs local=" + itos((int)dst_size) + ") — APK upgrade detected, re-extracting");
+						need_extract = true;
+					} else {
+						ERR_PRINT(String("[Mono] ") + project_name + ".dll size matches APK (" + itos((int)src_size) + " bytes), skipping extraction");
+					}
+				}
+			}
+
+			if (need_extract) {
+				Ref<FileAccess> src = FileAccess::open(res_path, FileAccess::READ);
+				if (src.is_valid()) {
+					Vector<uint8_t> data;
+					data.resize(src->get_length());
+					src->get_buffer(data.ptrw(), data.size());
+					Ref<FileAccess> dst = FileAccess::open(dst_path, FileAccess::WRITE);
+					if (dst.is_valid()) {
+						dst->store_buffer(data.ptr(), data.size());
+						ERR_PRINT(String("[Mono] Extracted ") + project_name + ".dll (" + itos((int)data.size()) + " bytes)");
+					}
+				} else {
+					ERR_PRINT(String("[Mono] Project assembly not found in PCK at ") + res_path);
+				}
+			}
+		}
+	}
+#endif
+
 	String godotsharp_api_debug = exe_dir.path_join("GodotSharp").path_join("Api").path_join("Debug");
 	String godotsharp_api_release = exe_dir.path_join("GodotSharp").path_join("Api").path_join("Release");
 	String godotsharp_tools = exe_dir.path_join("GodotSharp").path_join("Tools");
@@ -316,7 +764,22 @@ Error MonoHost::initialize() {
 	if (DirAccess::exists(godotsharp_tools)) {
 		search_path = search_path + path_sep + godotsharp_tools;
 	}
+#ifdef ANDROID_ENABLED
+	// Add the extracted assemblies directory to search_path so Mono can find
+	// GodotSharp.dll and project assembly (extracted from PCK to user_data_dir).
+	{
+		String user_data_dir = OS::get_singleton()->get_user_data_dir();
+		String android_assemblies_dir = user_data_dir.path_join(".mono").path_join("assemblies");
+		if (DirAccess::exists(android_assemblies_dir)) {
+			search_path = search_path + path_sep + android_assemblies_dir;
+		}
+	}
+#endif
 	mono_set_assemblies_path(search_path.utf8().get_data());
+#ifdef ANDROID_ENABLED
+	ERR_PRINT(String("[Mono] search_path = '") + search_path + "'");
+	ERR_PRINT("[Mono] mono_set_assemblies_path done");
+#endif
 
 #ifdef WINDOWS_ENABLED
 	SetEnvironmentVariableA("MONO_PATH", search_path.utf8().get_data());
@@ -338,7 +801,13 @@ Error MonoHost::initialize() {
 #if defined(X11_ENABLED) || defined(MACOS_ENABLED) || defined(ANDROID_ENABLED) || defined(IOS_ENABLED)
 	printf("[Mono] Registering System.Native interop (mono_native_initialize)...\n");
 	fflush(stdout);
+#ifdef ANDROID_ENABLED
+	ERR_PRINT("[Mono] About to call mono_native_initialize");
+#endif
 	mono_native_initialize();
+#ifdef ANDROID_ENABLED
+	ERR_PRINT("[Mono] mono_native_initialize done");
+#endif
 	printf("[Mono] System.Native interop registered.\n");
 	fflush(stdout);
 #endif
@@ -366,6 +835,20 @@ Error MonoHost::initialize() {
 #if defined(X11_ENABLED) || defined(MACOS_ENABLED) || defined(ANDROID_ENABLED) || defined(IOS_ENABLED)
 	printf("[Mono] Injecting dllmap redirects (System.Native -> __Internal)...\n");
 	fflush(stdout);
+	// On Android, __Internal (dlopen(NULL)) resolves to the main executable
+	// (app_process64), not libgodot_android.so where SystemNative_* symbols live.
+	// Use the actual .so name as the dllmap target so Mono can dlopen it and
+	// find the statically-linked SystemNative_* functions.
+#ifdef ANDROID_ENABLED
+	static const char *kMonoDllmapXml =
+		"<configuration>"
+		"  <dllmap dll=\"System.Native\" target=\"libgodot_android.so\" />"
+		"  <dllmap dll=\"System.Net.Security\" target=\"libgodot_android.so\" />"
+		"  <dllmap dll=\"System.Net.Security.Native\" target=\"libgodot_android.so\" />"
+		"  <dllmap dll=\"System.Security.Cryptography.Native\" target=\"libgodot_android.so\" />"
+		"  <dllmap dll=\"System.Security.Cryptography.Native.Apple\" target=\"libgodot_android.so\" />"
+		"</configuration>";
+#else
 	static const char *kMonoDllmapXml =
 		"<configuration>"
 		"  <dllmap dll=\"System.Native\" target=\"__Internal\" />"
@@ -374,6 +857,7 @@ Error MonoHost::initialize() {
 		"  <dllmap dll=\"System.Security.Cryptography.Native\" target=\"__Internal\" />"
 		"  <dllmap dll=\"System.Security.Cryptography.Native.Apple\" target=\"__Internal\" />"
 		"</configuration>";
+#endif
 	mono_config_parse_memory(kMonoDllmapXml);
 	printf("[Mono] dllmap redirects injected (override system libmono-native.so).\n");
 	fflush(stdout);
@@ -564,7 +1048,13 @@ Error MonoHost::initialize() {
 #else
 	printf("[Mono] Calling mono_jit_init_version (JIT mode)...\n");
 	fflush(stdout);
+#ifdef ANDROID_ENABLED
+	ERR_PRINT("[Mono] About to call mono_jit_init_version (JIT mode)");
+#endif
 	domain = mono_jit_init_version("GodotMono", "v4.0.30319");
+#ifdef ANDROID_ENABLED
+	ERR_PRINT(String("[Mono] mono_jit_init_version returned domain=") + itos((int64_t)domain));
+#endif
 	if (!domain) {
 		ERR_PRINT("[Mono] Failed to initialize JIT runtime (mono_jit_init_version returned NULL)");
 		return FAILED;
@@ -572,34 +1062,61 @@ Error MonoHost::initialize() {
 #endif
 	printf("[Mono] mono_jit_init_version succeeded, domain=%p\n", (void *)domain);
 	fflush(stdout);
+#ifdef ANDROID_ENABLED
+	ERR_PRINT("[Mono] mono_jit_init_version succeeded — starting bridge init");
+#endif
 
 #ifndef MONO_AOT_MODE
 	// For non-AOT modes (Interpreter/JIT), register AOT modules after runtime init.
 	// In AOT modes, mono_aot_init/register_modules are called before jit_init above.
 	mono_aot_init();
 	mono_aot_register_modules();
+#ifdef ANDROID_ENABLED
+	ERR_PRINT("[Mono] AOT modules registered");
+#endif
 #endif
 
 	mono_bridge::init(domain);
+#ifdef ANDROID_ENABLED
+	ERR_PRINT("[Mono] mono_bridge::init done");
+#endif
 	mono_gc_bridge::init(domain);
 	mono_variant::cache_mono_corlib_classes();
+#ifdef ANDROID_ENABLED
+	ERR_PRINT("[Mono] gc_bridge + variant cache done");
+#endif
 
 	if (!register_internal_calls()) {
 		// M2 fix: cleanup partial init state so the process can re-attempt or
 		// exit cleanly without leaking the root domain. Previously shutdown()
 		// early-returned because is_initialized was still false.
+		ERR_PRINT("[Mono] register_internal_calls FAILED");
 		cleanup_partial_init();
 		return FAILED;
 	}
+#ifdef ANDROID_ENABLED
+	ERR_PRINT("[Mono] register_internal_calls done");
+#endif
 
 	if (!load_corlib()) {
+		ERR_PRINT("[Mono] load_corlib FAILED");
 		cleanup_partial_init();
 		return FAILED;
 	}
+#ifdef ANDROID_ENABLED
+	ERR_PRINT("[Mono] load_corlib done");
+#endif
 
 	if (!load_godotsharp()) {
 		printf("[Mono] Note: GodotSharp.dll not loaded (managed bindings limited).\n");
 		fflush(stdout);
+#ifdef ANDROID_ENABLED
+		ERR_PRINT("[Mono] load_godotsharp FAILED — GodotSharp.dll not loaded");
+#endif
+	} else {
+#ifdef ANDROID_ENABLED
+		ERR_PRINT("[Mono] load_godotsharp done — GodotSharp.dll loaded");
+#endif
 	}
 
 	if (godotsharp_assembly) {
@@ -609,12 +1126,30 @@ Error MonoHost::initialize() {
 			MonoMethod *init_method = mono_class_get_method_from_name(runtime_class, "Initialize", 0);
 			if (init_method) {
 				MonoObject *exc = nullptr;
+#ifdef ANDROID_ENABLED
+				ERR_PRINT("[Mono] Invoking Runtime.Initialize()");
+#endif
 				mono_runtime_invoke(init_method, nullptr, nullptr, &exc);
 				if (exc) {
 					printf("[Mono] WARNING: Exception in Runtime.Initialize().\n");
 					fflush(stdout);
+#ifdef ANDROID_ENABLED
+					ERR_PRINT("[Mono] Exception in Runtime.Initialize()!");
+#endif
+				} else {
+#ifdef ANDROID_ENABLED
+					ERR_PRINT("[Mono] Runtime.Initialize() completed");
+#endif
 				}
+			} else {
+#ifdef ANDROID_ENABLED
+				ERR_PRINT("[Mono] Runtime.Initialize method not found");
+#endif
 			}
+		} else {
+#ifdef ANDROID_ENABLED
+			ERR_PRINT("[Mono] Godot.Runtime class not found");
+#endif
 		}
 	}
 
@@ -623,6 +1158,9 @@ Error MonoHost::initialize() {
 	is_initialized = true;
 	printf("[Mono] C# runtime initialized.\n");
 	fflush(stdout);
+#ifdef ANDROID_ENABLED
+	ERR_PRINT("[Mono] C# runtime initialized — is_initialized=true");
+#endif
 	return OK;
 }
 
@@ -662,6 +1200,16 @@ bool MonoHost::load_godotsharp() {
 	// On Web, GodotSharp.dll is packed in the PCK at res://.mono/assemblies/
 	search_paths.push_back(".mono/assemblies/GodotSharp.dll");
 	search_paths.push_back("GodotSharp.dll");
+#elif defined(ANDROID_ENABLED)
+	// Android: GodotSharp.dll is extracted from PCK to user_data_dir
+	// (/data/data/<package>/files/.mono/assemblies/) at initialize() time.
+	// mono_domain_assembly_open() needs real filesystem paths, not res://.
+	{
+		String user_data_dir = OS::get_singleton()->get_user_data_dir();
+		search_paths.push_back(user_data_dir.path_join(".mono").path_join("assemblies").path_join("GodotSharp.dll"));
+	}
+	// Also check external files dir (alongside BCL push target)
+	search_paths.push_back("/sdcard/Android/data/org.godotengine.csharp_test/files/mono/GodotSharp.dll");
 #else
 	search_paths.push_back(exe_dir.path_join("GodotSharp").path_join("Api").path_join("Debug").path_join("GodotSharp.dll"));
 	search_paths.push_back(exe_dir.path_join("GodotSharp.dll"));

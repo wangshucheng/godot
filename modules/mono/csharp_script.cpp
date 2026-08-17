@@ -1536,6 +1536,17 @@ MonoAssembly *CSharpLanguage::load_scripts_assembly() {
 	search_paths.push_back(String("ProjectScripts.dll"));
 #endif
 
+#ifdef ANDROID_ENABLED
+	// Android: assemblies are extracted from PCK to user_data_dir at runtime
+	// (see mono_host.cpp initialize()). res:// paths are virtual inside PCK
+	// and mono_domain_assembly_open() needs real filesystem paths.
+	{
+		String user_data_dir = OS::get_singleton()->get_user_data_dir();
+		search_paths.push_back(user_data_dir.path_join(".mono").path_join("assemblies").path_join(project_name + ".dll"));
+		search_paths.push_back(user_data_dir.path_join(".mono").path_join("assemblies").path_join("ProjectScripts.dll"));
+	}
+#endif
+
 	String exe_dir = OS::get_singleton()->get_executable_path().get_base_dir();
 	search_paths.push_back(exe_dir.path_join(".mono/assemblies").path_join(project_name + ".dll"));
 	search_paths.push_back(exe_dir.path_join(".mono/assemblies/ProjectScripts.dll"));

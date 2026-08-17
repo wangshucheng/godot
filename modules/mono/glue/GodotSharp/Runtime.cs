@@ -27,6 +27,11 @@ namespace Godot {
             return Bridge.godot_icall_Engine_GetFps();
         }
 
+        // Get user data dir via C++ (for hot update staging area)
+        public static string GetUserDataDir() {
+            return Bridge.godot_icall_GetUserDataDir();
+        }
+
         // =============================================
         // WebSocket helpers: global pointer model (WASM-safe).
         // NO STRING RETURNS - all text ops done in C++.

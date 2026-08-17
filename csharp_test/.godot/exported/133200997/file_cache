@@ -6,4 +6,5 @@ res://main.tscn::5dab4af0cfb63b5a64d4a28126a4b899::1784980213::res://.godot/expo
 res://save_test.tscn::c6c8af617cd42179cc60a875e2251500::1783781639::res://.godot/exported/133200997/export-1bfe8b637398ebebad579359d12f27f0-save_test.scn
 res://scene_test.tscn::0d5e630bf4189dfc632c31d7a283833c::1783781616::res://.godot/exported/133200997/export-5cd904a0e262f8c0567a1fcbf8bd4271-scene_test.scn
 res://ui_test.tscn::90494be23eb50a3856429db663c0b16d::1783781621::res://.godot/exported/133200997/export-e1360d0878830763b0a94eb1f5b397e0-ui_test.scn
-res://fuzz_test.tscn::18910d6df1b06e7e4b1fcee304793ea9::1784996278::res://.godot/exported/133200997/export-b57735ddfeeb5139083e5d9cd88ed440-fuzz_test.scn
+res://fuzz_test.tscn::a8d2090f1d29ae21a723a6ceeb851521::1785224060::res://.godot/exported/133200997/export-b57735ddfeeb5139083e5d9cd88ed440-fuzz_test.scn
+res://delegate_probe.tscn::82f76704220fd589b47b660cde39e311::1785232939::res://.godot/exported/133200997/export-483ba870049236979c201426aaa8930a-delegate_probe.scn

@@ -62,6 +62,17 @@
 #include <cstdarg>
 #include <cstdlib>
 #include <cstring>
+#ifdef ANDROID_ENABLED
+#include <android/log.h>
+// Android: native printf() output is NOT captured by logcat. Route all
+// stdout-style prints through __android_log_print so they appear under the
+// "godot" tag, which adb logcat -s Godot:* / godot:* captures.
+#define NATIVE_LOG_PRINT(...) __android_log_print(ANDROID_LOG_INFO, "godot", __VA_ARGS__)
+#define NATIVE_LOG_NEWLINE() __android_log_print(ANDROID_LOG_INFO, "godot", "%s", "")
+#else
+#define NATIVE_LOG_PRINT(...) printf(__VA_ARGS__)
+#define NATIVE_LOG_NEWLINE() printf("\n")
+#endif
 
 using namespace mono_variant;
 using namespace mono_bridge;
@@ -71,11 +82,11 @@ static void godot_icall_GD_Print(MonoString *message) {
 	if (message) {
 		char *utf8 = mono_string_to_utf8(message);
 		if (utf8) {
-			printf("%s\n", utf8);
+			NATIVE_LOG_PRINT("%s\n", utf8);
 			mono_free(utf8);
 		}
 	} else {
-		printf("\n");
+		NATIVE_LOG_NEWLINE();
 	}
 	fflush(stdout);
 }
@@ -660,6 +671,14 @@ static int32_t godot_icall_Engine_GetFps() {
 	Engine *engine = Engine::get_singleton();
 	if (!engine) return 0;
 	return (int32_t)engine->get_frames_per_second();
+}
+
+// C++-side: get user data dir (for C# hot update staging area)
+static MonoString *godot_icall_GetUserDataDir() {
+	MonoDomain *domain = mono_domain_get();
+	if (!OS::get_singleton()) return mono_string_new(domain, "");
+	String path = OS::get_singleton()->get_user_data_dir();
+	return mono_string_new(domain, path.utf8().get_data());
 }
 
 // C++-side: set Label text with a prefix + int (e.g. "Frames: 1234")
@@ -1277,7 +1296,14 @@ static Label *_ensure_debug_label() {
 
 	CanvasLayer *layer = memnew(CanvasLayer);
 	layer->set_layer(100);
-	root->add_child(layer);
+	// Defer add_child to avoid "Parent node is busy setting up children" error
+	// when _ensure_debug_label is invoked from a node's _Ready() callback
+	// (e.g. Test._Ready -> Runtime.DebugUiInit -> here). The root window is
+	// still in its _Ready cascade at that point and rejects synchronous
+	// add_child calls. call_deferred schedules the add for end-of-frame,
+	// after the _Ready cascade completes. Label property setters and
+	// set_text work fine before the node enters the tree.
+	root->call_deferred("add_child", layer);
 
 	Label *label = memnew(Label);
 	label->set_anchors_preset(Control::PRESET_TOP_LEFT);
@@ -1291,10 +1317,10 @@ static Label *_ensure_debug_label() {
 	label->add_theme_constant_override("shadow_offset_y", 2);
 	_g_debug_lines.clear();
 	label->set_text("");
-	layer->add_child(label);
+	layer->call_deferred("add_child", label);
 
 	_g_debug_label = label;
-	printf("[Mono] Debug UI label created and added to scene.\n");
+	printf("[Mono] Debug UI label created and added to scene (deferred).\n");
 	fflush(stdout);
 	return _g_debug_label;
 }
@@ -1718,7 +1744,7 @@ static void godot_icall_Test_Assert(MonoString *name, int32_t condition) {
 		_g_assert_fail++;
 		char *utf8 = name ? mono_string_to_utf8(name) : nullptr;
 		if (utf8) {
-			printf("[TEST FAIL] %s\n", utf8);
+			NATIVE_LOG_PRINT("[TEST FAIL] %s\n", utf8);
 			mono_free(utf8);
 		}
 	}
@@ -1741,7 +1767,7 @@ static void godot_icall_Test_FinishTest(MonoString *testName) {
 		String line = name_str + (passed ? ": PASS" : ": FAIL");
 		_g_debug_label->set_text(_g_debug_label->get_text() + "\n" + line);
 	}
-	printf("[TEST RESULT] %s: %s (asserts pass=%d fail=%d)\n",
+	NATIVE_LOG_PRINT("[TEST RESULT] %s: %s (asserts pass=%d fail=%d)\n",
 		name_str.utf8().get_data(), passed ? "PASS" : "FAIL",
 		_g_assert_pass, _g_assert_fail);
 	_g_assert_pass = 0;
@@ -3003,6 +3029,7 @@ void godot_register_icalls() {
 	mono_add_internal_call("Godot.Bridge::godot_icall_Label_SetFpsText", (const void *)godot_icall_Label_SetFpsText);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Object_SetIntText", (const void *)godot_icall_Object_SetIntText);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Engine_GetFps", (const void *)godot_icall_Engine_GetFps);
+	mono_add_internal_call("Godot.Bridge::godot_icall_GetUserDataDir", (const void *)godot_icall_GetUserDataDir);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Label_SetPrefixedInt", (const void *)godot_icall_Label_SetPrefixedInt);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Label_AppendLog", (const void *)godot_icall_Label_AppendLog);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Control_SetPosition", (const void *)godot_icall_Control_SetPosition);

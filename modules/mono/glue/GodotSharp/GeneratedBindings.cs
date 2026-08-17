@@ -6083,7 +6083,7 @@ namespace Godot {
 
     // Auto-generated from ClassDB: BaseButton
     public class BaseButton : Godot.Control {
-        public BaseButton() : base() {}
+        public BaseButton() : base(Bridge.godot_icall_Object_InstantiateFromNative("BaseButton")) {}
         internal BaseButton(System.IntPtr ptr) : base(ptr) {}
 
         public bool Disabled {
@@ -7550,7 +7550,7 @@ namespace Godot {
 
     // Auto-generated from ClassDB: BoxContainer
     public class BoxContainer : Container {
-        public BoxContainer() : base() {}
+        public BoxContainer() : base(Bridge.godot_icall_Object_InstantiateFromNative("BoxContainer")) {}
         internal BoxContainer(System.IntPtr ptr) : base(ptr) {}
 
         public long Alignment {
@@ -7669,7 +7669,7 @@ namespace Godot {
 
     // Auto-generated from ClassDB: Button
     public class Button : BaseButton {
-        public Button() : base() {}
+        public Button() : base(Bridge.godot_icall_Object_InstantiateFromNative("Button")) {}
         internal Button(System.IntPtr ptr) : base(ptr) {}
 
         public string Text {
@@ -12774,7 +12774,7 @@ namespace Godot {
 
     // Auto-generated from ClassDB: ColorRect
     public class ColorRect : Godot.Control {
-        public ColorRect() : base() {}
+        public ColorRect() : base(Bridge.godot_icall_Object_InstantiateFromNative("ColorRect")) {}
         internal ColorRect(System.IntPtr ptr) : base(ptr) {}
 
         public Color Color {
@@ -13129,7 +13129,7 @@ namespace Godot {
 
     // Auto-generated from ClassDB: Container
     public class Container : Godot.Control {
-        public Container() : base() {}
+        public Container() : base(Bridge.godot_icall_Object_InstantiateFromNative("Container")) {}
         internal Container(System.IntPtr ptr) : base(ptr) {}
 
         public bool AccessibilityRegion {
@@ -23304,7 +23304,7 @@ namespace Godot {
 
     // Auto-generated from ClassDB: HBoxContainer
     public class HBoxContainer : BoxContainer {
-        public HBoxContainer() : base() {}
+        public HBoxContainer() : base(Bridge.godot_icall_Object_InstantiateFromNative("HBoxContainer")) {}
         internal HBoxContainer(System.IntPtr ptr) : base(ptr) {}
 
     }
@@ -58155,7 +58155,7 @@ namespace Godot {
 
     // Auto-generated from ClassDB: Timer
     public class Timer : Godot.Node {
-        public Timer() : base() {}
+        public Timer() : base(Bridge.godot_icall_Object_InstantiateFromNative("Timer")) {}
         internal Timer(System.IntPtr ptr) : base(ptr) {}
 
         public long ProcessCallback {
@@ -59981,7 +59981,7 @@ namespace Godot {
 
     // Auto-generated from ClassDB: VBoxContainer
     public class VBoxContainer : BoxContainer {
-        public VBoxContainer() : base() {}
+        public VBoxContainer() : base(Bridge.godot_icall_Object_InstantiateFromNative("VBoxContainer")) {}
         internal VBoxContainer(System.IntPtr ptr) : base(ptr) {}
 
     }

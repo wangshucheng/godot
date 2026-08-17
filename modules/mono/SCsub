@@ -627,8 +627,8 @@ elif env["platform"] == "android":
     # 策略与 Linux 桌面一致：全静态链接，--whole-archive 强制包含 libmono-native.a
     env_mono.Append(CPPDEFINES=[("MONO_JIT_MODE", 1)])
 
-    # Android ABI 映射：Godot android_arch -> Mono libs 子目录
-    android_abi = env.get("android_arch", "arm64")
+    # Android ABI 映射：Godot arch -> Mono libs 子目录
+    android_abi = env["arch"]
     abi_map = {
         "arm64": "arm64-v8a",
         "arm32": "armeabi-v7a",

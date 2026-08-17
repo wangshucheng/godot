@@ -1,8 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
-    <AssemblyName>CSharpTest</AssemblyName>
-    <RootNamespace>CSharpTest</RootNamespace>
+    <AssemblyName>Game2048Demo</AssemblyName>
+    <RootNamespace>Game2048Demo</RootNamespace>
     <LangVersion>latest</LangVersion>
     <OutputPath>.mono/assemblies/</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
@@ -15,11 +15,10 @@
       <Private>false</Private>
     </Reference>
   </ItemGroup>
-  <!-- Exclude BCL (mono/) and Gradle build output (android/) from C# compilation.
-       These directories contain .dll and .cs files that should be included in the
-       PCK export but must not be compiled as part of the project. -->
+  <!-- Exclude Android build directory from C# compilation to avoid duplicate
+       definitions when Godot's export process copies .cs files into
+       android/build/src/main/assets/ -->
   <ItemGroup>
-    <Compile Remove="mono\**\*" />
-    <Compile Remove="android\**\*" />
+    <Compile Remove="android/**" />
   </ItemGroup>
 </Project>

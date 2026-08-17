@@ -114,6 +114,9 @@ namespace Godot {
         internal static extern int godot_icall_Engine_GetFps();
 
         [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern string godot_icall_GetUserDataDir();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern void godot_icall_Label_SetFpsText(IntPtr labelPtr, int fps);
 
         [MethodImpl(MethodImplOptions.InternalCall)]

@@ -1,0 +1,88 @@
+# CI v1 — v2 收尾计划 W0-4
+# Job 1: GodotSharp 胶水层编译验证（快速，~2 min）
+# Job 2: Windows 编辑器全量构建 + csharp_test 25 场景回归（重型门禁，~60-90 min）
+#
+# 已知限制（v1 骨架，随迭代修复）：
+#   - Job 2 依赖仓库内跟踪的 mono/ 静态库（53MB，git add -f 策略），若库过期需本地重编后提交
+#   - 未做 SCons 构建缓存（.sconsign + obj 缓存），每次全量构建；后续可加 actions/cache
+#   - WASM 24 场景回归需 emsdk + WSL2 交叉工具链，超出 CI v1 范围，留 nightly 迭代
+
+name: CI
+
+on:
+  push:
+    branches: [4.7-mono]
+  pull_request:
+    branches: [4.7-mono]
+  workflow_dispatch:
+
+jobs:
+  # Job 1: GodotSharp 胶水层编译（netstandard2.0）
+  godotsharp:
+    name: GodotSharp compile (netstandard2.0)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # glue 与 build_godotsharp 均在仓库内，无需 LFS
+          fetch-depth: 0
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '7.0.x'
+
+      - name: Build GodotSharp glue
+        run: dotnet build modules/mono/glue/GodotSharp/GodotSharp.csproj -c Release
+
+      - name: Smoke check linker.xml well-formed
+        run: python3 -c "import xml.dom.minidom; xml.dom.minidom.parse('modules/mono/glue/linker.xml'); print('linker.xml OK')"
+
+  # Job 2: Windows 编辑器构建 + 桌面回归（重型门禁）
+  windows-editor-regression:
+    name: Windows editor build + csharp_test
+    runs-on: windows-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install SCons
+        run: pip install scons==4.8.0
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '7.0.x'
+
+      - name: Build editor (static Mono)
+        shell: cmd
+        run: scons platform=windows target=editor module_mono_enabled=yes -j4
+
+      - name: Organize bin (three-tier layout)
+        shell: powershell
+        run: |
+          # organize_bin.ps1 位于源码树 tools/（不在本仓库），此处内联等效逻辑：
+          # SCons 产物在 bin/ 根，回归脚本自动选最新二进制，无需移动即可运行
+          Get-ChildItem bin -Filter "godot.windows.editor*" | Select-Object Name, Length
+
+      - name: Run csharp_test regression (25 scenarios)
+        shell: powershell
+        run: powershell -File run_csharp_test.ps1
+
+      - name: Upload test log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: csharp-test-logs
+          path: |
+            csharp_test/csharp_test_output.log
+            csharp_test/csharp_test_output.err
+          if-no-files-found: ignore

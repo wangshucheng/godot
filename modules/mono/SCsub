@@ -32,6 +32,7 @@ mono_sources = [
     "mono_aot_modules.cpp",
     "mono_export_plugin.cpp",
     "editor/bindings_generator.cpp",
+    "editor/code_completion.cpp",  # A2 (W4): engine-data completion provider (TOOLS_ENABLED-guarded)
     "editor/semver.cpp",  # A4: SemVer 解析工具（dotnet --version 输出解析，P4 消费）
     "editor/mono_build_panel.cpp",  # P4: Mono bottom dock (dotnet build output)
     "utils/path_utils.cpp",

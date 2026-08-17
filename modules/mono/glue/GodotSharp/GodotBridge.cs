@@ -529,6 +529,11 @@ namespace Godot {
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern string godot_icall_Object_GetClassName(object obj);
 
+        // A2 (W4): engine-data completion provider. Editor builds only —
+        // export templates do not register this icall (TOOLS_ENABLED).
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern string godot_icall_Editor_GetCodeCompletion(int kind, string scriptFile);
+
         // M10: Godot.Collections.Array icalls
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern IntPtr godot_icall_Array_Ctor();

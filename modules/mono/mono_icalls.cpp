@@ -56,6 +56,12 @@
 #include "scene/resources/3d/world_3d.h"
 #include "servers/physics_3d/physics_server_3d.h"
 #endif
+#ifdef TOOLS_ENABLED
+// A2 (W4): editor-only engine-data completion provider (input actions, node
+// paths, resource/scene paths, signals, theme items). Not registered in
+// export templates — the C# glue guards calls with Engine.IsEditorHint().
+#include "editor/code_completion.h"
+#endif
 #include <mono/metadata/image.h>
 #include <mono/metadata/blob.h>
 #include <cstdio>
@@ -2985,6 +2991,27 @@ static void godot_icall_WXAudio_Resume(int32_t id) {
 #endif
 }
 
+#ifdef TOOLS_ENABLED
+// A2 (W4): engine-data code completion for C# (editor only). Mirrors the
+// marshalling convention of the ClassDB metadata icalls: results are
+// returned as one newline-joined MonoString; the C# glue splits it.
+static MonoString *godot_icall_Editor_GetCodeCompletion(int32_t kind, MonoString *scriptFile) {
+	char *utf8 = scriptFile ? mono_string_to_utf8(scriptFile) : nullptr;
+	String script_path = utf8 ? String(utf8) : String();
+	if (utf8) mono_free(utf8);
+
+	PackedStringArray suggestions = gdmono::get_code_completion((gdmono::CompletionKind)kind, script_path);
+
+	MonoDomain *domain = mono_domain_get();
+	String result;
+	for (int i = 0; i < suggestions.size(); i++) {
+		if (i > 0) result += "\n";
+		result += suggestions[i];
+	}
+	return mono_string_new(domain, result.utf8().get_data());
+}
+#endif // TOOLS_ENABLED
+
 void godot_register_icalls() {
 	// All internalcalls are declared in Godot.Bridge (matching our compiled GodotSharp.dll)
 	mono_add_internal_call("Godot.Bridge::godot_icall_GD_Print", (const void *)godot_icall_GD_Print);
@@ -3206,6 +3233,11 @@ void godot_register_icalls() {
 	mono_add_internal_call("Godot.Bridge::godot_icall_WXAudio_SetVolume", (const void *)godot_icall_WXAudio_SetVolume);
 	mono_add_internal_call("Godot.Bridge::godot_icall_WXAudio_Pause", (const void *)godot_icall_WXAudio_Pause);
 	mono_add_internal_call("Godot.Bridge::godot_icall_WXAudio_Resume", (const void *)godot_icall_WXAudio_Resume);
+
+#ifdef TOOLS_ENABLED
+	// A2 (W4): editor-only engine-data completion provider
+	mono_add_internal_call("Godot.Bridge::godot_icall_Editor_GetCodeCompletion", (const void *)godot_icall_Editor_GetCodeCompletion);
+#endif
 
 	printf("[Mono] Registered all internal calls (Godot.Bridge::*).\n");
 	fflush(stdout);

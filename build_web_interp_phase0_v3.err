@@ -1,2 +1,0 @@
-WARNING: "lto=thin" support requires Emscripten 4.0.9 (detected 4.0.5), using "lto=full" instead.
-scons: *** Do not know how to make File target `SOLO' (C:\Users\Administrator\AppData\Roaming\TRAE SOLO CN\ModularData\ai-agent\work-mode-projects\6a47fad25801ac16b9570799\godot4.7_mono\SOLO).  Stop.

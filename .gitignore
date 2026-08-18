@@ -467,3 +467,4 @@ $RECYCLE.BIN/
 *.bak
 csharp_test/.godot/*
 csharp_test/mono/lib/mono/4.5/*
+csharp_test/csharp_test_output.err

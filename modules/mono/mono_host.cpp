@@ -17,8 +17,36 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <unistd.h>
-#include <fcntl.h>
+
+// ----------------------------------------------------------------
+// Platform I/O headers:
+//   Linux/macOS/WASM provide <unistd.h> (POSIX) for pipe/read/write/close.
+//   Windows MSVC ships equivalent functions with underscore prefixes in
+//   <io.h> / <fcntl.h> / <share.h> / <process.h>.
+//   We expose the canonical POSIX names in the global namespace via macro
+//   aliases so the rest of the translation unit can keep using plain
+//   `close(fd)` / `read(fd, ...)` uniformly.
+// ----------------------------------------------------------------
+#ifdef WINDOWS_ENABLED
+#  include <io.h>
+#  include <fcntl.h>
+#  include <share.h>
+#  include <process.h>
+#  define close   _close
+#  define read    _read
+#  define write   _write
+#  define pipe    _pipe
+#  define dup2    _dup2
+#  define fstat   _fstat
+#  define stat    _stat
+#  define access  _access
+#  define unlink  _unlink
+#  define chdir   _chdir
+#  define getcwd  _getcwd
+#else
+#  include <unistd.h>
+#  include <fcntl.h>
+#endif
 #include <errno.h>
 #include <mono/utils/mono-logger.h>
 #include <mono/metadata/mono-debug.h>

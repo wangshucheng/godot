@@ -2482,7 +2482,8 @@ bool CSharpLanguage::build_project_async() {
 	}
 
 	String *ud = memnew(String(csproj_path));
-	Error thr_err = build_thread.start(_build_thread_func, ud);
+	Thread::ID tid = build_thread.start(_build_thread_func, ud);
+	Error thr_err = (tid != 0) ? OK : ERR_CANT_CREATE;
 	if (thr_err != OK) {
 		// Thread start failed — degrade gracefully to the synchronous path.
 		memdelete(ud);

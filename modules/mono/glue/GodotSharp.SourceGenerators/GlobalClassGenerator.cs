@@ -34,12 +34,26 @@ namespace GodotSharp.SourceGenerators
         private const string GlobalClassAttributeFullName = "Godot.GlobalClassAttribute";
         private const string ToolAttributeFullName = "Godot.ToolAttribute";
 
-        private readonly record struct GlobalClassEntry(
-            string ClassName,
-            string BaseTypeName,
-            bool IsTool,
-            bool IsAbstract,
-            string IconPath);
+        // Regressed bug fix (2026-08-18, CS0518): IsExternalInit not available in
+        // netstandard2.0 → C# 9 record struct is not valid. Replaced with a
+        // manual readonly struct + ctor + get-only properties (C# 7.2, netstandard2.0
+        // since 2018-05, supported on dotnet 7.0 SDK).
+        private readonly struct GlobalClassEntry
+        {
+            public string ClassName { get; }
+            public string BaseTypeName { get; }
+            public bool IsTool { get; }
+            public bool IsAbstract { get; }
+            public string IconPath { get; }
+            public GlobalClassEntry(string className, string baseTypeName, bool isTool, bool isAbstract, string iconPath)
+            {
+                ClassName = className;
+                BaseTypeName = baseTypeName;
+                IsTool = isTool;
+                IsAbstract = isAbstract;
+                IconPath = iconPath;
+            }
+        }
 
         public void Initialize(IncrementalGeneratorInitializationContext context)
         {

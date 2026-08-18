@@ -1795,7 +1795,17 @@ void CSharpLanguage::refresh_global_classes() {
 	// preserving the reflection-scan fallback below for pre-SG assemblies.
 	MonoClass *module_klass = mono_class_from_name(image, "", "<Module>");
 	if (module_klass) {
-		mono_runtime_class_init(module_klass);
+		// Modern Mono (5.x+/6.x+) requires a MonoVTable* for
+		// mono_runtime_class_init; get one via the domain so the
+		// <Module> .cctor actually fires (SG registry bootstrap).
+		// If no domain exists yet the cctor is a no-op anyway.
+		MonoDomain *init_domain = mono_domain_get();
+		if (init_domain) {
+			MonoVTable *vtable = mono_class_vtable(init_domain, module_klass);
+			if (vtable) {
+				mono_runtime_class_init(vtable);
+			}
+		}
 	}
 	if (sg_registry_populated) {
 		global_class_cache = sg_global_class_cache;

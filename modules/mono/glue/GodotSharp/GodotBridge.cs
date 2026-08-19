@@ -608,5 +608,34 @@ namespace Godot {
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern void godot_icall_WXAudio_Resume(int id);
+
+        // ============================================================
+        // Performance Benchmark icalls: WASM-safe high-resolution timer.
+        // All timing, division, and formatting done in C++ to avoid
+        // Mono WASM interpreter signature mismatch on arithmetic/BCL ops.
+        // Column: G471 official (single column output for our port).
+        // ============================================================
+
+        // Print benchmark table header: "Benchmark                              G471 official"
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Bench_PrintHeader();
+
+        // Print a section separator line, e.g. "--- Object.Call ---"
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Bench_PrintSection(string section_name);
+
+        // Start timer (records high-res timestamp via Time::get_ticks_usec).
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Bench_Start();
+
+        // Stop timer, compute average per-iteration in nanoseconds, format
+        // as "X.XXXX" (4 decimal places), and append a DebugUi table row.
+        // Parameters: benchmark_name = row label, iterations = loop count used.
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Bench_EndPrint(string benchmark_name, int iterations);
+
+        // Get default iteration count for this platform (WASM -> smaller, desktop -> larger).
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_Bench_DefaultIters();
     }
 }

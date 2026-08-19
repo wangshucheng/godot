@@ -15,7 +15,8 @@
 //  10. Reflection icalls         — ClassDB_* 元数据暴露
 //  11. Collections icalls        — Array_*, Dict_*
 //  12. WXAudio icalls            — WXAudio_* 微信音频适配
-//  13. godot_register_icalls()   — 统一注册入口
+//  13. Benchmark icalls          — Bench_* 性能基准测试（高分辨率计时）
+//  14. godot_register_icalls()   — 统一注册入口
 // ============================================================
 
 #include "mono_icalls.h"
@@ -3036,6 +3037,114 @@ static void godot_icall_ScriptRegistry_RegisterGlobalClass(MonoString *className
 	if (icon_utf8) mono_free(icon_utf8);
 }
 
+// ============================================================
+// 13. Benchmark icalls: Performance micro-benchmark timer.
+// High-resolution timing via OS::get_singleton()->get_ticks_usec()
+// (microsecond resolution; converted to nanoseconds for output).
+// All division / formatting done in C++ to avoid Mono WASM interpreter
+// signature mismatch on C# arithmetic/string ops.
+// Output format matches the reference benchmark: "X.XXXX" nanoseconds.
+// ============================================================
+
+static uint64_t _g_bench_start_usec = 0;
+
+// Print benchmark table header.
+static void godot_icall_Bench_PrintHeader() {
+	if (!_ensure_debug_label()) return;
+	// Column layout: Benchmark name (42 wide) + "G471 official" (14 wide)
+	// Exactly 70 dashes to mimic the reference screenshot's separator look.
+	String header = String("Benchmark") + String("                                    ") + String("G471 official");
+	_g_debug_lines.append(header);
+	char dashes[80];
+	memset(dashes, '-', 70);
+	dashes[70] = '\0';
+	_g_debug_lines.append(String(dashes));
+	_refresh_debug_label();
+}
+
+// Print a section separator: "--- Section Name ---"
+static void godot_icall_Bench_PrintSection(MonoString *section_name) {
+	if (!_ensure_debug_label()) return;
+	char *utf8 = section_name ? mono_string_to_utf8(section_name) : nullptr;
+	String s = String("--- ") + String(utf8 ? utf8 : "") + String(" ---");
+	if (utf8) mono_free(utf8);
+	_g_debug_lines.append(s);
+	_refresh_debug_label();
+}
+
+// Start the timer: capture high-res timestamp.
+static void godot_icall_Bench_Start() {
+	OS *os = OS::get_singleton();
+	_g_bench_start_usec = os ? os->get_ticks_usec() : 0;
+}
+
+// Stop the timer, compute nanoseconds/iteration average, format and print row.
+// ns_per_iter formatted with 4 decimal places in the style of the reference.
+static void godot_icall_Bench_EndPrint(MonoString *benchmark_name, int32_t iterations) {
+	if (!_ensure_debug_label()) return;
+	OS *os = OS::get_singleton();
+	uint64_t end_usec = os ? os->get_ticks_usec() : 0;
+	uint64_t elapsed_usec = (end_usec >= _g_bench_start_usec) ? (end_usec - _g_bench_start_usec) : 0;
+	uint64_t elapsed_nsec = elapsed_usec * 1000ULL;
+
+	// Compute avg_ns_x10000 = (elapsed_nsec * 10000) / iterations  (fixed-point 4 decimals)
+	// Use 128-bit safe division path via uint64 (elapsed_nsec fits in 64-bit even for multi-second runs).
+	uint64_t avg_ns_x10000 = 0;
+	if (iterations > 0) {
+		avg_ns_x10000 = (elapsed_nsec * 10000ULL) / (uint64_t)iterations;
+	}
+	uint64_t whole = avg_ns_x10000 / 10000ULL;
+	uint64_t frac = avg_ns_x10000 % 10000ULL;
+
+	char *utf8 = benchmark_name ? mono_string_to_utf8(benchmark_name) : nullptr;
+	const char *name_cstr = utf8 ? utf8 : "";
+
+	// Pad name to 42 chars, then right-align the numeric column
+	char buf[256];
+	char numbuf[32];
+	snprintf(numbuf, sizeof(numbuf), "%llu.%04llu",
+			(unsigned long long)whole, (unsigned long long)frac);
+	// Build line: name (padded 42) + spaces + numbuf (14 chars, right-aligned)
+	int name_len = (int)strlen(name_cstr);
+	int pad = (42 - name_len);
+	if (pad < 1) pad = 1;
+	int num_len = (int)strlen(numbuf);
+	int num_pad = (14 - num_len);
+	if (num_pad < 0) num_pad = 0;
+	int pos = 0;
+	snprintf(buf + pos, sizeof(buf) - pos, "%s", name_cstr);
+	pos = (int)strlen(buf);
+	for (int i = 0; i < pad && pos < (int)sizeof(buf) - 1; i++) {
+		buf[pos++] = ' ';
+	}
+	for (int i = 0; i < num_pad && pos < (int)sizeof(buf) - 1; i++) {
+		buf[pos++] = ' ';
+	}
+	snprintf(buf + pos, sizeof(buf) - (size_t)pos, "%s", numbuf);
+
+	_g_debug_lines.append(String(buf));
+	while (_g_debug_lines.size() > MAX_DEBUG_LINES) {
+		_g_debug_lines.remove_at(0);
+	}
+	if (utf8) mono_free(utf8);
+	_refresh_debug_label();
+}
+
+// Return a sensible default iteration count based on platform.
+// Desktop: larger iters -> stable micro-benchmark.
+// WASM/Android: smaller iters to keep runtime reasonable.
+static int32_t godot_icall_Bench_DefaultIters() {
+#ifdef WEB_ENABLED
+	return 5000;
+#else
+#ifdef ANDROID_ENABLED
+	return 20000;
+#else
+	return 100000;
+#endif
+#endif
+}
+
 void godot_register_icalls() {
 	// All internalcalls are declared in Godot.Bridge (matching our compiled GodotSharp.dll)
 	mono_add_internal_call("Godot.Bridge::godot_icall_GD_Print", (const void *)godot_icall_GD_Print);
@@ -3265,6 +3374,13 @@ void godot_register_icalls() {
 
 	// W5 SG PoC: compile-time [GlobalClass] registry push (module initializer)
 	mono_add_internal_call("Godot.Bridge::godot_icall_ScriptRegistry_RegisterGlobalClass", (const void *)godot_icall_ScriptRegistry_RegisterGlobalClass);
+
+	// Section 13: Performance benchmark icalls
+	mono_add_internal_call("Godot.Bridge::godot_icall_Bench_PrintHeader", (const void *)godot_icall_Bench_PrintHeader);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Bench_PrintSection", (const void *)godot_icall_Bench_PrintSection);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Bench_Start", (const void *)godot_icall_Bench_Start);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Bench_EndPrint", (const void *)godot_icall_Bench_EndPrint);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Bench_DefaultIters", (const void *)godot_icall_Bench_DefaultIters);
 
 	printf("[Mono] Registered all internal calls (Godot.Bridge::*).\n");
 	fflush(stdout);

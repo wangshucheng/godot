@@ -564,5 +564,27 @@ namespace Godot {
         public static void WxAudioResume(int id) {
             Bridge.godot_icall_WXAudio_Resume(id);
         }
+
+        // ============================================================
+        // Performance Benchmark helpers: high-res timing done in C++.
+        // Output column: "G471 official" - our Mono 6.12 port.
+        // All arithmetic/formatting in C++ (WASM-safe: zero C# string/BCL ops).
+        // ============================================================
+
+        public static void BenchPrintHeader() {
+            Bridge.godot_icall_Bench_PrintHeader();
+        }
+        public static void BenchPrintSection(string section_name) {
+            Bridge.godot_icall_Bench_PrintSection(section_name);
+        }
+        public static void BenchStart() {
+            Bridge.godot_icall_Bench_Start();
+        }
+        public static void BenchEndPrint(string benchmark_name, int iterations) {
+            Bridge.godot_icall_Bench_EndPrint(benchmark_name, iterations);
+        }
+        public static int BenchDefaultIters() {
+            return Bridge.godot_icall_Bench_DefaultIters();
+        }
     }
 }

@@ -468,3 +468,13 @@ $RECYCLE.BIN/
 csharp_test/.godot/*
 csharp_test/mono/lib/mono/4.5/*
 csharp_test/csharp_test_output.err
+csharp_test/benchmark_output.err
+
+# C# benchmark suite (csharp_bench) build output & run artifacts
+csharp_bench/**/obj/
+csharp_bench/BenchResults/bdn_artifacts/
+csharp_bench/BenchResults/log_*.txt
+csharp_bench/BenchResults/godot_stdout_*.txt
+csharp_bench/BenchResults/godot_stderr_*.txt
+csharp_test/csbench_godot*.json
+csharp_test/csbench_godot_*_manifest.txt

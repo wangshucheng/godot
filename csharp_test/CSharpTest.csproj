@@ -14,6 +14,9 @@
       <HintPath>..\bin\GodotSharp\Api\Debug\GodotSharp.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <ProjectReference Include="..\csharp_bench\CSharpBench.Core\CSharpBench.Core.csproj">
+      <Private>true</Private>
+    </ProjectReference>
   </ItemGroup>
   <!-- Exclude BCL (mono/) and Gradle build output (android/) from C# compilation.
        These directories contain .dll and .cs files that should be included in the

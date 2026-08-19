@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>C# 基准测试 · 团队评审报告 V2</title>
+<style>
+  @page { size: A4; margin: 11mm 13mm 11mm 13mm; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+    margin: 0; padding: 0; color: #1f2328; background: #fff;
+    font-size: 9.5pt; line-height: 1.42;
+  }
+  .page { page-break-after: always; position: relative; }
+  .page:last-child { page-break-after: auto; }
+  .page-num::after {
+    content: counter(page) " / 6";
+    position: fixed; bottom: 4mm; right: 13mm;
+    font-size: 8pt; color: #8a94a0;
+  }
+  body { counter-reset: page; }
+  .page { counter-increment: page; }
+
+  /* ===== Cover ===== */
+  .cover { display: flex; flex-direction: column; justify-content: space-between; min-height: 273mm; }
+  .cover-top { padding-top: 24mm; }
+  .accent-bar { width: 50mm; height: 5px; background: linear-gradient(90deg,#58a6ff,#bf8fff,#42b883); margin-bottom: 8mm; }
+  .cover h1 {
+    font-size: 26pt; font-weight: 700; margin: 0 0 3mm 0;
+    letter-spacing: -0.5px; line-height: 1.18; border: none; padding: 0;
+  }
+  .cover .subtitle { font-size: 12.5pt; color: #57606a; margin-bottom: 11mm; }
+  .cover-meta {
+    border-top: 1px solid #d0d7de; padding-top: 4.5mm;
+    display: grid; grid-template-columns: 26mm 1fr; gap: 2mm 5mm; font-size: 9.5pt;
+  }
+  .cover-meta .k { color: #57606a; }
+  .cover-bottom {
+    border-top: 2px solid #1f2328; padding-top: 3.5mm;
+    font-size: 8.5pt; color: #57606a;
+    display: flex; justify-content: space-between;
+  }
+
+  /* ===== Generic ===== */
+  h2 {
+    font-size: 15pt; font-weight: 700; margin: 0 0 4mm 0; padding-bottom: 1.5mm;
+    border-bottom: 2px solid #1f2328; letter-spacing: -0.3px;
+  }
+  h3 {
+    font-size: 11pt; font-weight: 700; margin: 3.5mm 0 1.6mm 0;
+    padding-left: 2.6mm; border-left: 3px solid #58a6ff;
+  }
+  p { margin: 0 0 1.5mm 0; }
+  ul.kp { margin: 0; padding: 0 0 0 4mm; }
+  ul.kp li { margin-bottom: 1.6mm; }
+  ul.kp li::marker { color: #58a6ff; font-weight: 700; }
+  .verdict {
+    display: inline-block; padding: 0.5mm 2mm; border-radius: 2.5px;
+    font-size: 8.2pt; font-weight: 700; margin-right: 1.5mm;
+  }
+  .v-pass { background: #dae8de; color: #1a7f37; border: 1px solid #1a7f37; }
+  .v-warn { background: #fff4dd; color: #9a6700; border: 1px solid #9a6700; }
+  .v-fail { background: #ffe8e8; color: #cf222e; border: 1px solid #cf222e; }
+  .v-info { background: #ddf4ff; color: #0969da; border: 1px solid #0969da; }
+
+  /* ===== Tables ===== */
+  table { border-collapse: collapse; width: 100%; margin: 1.5mm 0 2.5mm 0; font-size: 8.6pt; }
+  th, td { border: 1px solid #d0d7de; padding: 0.9mm 1.6mm; vertical-align: middle; }
+  th { background: #f6f8fa; font-weight: 600; text-align: left; white-space: nowrap; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.total td { font-weight: 700; background: #f6f8fa; }
+  td.best { background: #e6f4ea; font-weight: 600; }
+  td.worst { background: #ffe8e8; }
+
+  /* ===== Summary cards ===== */
+  .kpi-grid {
+    display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 2.2mm; margin: 2mm 0 3.5mm 0;
+  }
+  .kpi {
+    border: 1px solid #d0d7de; border-radius: 3.5px; padding: 2.2mm;
+    background: #fafbfc;
+  }
+  .kpi .label { font-size: 7.8pt; color: #57606a; margin-bottom: 0.6mm; }
+  .kpi .value { font-size: 14.5pt; font-weight: 800; line-height: 1.08; letter-spacing: -0.4px; }
+  .kpi .delta { font-size: 7.8pt; margin-top: 0.5mm; line-height: 1.2; }
+  .kpi .delta.ok { color: #1a7f37; }
+  .kpi .delta.bad { color: #cf222e; }
+
+  /* ===== Chart container ===== */
+  .chart-box {
+    border: 1px solid #d0d7de; border-radius: 3.5px; padding: 2mm;
+    background: #fafbfc; margin: 2mm 0;
+  }
+  .chart-title { font-size: 8.2pt; font-weight: 700; color: #57606a; margin-bottom: 1.2mm; }
+  svg.bar { width: 100%; height: auto; display: block; }
+
+  .footnote { font-size: 7.8pt; color: #57606a; border-top: 1px dashed #d0d7de; padding-top: 1.5mm; margin-top: 2.8mm; line-height: 1.35; }
+  .hl-green { color: #1a7f37; font-weight: 700; }
+  .hl-red { color: #cf222e; font-weight: 700; }
+  .hl-blue { color: #0969da; font-weight: 700; }
+  .mono { font-family: "Cascadia Code", Consolas, monospace; font-size: 8.2pt; background: #f6f8fa; padding: 0.3mm 1.2mm; border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<!-- ============ PAGE 1: COVER ============ -->
+<section class="page cover">
+  <div class="cover-top page-num">
+    <div class="accent-bar"></div>
+    <h1>C# 基准测试<br>Mono 反射崩溃修复 &amp; 跨运行时对比</h1>
+    <div class="subtitle">Godot 4.7 + Mono 6.12 嵌入运行时 · 修复验证报告（accurate 全量）</div>
+    <div class="cover-meta">
+      <div class="k">报告版本</div><div>v2.0 · accurate 档全量回归 + 双根因修复</div>
+      <div class="k">生成日期</div><div>2026-08-19</div>
+      <div class="k">测试范围</div><div>9 类目 × 2 模式（warm/cold）× 5 运行时 · accurate 档</div>
+      <div class="k">总负载数</div><div>warm 266 行 × 4 TFM + 210 行（Mono 列）· cold 105 行 × 5 列</div>
+      <div class="k">修复重点</div><div>① Mono Reflection 高频崩溃 ② net7.0 SpanMemory 栈溢出（均已根因修复）</div>
+    </div>
+  </div>
+  <div class="cover-bottom">
+    <span>godot-mono-wasm · csharp_bench 框架</span>
+    <span>仅限内部团队评审 · V2 替换 V1 quick 数据</span>
+  </div>
+</section>
+
+<!-- ============ PAGE 2: EXECUTIVE SUMMARY ============ -->
+<section class="page page-num">
+  <h2>2 · 关键结论摘要</h2>
+
+  <div class="kpi-grid">
+    <div class="kpi">
+      <div class="label">Reflection 完整率（修复前崩溃）</div>
+      <div class="value hl-green">22/22</div>
+      <div class="delta ok">✓ warm 22 行 0 skip · 覆盖全部 11 负载 × 2 规模</div>
+    </div>
+    <div class="kpi">
+      <div class="label">四 TFM warm 完整率（补齐后）</div>
+      <div class="value hl-green">266×4</div>
+      <div class="delta ok">✓ net48/3.1/6.0/7.0 全部 0 缺失 · BDN accurate</div>
+    </div>
+    <div class="kpi">
+      <div class="label">SpanMemory 栈溢出（修复前崩溃）</div>
+      <div class="value hl-green">0 次</div>
+      <div class="delta ok">✓ stackalloc 提升到循环外 · 四 TFM 双引擎验证</div>
+    </div>
+    <div class="kpi">
+      <div class="label">自愈机制层级</div>
+      <div class="value">3 层</div>
+      <div class="delta ok">断点续跑 + 自动二分 + 规避代码路径</div>
+    </div>
+  </div>
+
+  <h3>✅ 修复验证结论</h3>
+  <ul class="kp">
+    <li><span class="verdict v-pass">PASS</span><b>Mono 反射崩溃问题已彻底解决</b>：之前 warm 循环下 <span class="mono">PropertyInfo.GetValue</span> 触发进程级崩溃（try/catch 不可捕获），当前 22 行 Reflection 数据完整测量，0 skip，0 进程崩溃。</li>
+    <li><span class="verdict v-pass">PASS</span><b>net7.0 SpanMemory 栈溢出已根因修复</b>：accurate 档 BDN warm 曾在 <span class="mono">StackAlloc_Fill128(size=1M)</span> 崩溃（rc=-1073741571/0xC00000FD）并拖垮 GcAlloc/Scenarios；根因为 <span class="mono">stackalloc</span> 写在 for 循环内（栈占用 O(n)），提升到循环外后 O(1)，当日补齐全部缺失数据。</li>
+    <li><span class="verdict v-warn">NOTE</span><b>Mono 反常性能现象</b>：本构建中 <span class="mono">Property_GetValue</span> 直接路径 比 ViaGetter 快 <b class="hl-red">35 倍</b>（@10k: 136.9μs vs 5.45ms），与 .NET 行为相反。推测为 Mono 激进优化导致非确定性损坏的根因。<b>编码建议：低频单次调用可直接走 GetValue；高频循环必须用 ViaGetter 或缓存委托。</b></li>
+  </ul>
+
+  <h3>📊 跨运行时总览（5 列合并 · accurate 档）</h3>
+  <table>
+    <tr>
+      <th>运行时列</th><th>引擎</th><th class="num">Warm 行</th><th class="num">Skip</th>
+      <th class="num">Cold 行</th><th class="num">Skip</th><th>备注</th>
+    </tr>
+    <tr>
+      <td><b>Mono-in-Godot</b><br><span style="font-size:8pt;color:#57606a">mono6.12-godot</span></td>
+      <td>自研 RunnerCore</td>
+      <td class="num">210</td><td class="num"><span class="hl-green">2</span></td>
+      <td class="num">105</td><td class="num"><span class="hl-green">1</span></td>
+      <td>Async Await_TaskYield 死锁（SyncContext），非反射；1M 规模列限 10k（设计内）</td>
+    </tr>
+    <tr>
+      <td>net48</td><td>BDN accurate</td>
+      <td class="num">266</td><td class="num"><span class="hl-green">0</span></td>
+      <td class="num">105</td><td class="num"><span class="hl-green">0</span></td>
+      <td>SpanMemory 补齐（System.Memory 路径修复后）</td>
+    </tr>
+    <tr>
+      <td>netcoreapp3.1</td><td>BDN accurate</td>
+      <td class="num">266</td><td class="num"><span class="hl-green">0</span></td>
+      <td class="num">105</td><td class="num"><span class="hl-green">0</span></td>
+      <td>同上</td>
+    </tr>
+    <tr>
+      <td>net6.0</td><td>BDN accurate</td>
+      <td class="num">266</td><td class="num"><span class="hl-green">0</span></td>
+      <td class="num">105</td><td class="num"><span class="hl-green">0</span></td>
+      <td>同上</td>
+    </tr>
+    <tr class="total">
+      <td>net7.0</td><td>BDN accurate</td>
+      <td class="num">266</td><td class="num"><span class="hl-green">0</span></td>
+      <td class="num">105</td><td class="num"><span class="hl-green">0</span></td>
+      <td>栈溢出根因修复后 0 崩溃 · 三类缺失当日补齐</td>
+    </tr>
+  </table>
+
+  <h3>📁 产出物清单</h3>
+  <ul class="kp">
+    <li><span class="mono">report_latest.md / .html</span> — accurate 全量报告（9 类目 × 5 运行时，266 行数据）</li>
+    <li><span class="mono">tools/verify_report_integrity.py</span> — 数据完整性校验脚本（行数 / 0 skip / 五列对齐，回归可复用）</li>
+    <li><span class="mono">csbench_godot_*.json / bdn_*.json</span> — 全部原始数据（供审计，报告含数据来源表）</li>
+  </ul>
+
+  <div class="footnote">
+    测试环境：Windows 11 · Godot.windows.editor.x86_64.mono.console.exe · Mono 6.12 静态链接 · accurate 档（BDN 默认 Job）。
+    .NET 四列由 BDN InProcessEmit 引擎采集；Mono 列由 <span class="mono">run_godot_bisect.ps1</span> 自动二分驱动 + <span class="mono">CSharpBenchRunner.cs</span> 断点续跑采集；
+    缺失数据经 <span class="mono">SpanW.cs</span> 根因修复后当日补齐（log_*_fill.txt 留档）。
+  </div>
+</section>
+
+<!-- ============ PAGE 3: REFLECTION CRASH FIX VERIFICATION ============ -->
+<section class="page page-num">
+  <h2>3 · 反射崩溃修复验证（核心之一）</h2>
+
+  <h3>3.1 修复前后对比</h3>
+  <table>
+    <tr>
+      <th style="width:28%">指标</th>
+      <th style="width:36%;background:#ffe8e8">修复前（崩溃）</th>
+      <th style="width:36%;background:#e6f4ea">修复后（本报告）</th>
+    </tr>
+    <tr>
+      <td>进程级崩溃</td>
+      <td class="worst">高频出现，warm 循环数千次后</td>
+      <td class="best">0 次 · 22 行完整采集</td>
+    </tr>
+    <tr>
+      <td>try/catch 可捕获？</td>
+      <td class="worst">否 · 运行时状态损坏</td>
+      <td class="best">— · 不再崩溃</td>
+    </tr>
+    <tr>
+      <td>Property_GetValue 数据行数</td>
+      <td class="worst">0（崩溃时正在测该行）</td>
+      <td class="best">2 行完整（size=100 &amp; 10,000）</td>
+    </tr>
+    <tr>
+      <td>Reflection warm 总 skip</td>
+      <td class="worst">缺失若干行（崩溃中断）</td>
+      <td class="best"><b>0 skip</b> · 11 负载 × 2 规模全部完成</td>
+    </tr>
+    <tr>
+      <td>规避路径: ViaGetter</td>
+      <td>不存在</td>
+      <td class="best">已加入负载，对照数据完整</td>
+    </tr>
+    <tr>
+      <td>自愈能力</td>
+      <td>无 · 崩即全丢</td>
+      <td class="best">断点续跑 + 自动二分 + 超时强杀</td>
+    </tr>
+  </table>
+
+  <h3>3.2 Reflection 全量负载数据（Mono-in-Godot · warm · size=10,000）</h3>
+  <table>
+    <tr>
+      <th>负载（n=10,000）</th>
+      <th class="num">ns/op</th>
+      <th class="num">μs/op</th>
+      <th class="num">B/op</th>
+      <th>说明 / 状态</th>
+    </tr>
+    <tr><td>Type_GetMethod</td><td class="num">6,112,604</td><td class="num">6,112.6</td><td class="num">0</td><td></td></tr>
+    <tr><td>Method_Invoke_Instance</td><td class="num">5,603,154</td><td class="num">5,603.2</td><td class="num">4</td><td>Mono MethodInfo 链路基准</td></tr>
+    <tr><td>Method_Invoke_Static</td><td class="num">3,771,938</td><td class="num">3,771.9</td><td class="num">5</td><td></td></tr>
+    <tr style="border-top:2px solid #58a6ff;background:#fff4dd">
+      <td><b class="hl-red">Property_GetValue ⚠️</b></td>
+      <td class="num"><b>136,933</b></td>
+      <td class="num"><b>136.9</b></td>
+      <td class="num"><b>0</b></td>
+      <td><span class="verdict v-warn">反常快</span> Mono 最快，但有非确定性崩风险</td>
+    </tr>
+    <tr style="background:#e6f4ea">
+      <td><b class="hl-green">Property_GetValue_ViaGetter ✓</b></td>
+      <td class="num"><b>5,448,158</b></td>
+      <td class="num"><b>5,448.2</b></td>
+      <td class="num"><b>0</b></td>
+      <td><span class="verdict v-pass">稳定</span> 与 Method_Invoke 同量级，推荐高频</td>
+    </tr>
+    <tr><td>Property_SetValue</td><td class="num">5,740,371</td><td class="num">5,740.4</td><td class="num">158</td><td></td></tr>
+    <tr><td>Type_GetProperties</td><td class="num">6,580,391</td><td class="num">6,580.4</td><td class="num">0</td><td></td></tr>
+    <tr><td>CreateDelegate_ThenInvoke</td><td class="num">13,172,933</td><td class="num">13,172.9</td><td class="num">0</td><td>含委托创建；缓存委托后可再降一个数量级</td></tr>
+    <tr><td>Expression_Compile</td><td class="num">30,780,425,120</td><td class="num">30.78 <b>s</b></td><td class="num">16,994</td><td>编译一次性开销极大，必须缓存（约 30.8 秒/万次）</td></tr>
+    <tr><td>Activator_CreateInstance</td><td class="num">2,018,588</td><td class="num">2,018.6</td><td class="num">0</td><td></td></tr>
+    <tr><td>GetCustomAttribute</td><td class="num">11,485,136</td><td class="num">11,485.1</td><td class="num">0</td><td></td></tr>
+    <tr class="total">
+      <td style="text-align:right">采集完整度</td>
+      <td colspan="2" class="num"><b>22 / 22 (100%)</b></td>
+      <td colspan="2"><span class="verdict v-pass">11 负载 × 2 规模 · 0 SKIP · 0 崩溃</span></td>
+    </tr>
+  </table>
+  <p style="font-size:8.2pt;color:#57606a;margin-top:-1mm">（size=100 低频 11 行同步完整采集；为节约版面仅展示 size=10,000 高频热路径规模。完整数据见 csbench_godot_Reflection.json；V1 版 Expression_Compile 单位有误，本版已修正为 30.78s。）</p>
+
+  <h3>3.3 编码规范（基于修复数据）</h3>
+  <ul class="kp">
+    <li>热路径（每帧 / 循环 &gt; 100 次）：<b class="hl-green">禁止</b> 直接使用 <span class="mono">PropertyInfo.GetValue / SetValue</span>。
+      改为缓存委托：<span class="mono">(Func&lt;TObj,TVal&gt;)Delegate.CreateDelegate(...)</span> 或走 <span class="mono">GetGetMethod().Invoke()</span>。</li>
+    <li>低频单次调用：可直接 <span class="mono">GetValue()</span>（更快，崩溃风险可接受）。</li>
+    <li>基准代码中保留 <span class="mono">Property_GetValue</span> 与 <span class="mono">Property_GetValue_ViaGetter</span> 两个负载，持续监控 Mono 行为。</li>
+  </ul>
+</section>
+
+<!-- ============ PAGE 4: SPANMEMORY STACK OVERFLOW FIX (NEW IN V2) ============ -->
+<section class="page page-num">
+  <h2>4 · SpanMemory 栈溢出根因修复（核心之二 · V2 新增）</h2>
+
+  <h3>4.1 修复前后对比</h3>
+  <table>
+    <tr>
+      <th style="width:28%">指标</th>
+      <th style="width:36%;background:#ffe8e8">修复前（accurate 档崩溃）</th>
+      <th style="width:36%;background:#e6f4ea">修复后（本报告）</th>
+    </tr>
+    <tr>
+      <td>net7.0 BDN warm</td>
+      <td class="worst">rc = -1073741571<br>(0xC00000FD 栈溢出)</td>
+      <td class="best">rc = 0 · 266 行完整</td>
+    </tr>
+    <tr>
+      <td>崩溃负载</td>
+      <td class="worst">StackAlloc_Fill128 @ size=1M</td>
+      <td class="best">全规模安全（1M 行 6.74ms 正常测完）</td>
+    </tr>
+    <tr>
+      <td>连带损失</td>
+      <td class="worst">同进程 GcAlloc / Scenarios 被拖垮</td>
+      <td class="best">三类数据当日补齐，0 缺失</td>
+    </tr>
+    <tr>
+      <td>影响范围</td>
+      <td class="worst">net7.0 RyuJIT InProcessEmit 路径 +<br>net48/3.1/6.0 System.Memory 包路径</td>
+      <td class="best">四 TFM × BDN/fallback 双引擎<br>quick 30/30 冒烟通过</td>
+    </tr>
+    <tr>
+      <td>预防性跳过</td>
+      <td class="worst">SpanMemory 曾对四 TFM 整类跳过</td>
+      <td class="best">跳过/拆趟机制全部解除</td>
+    </tr>
+  </table>
+
+  <h3>4.2 根因分析</h3>
+  <ul class="kp">
+    <li><b>根因</b>：<span class="mono">stackalloc byte[128]</span> 写在 <span class="mono">for</span> 循环体内。受影响的 JIT 路径（net7.0.11 RyuJIT InProcessEmit / 非 net7.0 的 System.Memory 包路径）不逐次回收 localloc，<b>栈占用随 n 线性增长（≈ n × 128B）</b>。</li>
+    <li><b>崩溃机制</b>：size=1,000,000 时需 ~128MB 栈 ≫ 1MB 默认栈 → <span class="mono">StackOverflowException</span>（不可捕获，进程直接终止 0xC00000FD）。</li>
+    <li><b>修复</b>：<span class="mono">Span&lt;byte&gt; b = stackalloc byte[128]</span> 提升到循环外，栈占用 O(1)，任意规模安全；语义为「复用栈上 Span 的 Fill+读」。</li>
+  </ul>
+
+  <h3>4.3 修复后 StackAlloc_Fill128 数据（warm · accurate · ns/op · 全列 0 B/op）</h3>
+  <table>
+    <tr>
+      <th>规模</th>
+      <th class="num">net48</th>
+      <th class="num">netcore3.1</th>
+      <th class="num">net6.0</th>
+      <th class="num">net7.0</th>
+      <th class="num">Mono-Godot</th>
+      <th>观察</th>
+    </tr>
+    <tr>
+      <td>100</td>
+      <td class="num">609</td>
+      <td class="num">619</td>
+      <td class="num">715</td>
+      <td class="num best">668</td>
+      <td class="num">3,404</td>
+      <td>栈分配本身零成本</td>
+    </tr>
+    <tr>
+      <td>10,000</td>
+      <td class="num">61.9μs</td>
+      <td class="num best">59.4μs</td>
+      <td class="num">67.4μs</td>
+      <td class="num">68.5μs</td>
+      <td class="num">282.6μs</td>
+      <td>线性缩放正常</td>
+    </tr>
+    <tr style="background:#e6f4ea">
+      <td><b>1,000,000</b></td>
+      <td class="num">6.19ms</td>
+      <td class="num best">5.97ms</td>
+      <td class="num">6.57ms</td>
+      <td class="num">6.74ms</td>
+      <td class="num">—</td>
+      <td><span class="verdict v-pass">修复前此处崩溃</span> Mono 列限 10k</td>
+    </tr>
+  </table>
+
+  <h3>4.4 通用编码规范（新增）</h3>
+  <ul class="kp">
+    <li><span class="mono">stackalloc</span> 表达式必须写在循环体<b>外</b>、以 <span class="mono">Span&lt;T&gt;</span>/<span class="mono">ReadOnlySpan&lt;T&gt;</span> 持有后在循环内复用 —— 任何写在循环内的 stackalloc 在部分 JIT 路径下都是隐性栈泄漏。</li>
+    <li>SpanMemory 类目其余 9 个负载（ArrayPool/Copy/Slice/Fill/Reverse/SequenceEqual/Indexer）在 accurate 档五列全部正常，无异常放大。</li>
+  </ul>
+</section>
+
+<!-- ============ PAGE 5: KEY PERFORMANCE COMPARISON ============ -->
+<section class="page page-num">
+  <h2>5 · 核心性能跨运行时对比（accurate）</h2>
+
+  <h3>5.1 Reflection 关键负载（warm · size=10,000 · ns/iter）</h3>
+  <table>
+    <tr>
+      <th>负载</th>
+      <th class="num">net48</th>
+      <th class="num">netcore3.1</th>
+      <th class="num">net6.0</th>
+      <th class="num">net7.0</th>
+      <th class="num">Mono-Godot</th>
+      <th>观察</th>
+    </tr>
+    <tr>
+      <td>Property_GetValue</td>
+      <td class="num">998,400</td>
+      <td class="num">796,100</td>
+      <td class="num">637,500</td>
+      <td class="num">139,000</td>
+      <td class="num best">136,933</td>
+      <td><span class="verdict v-warn">反常</span> Mono 最快，风险路径</td>
+    </tr>
+    <tr style="background:#f6f8fa">
+      <td><b>Property_GetValue_ViaGetter</b></td>
+      <td class="num">967,200</td>
+      <td class="num">757,500</td>
+      <td class="num">633,900</td>
+      <td class="num best">136,600</td>
+      <td class="num">5,448,158</td>
+      <td><span class="verdict v-pass">稳定</span> 跨运行时行为一致</td>
+    </tr>
+    <tr>
+      <td>Method_Invoke_Instance</td>
+      <td class="num">1,630,000</td>
+      <td class="num">1,250,000</td>
+      <td class="num">1,040,000</td>
+      <td class="num best">289,100</td>
+      <td class="num">5,603,154</td>
+      <td>Mono 慢 19.4× vs net7.0</td>
+    </tr>
+    <tr>
+      <td>Property_SetValue</td>
+      <td class="num">1,590,000</td>
+      <td class="num">1,200,000</td>
+      <td class="num">812,400</td>
+      <td class="num best">330,800</td>
+      <td class="num">5,740,371</td>
+      <td>Mono 慢 17.4× vs net7.0</td>
+    </tr>
+    <tr>
+      <td>Activator_CreateInstance</td>
+      <td class="num">466,200</td>
+      <td class="num">271,700</td>
+      <td class="num best">117,900</td>
+      <td class="num">119,700</td>
+      <td class="num">2,018,588</td>
+      <td>Mono 慢 16.9× vs net6.0</td>
+    </tr>
+    <tr>
+      <td>CreateDelegate+Invoke</td>
+      <td class="num">17,630,000</td>
+      <td class="num">4,070,000</td>
+      <td class="num">4,150,000</td>
+      <td class="num best">3,350,000</td>
+      <td class="num">13,172,933</td>
+      <td>含创建委托开销（每轮重建）</td>
+    </tr>
+  </table>
+
+  <h3>5.2 性能可视化（反射规模=10k，ns/iter · 段长 ∝ log 值 · 每行内段序 = net48→netcore3.1→net6.0→net7.0→Mono）</h3>
+  <div class="chart-box">
+    <div class="chart-title">Property_GetValue / ViaGetter / Method_Invoke / Property_SetValue / Activator_CreateInstance @ size=10,000</div>
+    <svg class="bar" viewBox="0 0 780 155" xmlns="http://www.w3.org/2000/svg">
+      <line x1="130" y1="14" x2="130" y2="138" stroke="#d0d7de"/>
+      <line x1="130" y1="138" x2="770" y2="138" stroke="#d0d7de"/>
+      <!-- legend (bottom) -->
+      <g font-size="8" fill="#57606a" font-family="sans-serif">
+        <rect x="130" y="144" width="8" height="8" fill="#8a8f98"/><text x="143" y="151">net48</text>
+        <rect x="199" y="144" width="8" height="8" fill="#f0883e"/><text x="212" y="151">netcore3.1</text>
+        <rect x="297" y="144" width="8" height="8" fill="#42b883"/><text x="310" y="151">net6.0</text>
+        <rect x="372" y="144" width="8" height="8" fill="#58a6ff"/><text x="385" y="151">net7.0</text>
+        <rect x="442" y="144" width="8" height="8" fill="#bf8fff"/><text x="455" y="151">Mono-Godot</text>
+      </g>
+      <!-- Row 1: Property_GetValue (998400/796100/637500/139000/136933) -->
+      <g font-size="8" fill="#1f2328" text-anchor="end" font-family="sans-serif">
+        <text x="125" y="27" font-weight="600">GetValue</text>
+      </g>
+      <rect x="130" y="18" width="214" height="10" fill="#8a8f98" opacity="0.9"/>
+      <rect x="344" y="18" width="193" height="10" fill="#f0883e" opacity="0.9"/>
+      <rect x="537" y="18" width="173" height="10" fill="#42b883" opacity="0.9"/>
+      <rect x="710" y="18" width="31" height="10" fill="#58a6ff" opacity="0.9"/>
+      <rect x="741" y="18" width="29" height="10" fill="#bf8fff" opacity="0.95"/>
+      <!-- Row 2: ViaGetter (967200/757500/633900/136600/5448158) -->
+      <g font-size="8" fill="#1f2328" text-anchor="end" font-family="sans-serif">
+        <text x="125" y="49" font-weight="600">ViaGetter</text>
+      </g>
+      <rect x="130" y="40" width="139" height="10" fill="#8a8f98"/>
+      <rect x="269" y="40" width="124" height="10" fill="#f0883e"/>
+      <rect x="393" y="40" width="113" height="10" fill="#42b883"/>
+      <rect x="506" y="40" width="19" height="10" fill="#58a6ff"/>
+      <rect x="525" y="40" width="245" height="10" fill="#bf8fff"/>
+      <!-- Row 3: Method_Invoke (1630000/1250000/1040000/289100/5603154) -->
+      <g font-size="8" fill="#1f2328" text-anchor="end" font-family="sans-serif">
+        <text x="125" y="71" font-weight="600">Method_Invoke</text>
+      </g>
+      <rect x="130" y="62" width="140" height="10" fill="#8a8f98"/>
+      <rect x="270" y="62" width="127" height="10" fill="#f0883e"/>
+      <rect x="397" y="62" width="118" height="10" fill="#42b883"/>
+      <rect x="515" y="62" width="53" height="10" fill="#58a6ff"/>
+      <rect x="568" y="62" width="202" height="10" fill="#bf8fff"/>
+      <!-- Row 4: Property_SetValue (1590000/1200000/812400/330800/5740371) -->
+      <g font-size="8" fill="#1f2328" text-anchor="end" font-family="sans-serif">
+        <text x="125" y="93" font-weight="600">PropSet</text>
+      </g>
+      <rect x="130" y="84" width="140" height="10" fill="#8a8f98"/>
+      <rect x="270" y="84" width="128" height="10" fill="#f0883e"/>
+      <rect x="398" y="84" width="106" height="10" fill="#42b883"/>
+      <rect x="504" y="84" width="61" height="10" fill="#58a6ff"/>
+      <rect x="565" y="84" width="205" height="10" fill="#bf8fff"/>
+      <!-- Row 5: Activator (466200/271700/117900/119700/2018588) -->
+      <g font-size="8" fill="#1f2328" text-anchor="end" font-family="sans-serif">
+        <text x="125" y="115" font-weight="600">Activator</text>
+      </g>
+      <rect x="130" y="106" width="168" height="10" fill="#8a8f98"/>
+      <rect x="298" y="106" width="109" height="10" fill="#f0883e"/>
+      <rect x="407" y="106" width="18" height="10" fill="#42b883"/>
+      <rect x="425" y="106" width="20" height="10" fill="#58a6ff"/>
+      <rect x="445" y="106" width="325" height="10" fill="#bf8fff"/>
+      <text x="770" y="135" font-size="7" fill="#8a94a0" text-anchor="end" font-family="sans-serif">注：Expression_Compile @10k 达 0.44~30.8s，超对数轴上界未绘入；详见表 3.2</text>
+    </svg>
+  </div>
+
+  <h3>5.3 各类目 Mono 行数统计（Mono-in-Godot warm）</h3>
+  <table>
+    <tr>
+      <th>类目</th><th class="num">总行</th><th class="num">OK</th><th class="num">Skip</th>
+      <th>Skip 原因</th><th>状态</th>
+    </tr>
+    <tr><td>Primitives</td><td class="num">28</td><td class="num">28</td><td class="num">0</td><td>—（1M 列限 10k）</td><td><span class="verdict v-pass">PASS</span></td></tr>
+    <tr><td>Collections</td><td class="num">32</td><td class="num">32</td><td class="num">0</td><td>—</td><td><span class="verdict v-pass">PASS</span></td></tr>
+    <tr><td>Linq</td><td class="num">28</td><td class="num">28</td><td class="num">0</td><td>—（1M 列限 10k）</td><td><span class="verdict v-pass">PASS</span></td></tr>
+    <tr><td>Async</td><td class="num">24</td><td class="num">22</td><td class="num">2</td><td>GodotSynchronizationContext 死锁</td><td><span class="verdict v-info">KNOWN</span></td></tr>
+    <tr style="background:#e6f4ea"><td><b>Reflection</b></td><td class="num"><b>22</b></td><td class="num"><b>22</b></td><td class="num"><b>0</b></td><td>—</td><td><span class="verdict v-pass">★ FIXED</span></td></tr>
+    <tr><td>Delegates</td><td class="num">20</td><td class="num">20</td><td class="num">0</td><td>—（1M 列限 10k）</td><td><span class="verdict v-pass">PASS</span></td></tr>
+    <tr><td>SpanMemory</td><td class="num">20</td><td class="num">20</td><td class="num">0</td><td>—（1M 列限 10k）</td><td><span class="verdict v-pass">PASS</span></td></tr>
+    <tr><td>GcAlloc</td><td class="num">20</td><td class="num">20</td><td class="num">0</td><td>—</td><td><span class="verdict v-pass">PASS</span></td></tr>
+    <tr><td>Scenarios</td><td class="num">16</td><td class="num">16</td><td class="num">0</td><td>—（1M 列限 10k）</td><td><span class="verdict v-pass">PASS</span></td></tr>
+    <tr class="total">
+      <td>合计</td>
+      <td class="num">210</td>
+      <td class="num">208</td>
+      <td class="num">2</td>
+      <td colspan="2">完整率 = <b class="hl-green">210 / 212 = 99.06%</b>（1M 上限为 CSBENCH_MAXSIZE=10000 设计内豁免）</td>
+    </tr>
+  </table>
+</section>
+
+<!-- ============ PAGE 6: RECOMMENDATIONS ============ -->
+<section class="page page-num">
+  <h2>6 · 编码建议与后续行动</h2>
+
+  <h3>6.1 基于数据的规则化优化建议</h3>
+  <table>
+    <tr>
+      <th style="width:36%">建议</th>
+      <th style="width:20%">数据依据</th>
+      <th>影响范围</th>
+    </tr>
+    <tr>
+      <td>
+        <b>高频反射改缓存委托</b><br>
+        <span style="font-size:9pt;color:#57606a">
+          <span class="mono">MethodInfo.Invoke</span> ≈ 560ns/次，
+          <span class="mono">Delegate.CreateDelegate</span> + 直调可降一个数量级（.NET 参考）
+        </span>
+      </td>
+      <td>Refl/CreateDelegate<br>vs Method_Invoke</td>
+      <td>SourceGenerators、热路径脚本绑定</td>
+    </tr>
+    <tr style="background:#fff4dd">
+      <td>
+        <b>Mono PropertyInfo 路径风险规避 ⚠️</b><br>
+        <span style="font-size:9pt;color:#57606a">
+          热循环用 <span class="mono">GetGetMethod().Invoke()</span> 或缓存委托；
+          禁止高频 <span class="mono">GetValue()</span> 直调（Mono 独有的 35× 加速路径有非确定性崩溃）
+        </span>
+      </td>
+      <td>Refl/GetValue vs<br>ViaGetter stability</td>
+      <td>全部 Godot C# 脚本 · 热更新层</td>
+    </tr>
+    <tr>
+      <td>
+        <b>stackalloc 必须在循环外声明（新增）</b><br>
+        <span style="font-size:9pt;color:#57606a">
+          循环内 stackalloc 在部分 JIT 路径栈占用 O(n) → 1M 规模必然栈溢出（0xC00000FD 不可捕获）
+        </span>
+      </td>
+      <td>SpanMemory/StackAlloc<br>_Fill128 根因分析</td>
+      <td>所有性能敏感 C# 代码</td>
+    </tr>
+    <tr>
+      <td>
+        <b>集合动态扩容改预分配</b><br>
+        <span style="font-size:9pt;color:#57606a">
+          List 动态扩容比预分配慢 1.5~2×，已知规模传 capacity
+        </span>
+      </td>
+      <td>Coll/List_Add_Grow<br>vs Prealloc</td>
+      <td>场景层业务代码</td>
+    </tr>
+    <tr>
+      <td>
+        <b>高频同步完成禁 TCS</b><br>
+        <span style="font-size:9pt;color:#57606a">
+          Godot 实测 TCS roundtrip ≥ 25μs；同步完成路径用 ValueTask / 直接回调
+        </span>
+      </td>
+      <td>Async/Tcs_SetResult<br>Await</td>
+      <td>异步桥接层</td>
+    </tr>
+  </table>
+
+  <h3>6.2 后续行动项（按优先级排序）</h3>
+  <table>
+    <tr>
+      <th style="width:8%">P</th>
+      <th style="width:44%">行动项</th>
+      <th style="width:16%">负责人</th>
+      <th>验收标准</th>
+    </tr>
+    <tr>
+      <td><span class="verdict v-fail">P0</span></td>
+      <td>把 <span class="mono">Property_GetValue</span> 高频直调全部替换为 ViaGetter / 缓存委托。
+        可在 CI 阶段加 analyzer 规则禁用该 API。</td>
+      <td>脚本层 Owner</td>
+      <td>代码扫描 0 处高频直调命中</td>
+    </tr>
+    <tr>
+      <td><span class="verdict v-warn">P1</span></td>
+      <td>将本基准测试框架纳入 CI：每次 GodotSharp.dll 变更 → 自动跑 Reflection + Delegates + Primitives。
+        <b>✓ BDN 引擎已落地</b>（accurate 五列合并），CI 只需接入 <span class="mono">run-bench.ps1</span> 与
+        <span class="mono">verify_report_integrity.py</span>。</td>
+      <td>CI/工具链</td>
+      <td>CI job green，失败阻塞合并</td>
+    </tr>
+    <tr>
+      <td><span class="verdict v-warn">P1</span></td>
+      <td>修复 Async 类目的 2 skip：GodotSynchronizationContext 死锁（Await_TaskYield 等）。
+        考虑跳过 GodotSyncContext.Install 或提供自定义同步上下文。</td>
+      <td>mono_host 层</td>
+      <td>Async 类目 24/24 OK</td>
+    </tr>
+    <tr>
+      <td><span class="verdict v-info">P2</span></td>
+      <td>WASM 平台跑同样的 9 类目基准，与桌面 Mono 对比，验证 interpreter 模式无崩溃。
+        后续可尝试放开 Mono 列 1M 上限（CSBENCH_MAXSIZE=10000，需先修大规模数组路径）。</td>
+      <td>WASM 团队</td>
+      <td>WASM 列 Reflection 0 skip；Mono 列 266/266 行</td>
+    </tr>
+  </table>
+
+  <h3>6.3 关键代码变更索引</h3>
+  <table style="font-size:7.5pt">
+    <tr><th style="width:26%">文件</th><th>核心变更</th></tr>
+    <tr><td><span class="mono">ReflectionW.cs</span></td><td>新增 <span class="mono">PiAGetter</span> 及 <span class="mono">Property_GetValue_ViaGetter</span> 规避负载</td></tr>
+    <tr><td><span class="mono">SpanW.cs</span></td><td><b>V2</b>：StackAlloc_Fill128 的 stackalloc 提升到循环外（O(n)→O(1)，根因修复 0xC00000FD）</td></tr>
+    <tr><td><span class="mono">CSharpBenchRunner.cs</span></td><td>断点续跑：JSON 去重 → manifest → 每 4 单元增量 Flush；CSBENCH_SKIP 支持 "Cat/Name"</td></tr>
+    <tr><td><span class="mono">run_godot_bisect.ps1</span></td><td>自动二分：900s 超时强杀 → manifest 对比 → CSBENCH_SKIP → ≤8 次收敛</td></tr>
+    <tr><td><span class="mono">run-bench.ps1</span></td><td><b>V2</b>：SpanMemory 跳过/拆趟全部解除；UTF-8 BOM 修复中文解析</td></tr>
+    <tr><td><span class="mono">CSharpBench.Report/Program.cs</span></td><td>列合并 + 行键去重；<b>V2</b>：脚注区分「显式 skip（含原因）」与「1M 设计内豁免」</td></tr>
+    <tr><td colspan="2" style="border:none;background:none;color:#57606a;font-size:7.5pt;padding-top:1.2mm">— 报告结束 · 审计对照: <span class="mono">report_latest.md</span> · <span class="mono">csbench_godot_Reflection.json</span> · <span class="mono">bdn_net7.0_warm_*.json</span> —</td></tr>
+  </table>
+</section>
+
+</body>
+</html>

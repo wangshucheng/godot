@@ -72,6 +72,14 @@ namespace Godot {
         public SignalAwaiter GetAwaiter() => this;
 
         public object[] GetResult() {
+            // #1 — If !IsCompleted, the caller is synchronously blocking on
+            // this awaiter via GetAwaiter().GetResult() — the signal has
+            // NOT yet fired, so they would deadlock waiting for Pump()
+            // which cannot run. Fail-fast with the same documented
+            // exception as GodotSynchronizationContext.Wait.
+            if (!_isCompleted) {
+                Platform.ThrowForbiddenSyncWait();
+            }
             if (_exception != null) throw _exception;
             return _result;
         }

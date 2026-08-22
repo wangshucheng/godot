@@ -106,5 +106,61 @@ namespace Godot {
                     feature + " is not supported in WASM Full AOT / single-threaded mode.");
             }
         }
+
+        // ============================================================
+        // Documented-forbidden feature guards (#1 / #2 / #3).
+        //
+        // These are intentionally aggressive (throw, not just warn) —
+        // the three disabled paths below are silent killers on their
+        // respective platforms (deadlock or unrecoverable GC abort).
+        // Exception messages always include the doc path for triage.
+        // ============================================================
+
+        private const string DOC_REF = "See: docs/MONO_612_PLATFORM_LIMITATIONS.md";
+
+        /// <summary>
+        /// Fail-fast guard for #2 — WASM async/await.
+        /// MUST be called as the first line of EVERY async method in user
+        /// code (the C# compiler generates state machines behind our back,
+        /// so no interception point exists earlier than the user body).
+        /// NOP on desktop platforms.
+        /// </summary>
+        public static void ThrowIfAsyncForbiddenOnWeb() {
+            EnsureInitialized();
+            if (!IsWeb) return;
+            throw new PlatformNotSupportedException(
+                "C# async/await is FORBIDDEN on Mono 6.12 WASM (Web / WeChat minigame). " +
+                "Async state machine objects poison the sgen GC heap and trigger an unrecoverable " +
+                "abort at the next GC.Collect. Rewrite as synchronous code + frame-based polling.\n" +
+                DOC_REF + " #2");
+        }
+
+        /// <summary>
+        /// Fail-fast guard for #3 — WASM Expression.Compile / ILGenerator.Emit.
+        /// Call before any Expression.Compile(), DynamicMethod.Create(), or
+        /// ILGenerator.Emit*(). NOP on desktop platforms.
+        /// </summary>
+        public static void ThrowIfExpressionCompileForbiddenOnWeb() {
+            EnsureInitialized();
+            if (!IsWeb) return;
+            throw new PlatformNotSupportedException(
+                "System.Linq.Expressions.Expression.Compile() / System.Reflection.Emit is " +
+                "FORBIDDEN on Mono 6.12 WASM. The interpreter has no IL emit backend. " +
+                "Use pre-compiled delegates, Func<T> fields, or source generators instead.\n" +
+                DOC_REF + " #3");
+        }
+
+        /// <summary>
+        /// Internal helper used by GodotSynchronizationContext / SignalAwaiter
+        /// to raise #1. Kept public so user code can also check explicitly if
+        /// building a custom wait path (do NOT do that — use 'await' instead).
+        /// </summary>
+        public static void ThrowForbiddenSyncWait() {
+            throw new NotSupportedException(
+                "Synchronous blocking waits (Task.Wait / .Result / GetAwaiter().GetResult()) " +
+                "are FORBIDDEN on the Godot main thread when GodotSynchronizationContext is " +
+                "installed. Use 'await' instead.\n" +
+                DOC_REF + " #1");
+        }
     }
 }

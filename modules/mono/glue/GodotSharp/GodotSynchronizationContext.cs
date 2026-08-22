@@ -23,6 +23,22 @@ namespace Godot {
             return this;
         }
 
+        // #1 — Synchronous blocking wait is FORBIDDEN when this context is
+        // installed (Godot main thread). Continuation dispatch relies on
+        // Pump() being called every frame by the engine loop; a blocking
+        // Wait() on the main thread prevents Pump() from ever running, so
+        // the continuation never fires → deadlock.
+        //
+        // Task.Wait() / Task<T>.Result / WaitHandle.WaitAll /
+        // WaitHandle.WaitAny all end up routing through this virtual
+        // method via System.Threading.SynchronizationContext.Wait when a
+        // SynchronizationContext is attached to the thread. By throwing
+        // here we fail-fast instead of hanging silently.
+        public override int Wait(IntPtr[] waitHandles, bool waitAll, int millisecondsTimeout) {
+            Platform.ThrowForbiddenSyncWait();
+            return 0;   // unreachable — kept only for compile-time return
+        }
+
         public void ProcessPending() {
             Action[] actions;
             lock (_lock) {

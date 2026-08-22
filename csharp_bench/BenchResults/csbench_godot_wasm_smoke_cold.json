@@ -1,0 +1,8 @@
+{
+ "host": "godot-wasm",
+ "runtime": "Mono 6.12 (Godot 4.7 embedded, WASM interpreter)",
+ "runtimeId": "mono6.12-godot-wasm",
+ "mode": "quick",
+ "pass": "cold",
+ "results": []
+}

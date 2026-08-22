@@ -14,9 +14,18 @@
       <HintPath>..\bin\GodotSharp\Api\Debug\GodotSharp.dll</HintPath>
       <Private>false</Private>
     </Reference>
-    <ProjectReference Include="..\csharp_bench\CSharpBench.Core\CSharpBench.Core.csproj">
-      <Private>true</Private>
-    </ProjectReference>
+    <!-- System.Memory：与 CSharpBench.Core.csproj 一致（SpanW 负载需要）。
+         运行时由 .mono/assemblies 中的同名 DLL 提供类型转发（run-bench.ps1
+         已复制；WASM 嵌入 BCL 无此 DLL 时 SpanMemory 类目走 LoadErrors
+         优雅降级为 "(category unavailable)" 占位行）。 -->
+    <PackageReference Include="System.Memory" Version="4.5.5" />
+    <!-- Source-link CSharpBench.Core instead of ProjectReference:
+         the WASM export packs ONLY CSharpTest.dll + GodotSharp.dll into the
+         PCK (mono_export_plugin.cpp), and mono_host loads just those two into
+         MEMFS. A separate CSharpBench.Core.dll would fail assembly resolution
+         on Web. Compiling the sources into CSharpTest.dll keeps the workload
+         code identical across hosts (same .cs files, zero divergence). -->
+    <Compile Include="..\csharp_bench\CSharpBench.Core\**\*.cs" Exclude="..\csharp_bench\CSharpBench.Core\obj\**\*" />
   </ItemGroup>
   <!-- Exclude BCL (mono/) and Gradle build output (android/) from C# compilation.
        These directories contain .dll and .cs files that should be included in the

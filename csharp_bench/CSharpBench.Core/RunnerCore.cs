@@ -20,6 +20,40 @@ namespace CSharpBench.Core
     /// </summary>
     public static class RunnerCore
     {
+        // ---- Process API 防御（WASM 单线程解释器无进程信息，Process.GetCurrentProcess()
+        //      或 TotalProcessorTime 可能抛 PlatformNotSupportedException）----
+        private static readonly Process _proc = TryGetProcess();
+        private static Process TryGetProcess()
+        {
+            try { return Process.GetCurrentProcess(); }
+            catch { return null; }
+        }
+
+        /// <summary>防御式读取进程 CPU 时间（秒）。不可用平台返回 0。</summary>
+        public static double ReadCpuSeconds()
+        {
+            if (_proc == null) return 0;
+            try { return _proc.TotalProcessorTime.TotalSeconds; }
+            catch { return 0; }
+        }
+
+        /// <summary>由每迭代耗时（ns）数组计算统计量（iters/mean/median/min/max/stddev），供同步与异步驱动路径共用。</summary>
+        public static Measured BuildStats(double[] t)
+        {
+            var m = new Measured();
+            int n = t.Length;
+            if (n == 0) return m;
+            Array.Sort(t);
+            m.Iters = n;
+            double sum = 0; for (int i = 0; i < n; i++) sum += t[i];
+            m.MeanNs = sum / n;
+            m.MinNs = t[0]; m.MaxNs = t[n - 1];
+            m.MedianNs = (n % 2 == 1) ? t[n / 2] : (t[n / 2 - 1] + t[n / 2]) / 2.0;
+            double var = 0; for (int i = 0; i < n; i++) { double d = t[i] - m.MeanNs; var += d * d; }
+            m.StddevNs = n > 1 ? Math.Sqrt(var / (n - 1)) : 0;
+            return m;
+        }
+
         public static Measured Measure(Action<int> run, int size,
             int warmup = 3, int minIters = 5, int maxIters = 24, long budgetMs = 150)
         {
@@ -30,8 +64,7 @@ namespace CSharpBench.Core
             // ---- measure ----
             var times = new List<double>(maxIters);
             var sw = Stopwatch.StartNew();
-            var cpu = Process.GetCurrentProcess();
-            TimeSpan cpu0 = cpu.TotalProcessorTime;
+            double cpu0 = ReadCpuSeconds();
             long mem0 = GC.GetTotalMemory(true);
             int g0a = GC.CollectionCount(0), g1a = GC.CollectionCount(1), g2a = GC.CollectionCount(2);
 
@@ -44,28 +77,23 @@ namespace CSharpBench.Core
                 if (times.Count >= minIters && sw.ElapsedMilliseconds >= budgetMs) break;
             }
 
-            TimeSpan cpu1 = cpu.TotalProcessorTime;
+            double cpu1 = ReadCpuSeconds();
             long mem1 = GC.GetTotalMemory(false);
             int g0b = GC.CollectionCount(0), g1b = GC.CollectionCount(1), g2b = GC.CollectionCount(2);
 
-            // ---- stats ----
-            double[] t = times.ToArray();
-            Array.Sort(t);
-            int n = t.Length;
-            m.Iters = n;
-            double sum = 0; for (int i = 0; i < n; i++) sum += t[i];
-            m.MeanNs = sum / n;
-            m.MinNs = t[0]; m.MaxNs = t[n - 1];
-            m.MedianNs = (n % 2 == 1) ? t[n / 2] : (t[n / 2 - 1] + t[n / 2]) / 2.0;
-            double var = 0; for (int i = 0; i < n; i++) { double d = t[i] - m.MeanNs; var += d * d; }
-            m.StddevNs = n > 1 ? Math.Sqrt(var / (n - 1)) : 0;
+            // ---- stats（复用 BuildStats，统计口径与异步驱动路径一致）----
+            int n = times.Count;
+            var stats = BuildStats(times.ToArray());
+            m.Iters = stats.Iters;
+            m.MeanNs = stats.MeanNs; m.MedianNs = stats.MedianNs; m.MinNs = stats.MinNs;
+            m.MaxNs = stats.MaxNs; m.StddevNs = stats.StddevNs;
 
             m.AllocatedBytesPerOp = Math.Max(0, mem1 - mem0) / (double)n; // 近似：净分配（GC 干扰下偏保守）
             m.Gen0Per1kOps = (g0b - g0a) * 1000.0 / n;
             m.Gen1Per1kOps = (g1b - g1a) * 1000.0 / n;
             m.Gen2Per1kOps = (g2b - g2a) * 1000.0 / n;
             m.CpuFraction = sw.Elapsed.TotalSeconds > 0
-                ? cpu1.Subtract(cpu0).TotalSeconds / sw.Elapsed.TotalSeconds : 0;
+                ? (cpu1 - cpu0) / sw.Elapsed.TotalSeconds : 0;
             return m;
         }
 
@@ -98,7 +126,17 @@ namespace CSharpBench.Core
 
         public void AddRow(string category, string name, int size, Measured m, bool skipped, string skipReason)
         {
-            _rows.Add(string.Format(
+            _rows.Add(BuildRow(category, name, size, m, skipped, skipReason));
+        }
+
+        /// <summary>
+        /// 构建单行结果 JSON（不含外层数组）。提取为公共静态方法：
+        /// Godot 宿主可在 WASM 等受限平台用它直接构建行（如异步驱动路径），
+        /// 保证行 schema 与同步路径完全一致。
+        /// </summary>
+        public static string BuildRow(string category, string name, int size, Measured m, bool skipped, string skipReason)
+        {
+            return string.Format(
                 System.Globalization.CultureInfo.InvariantCulture,
                 "{{\"category\":\"{0}\",\"name\":\"{1}\",\"size\":{2},\"iters\":{3}," +
                 "\"meanNs\":{4},\"stddevNs\":{5},\"medianNs\":{6},\"minNs\":{7}," +
@@ -107,7 +145,7 @@ namespace CSharpBench.Core
                 Esc(category), Esc(name), size, m.Iters,
                 F(m.MeanNs), F(m.StddevNs), F(m.MedianNs), F(m.MinNs),
                 F(m.AllocatedBytesPerOp), F(m.Gen0Per1kOps), F(m.Gen1Per1kOps), F(m.Gen2Per1kOps),
-                F(m.CpuFraction), skipped ? "true" : "false", skipReason == null ? "null" : "\"" + Esc(skipReason) + "\""));
+                F(m.CpuFraction), skipped ? "true" : "false", skipReason == null ? "null" : "\"" + Esc(skipReason) + "\"");
         }
 
         /// <summary>

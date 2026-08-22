@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace CSharpBench.Core
 {
@@ -10,9 +11,15 @@ namespace CSharpBench.Core
         public readonly string Name;
         public readonly Action<int> Run;
         public readonly int[] Sizes;
-        public Workload(string category, string name, Action<int> run, int[] sizes)
+        /// <summary>
+        /// 可选非阻塞异步驱动（与 Run 同语义）。WASM 单线程宿主无法执行阻塞等待
+        /// （GetResult() 自旋卡死唯一 JS 线程，事件循环停止 → 死锁），宿主改为
+        /// 帧轮询驱动此 Task。null 表示该负载无阻塞语义，同步执行即可。
+        /// </summary>
+        public readonly Func<int, Task> RunAsync;
+        public Workload(string category, string name, Action<int> run, int[] sizes, Func<int, Task> runAsync = null)
         {
-            Category = category; Name = name; Run = run; Sizes = sizes;
+            Category = category; Name = name; Run = run; Sizes = sizes; RunAsync = runAsync;
         }
     }
 
@@ -81,6 +88,11 @@ namespace CSharpBench.Core
         public static void AddSmall(this List<Workload> l, string cat, string name, Action<int> run)
         {
             l.Add(new Workload(cat, name, run, Workloads.Sizes2));
+        }
+        /// <summary>带非阻塞异步驱动的注册（WASM 单线程宿主用 RunAsync 帧轮询驱动）。</summary>
+        public static void AddSmallAsync(this List<Workload> l, string cat, string name, Action<int> run, Func<int, Task> runAsync)
+        {
+            l.Add(new Workload(cat, name, run, Workloads.Sizes2, runAsync));
         }
     }
 }

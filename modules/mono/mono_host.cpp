@@ -82,6 +82,14 @@ extern "C" void mono_sgen_mono_ilgen_init(void);
 extern "C" void mono_native_initialize(void);
 #endif
 
+// [GodotExt] 2026-08-20: WASM 平台的 System.Native dl-fallback 注册
+// （mono_wasm_pinvoke.cpp：pinvoke 名字→函数表，官方 mono-wasm driver.c 方案）。
+// wasm BCL 的 Interop+Sys P/Invoke "System.Native"，无 dlopen/dllmap 机制，
+// 必须经 mono_dl_fallback_register 解析。在 mono_jit_init_version 之前调用。
+#ifdef WEB_ENABLED
+extern "C" void mono_wasm_pinvoke_init(void);
+#endif
+
 // mono_config_parse: 显式加载 mono.config（dllmap 重定向配置）。
 // 静态链接场景下，mono_jit_init_version 可能不会自动加载 mono.config，
 // 导致 dllmap（如 System.Native -> __Internal）不生效。
@@ -815,6 +823,21 @@ Error MonoHost::initialize() {
 	setenv("MONO_PATH", search_path.utf8().get_data(), 1);
 #endif
 #endif // WEB_ENABLED / else
+
+#ifdef WEB_ENABLED
+	// [GodotExt] 2026-08-20: 注册 System.Native dl-fallback（官方 mono-wasm 方案）。
+	// wasm BCL 的 System.IO/Interop+Sys P/Invoke "System.Native"，WASM 无 dlopen/
+	// dllmap 机制，必须经 mono_dl_fallback_register 提供名字→函数表
+	// （见 mono_wasm_pinvoke.cpp）。必须在 mono_jit_init_version 之前调用。
+	// 声明 mono_wasm_pinvoke_init 见本文件顶部（C 链接，防止 C++ mangle）。
+	{
+		printf("[Mono] Registering System.Native dl-fallback (pinvoke tables)...\n");
+		fflush(stdout);
+		mono_wasm_pinvoke_init();
+		printf("[Mono] System.Native dl-fallback registered.\n");
+		fflush(stdout);
+	}
+#endif // WEB_ENABLED
 
 	printf("[Mono] Initializing C# / Mono runtime...\n");
 	fflush(stdout);

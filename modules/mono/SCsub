@@ -769,6 +769,12 @@ elif env["platform"] == "web":
             "monoutils",
             "eglib",
             "mono-profiler-aot",
+            # [GodotExt] 2026-08-20: corefx System.Native PAL (SystemNative_*
+            # P/Invoke targets of the wasm BCL's Interop+Sys layer). Built from
+            # external/corefx via tools/build_mono_native_wasm.ps1. Referenced
+            # by the pinvoke table in mono_wasm_pinvoke.cpp (built below), so
+            # the linker keeps the members of the archive.
+            "mono-native",
         ])
 
         # Common WASM link flags (shared helper)
@@ -780,6 +786,14 @@ elif env["platform"] == "web":
         # --import-undefined because it's referenced from within a library).
         wasm_glue = env_mono.Object(source="#modules/mono/mono_wasm_glue.cpp")
         env.Prepend(LIBS=[wasm_glue])
+
+        # [GodotExt] 2026-08-20: System.Native dl-fallback (pinvoke tables).
+        # The wasm BCL P/Invokes "System.Native" (Interop+Sys); on WASM there
+        # is no dlopen/dllmap, so Mono resolves it through the dl-fallback
+        # registered here (official mono-wasm driver.c approach).
+        wasm_pinvoke = env_mono.Object(source="#modules/mono/mono_wasm_pinvoke.cpp")
+        env.Prepend(LIBS=[wasm_pinvoke])
+        print("[Mono] WASM: System.Native pinvoke fallback enabled (mono_wasm_pinvoke.cpp + libmono-native.a)")
 
         # Embed BCL assemblies into WASM MEMFS
         _embed_bcl_assemblies(env)

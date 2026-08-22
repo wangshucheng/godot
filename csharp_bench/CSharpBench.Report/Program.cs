@@ -24,7 +24,9 @@ namespace CSharpBench.Report
         public string Engine, Runtime, Tfm, Profile, Mode, Path;
         public double? CpuSeconds; public string StartedUtc;
         public List<Row> Rows = new List<Row>();
-        public string ColKey => Engine == "godot" ? "Mono-in-Godot" : Tfm;
+        public string ColKey => Engine == "godot" ? "Mono-in-Godot"
+                              : Engine == "godot-wasm" ? "Mono-WASM"
+                              : Tfm;
     }
 
     public static class Program
@@ -36,7 +38,7 @@ namespace CSharpBench.Report
         static readonly List<RunFile> WarmFiles = new List<RunFile>();
         static readonly List<RunFile> ColdFiles = new List<RunFile>();
         // 列顺序
-        static readonly string[] ColOrder = { "net48", "netcoreapp3.1", "net6.0", "net7.0", "Mono-in-Godot" };
+        static readonly string[] ColOrder = { "net48", "netcoreapp3.1", "net6.0", "net7.0", "Mono-in-Godot", "Mono-WASM" };
         static readonly string[] Palette = { "#8a8f98", "#f0883e", "#42b883", "#58a6ff", "#bf8fff", "#f778ba" };
 
         static int Main(string[] args)
@@ -413,7 +415,7 @@ namespace CSharpBench.Report
             double? Mean(Row r) => r?.MeanNs;
 
             // LINQ 链 vs 手写循环
-            var linq = Get("Linq", "WhereSelect_Chain_Sum", 10_000, cols.LastOrDefault(c => c != "Mono-in-Godot") ?? "net7.0");
+            var linq = Get("Linq", "WhereSelect_Chain_Sum", 10_000, cols.LastOrDefault(c => c != "Mono-in-Godot" && c != "Mono-WASM") ?? "net7.0");
             var hand = Get("Linq", "Handwritten_Sum_Loop", 10_000, linq == null ? "net7.0" : cols.First(c => Get("Linq", "WhereSelect_Chain_Sum", 10_000, c) != null));
             if (linq?.MeanNs != null && hand?.MeanNs != null && hand.MeanNs > 0)
             {
@@ -459,7 +461,19 @@ namespace CSharpBench.Report
                 sug.Add($"Mono-in-Godot 显式跳过 {skipReasons.Values.Sum()} 行: " +
                         string.Join("; ", skipReasons.Select(kv => $"{kv.Key} ×{kv.Value}")) +
                         " — 已如实标注而非报错");
-            var netCats1M = Warm.Where(w => w.ColKey != "Mono-in-Godot")
+            // skipped（Mono-WASM）：async 结构性豁免 + 解释器能力限制，与 1M 规模上限分开说明
+            var wasmWarm = Warm.Where(w => w.ColKey == "Mono-WASM").ToList();
+            var wasmSkip = wasmWarm.SelectMany(w => w.Rows)
+                .Where(r => r.Skipped)
+                .GroupBy(r => r.Category + "/" + r.Name + "/" + r.Size)
+                .Select(g => g.First())
+                .GroupBy(r => string.IsNullOrEmpty(r.SkipReason) ? "unspecified" : r.SkipReason)
+                .ToDictionary(g => g.Key, g => g.Count());
+            if (wasmSkip.Count > 0)
+                sug.Add($"Mono-WASM 显式跳过 {wasmSkip.Values.Sum()} 行: " +
+                        string.Join("; ", wasmSkip.Select(kv => $"{kv.Key} ×{kv.Value}")) +
+                        " — async 为引擎级 GC 损坏隔离豁免（探针实证：yield/taskrun 可推进但对象毒化 sgen 堆），Expression_Compile 为解释器无 ILGenerator 限制");
+            var netCats1M = Warm.Where(w => w.ColKey != "Mono-in-Godot" && w.ColKey != "Mono-WASM")
                 .SelectMany(w => w.Rows.Where(r => r.Size == 1_000_000).Select(r => r.Category))
                 .Distinct().ToHashSet();
             var godotCats1M = godotWarm.SelectMany(w => w.Rows.Where(r => r.Size == 1_000_000).Select(r => r.Category))
@@ -468,6 +482,9 @@ namespace CSharpBench.Report
             if (cappedCats.Count > 0)
                 sug.Add($"Mono-in-Godot 列在 {string.Join(", ", cappedCats)} 的 1M 规模行标 \"—\": 宿主以 CSBENCH_MAXSIZE=10000 规模上限运行" +
                         "（Mono 大规模数组路径不可靠，属设计内豁免，非数据缺失）");
+            if (wasmWarm.Count > 0)
+                sug.Add("Mono-WASM 列 1M 规模行整体标 \"—\": 宿主以 CSBENCH_MAXSIZE=10000 规模上限运行" +
+                        "（WASM 解释器慢 + 内存受限，属设计内豁免，非数据缺失）");
             return sug;
         }
 

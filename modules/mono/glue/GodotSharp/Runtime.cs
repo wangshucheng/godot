@@ -76,6 +76,38 @@ namespace Godot {
             Bridge.godot_icall_WebSocket_Close();
         }
 
+        // Browser URL query string (Web guest auto-connect via ?lanhost=<ip>).
+        // Non-Web platforms return "".
+        public static string GetUrlQuery() {
+            return Bridge.godot_icall_GetUrlQuery();
+        }
+
+        // =============================================
+        // MultiplayerPeer helpers (LAN §11.3 byte transport).
+        // The auto-generated PacketPeer.GetPacket/PutPacket go through
+        // Variant marshaling which lacks PackedByteArray -> stringifies.
+        // These use raw byte[] copies instead (IntPtr = peer.NativePtr).
+        // =============================================
+
+        public static int MPeerPoll(IntPtr peer) {
+            return Bridge.godot_icall_MPeer_Poll(peer);
+        }
+        public static int MPeerAvail(IntPtr peer) {
+            return Bridge.godot_icall_MPeer_GetAvailablePacketCount(peer);
+        }
+        public static int MPeerFrom(IntPtr peer) {
+            return Bridge.godot_icall_MPeer_GetPacketPeer(peer);
+        }
+        public static byte[] MPeerRecvBytes(IntPtr peer) {
+            return Bridge.godot_icall_MPeer_GetPacketBytes(peer);
+        }
+        public static int MPeerSend(IntPtr peer, int targetPeer, byte[] bytes) {
+            return Bridge.godot_icall_MPeer_SendBytes(peer, targetPeer, bytes);
+        }
+        public static void MPeerClose(IntPtr peer) {
+            Bridge.godot_icall_MPeer_Close(peer);
+        }
+
         // =============================================
         // Debug UI helpers: global pointer model (WASM-safe).
         // All operations are void or int return; no string ops in C#.

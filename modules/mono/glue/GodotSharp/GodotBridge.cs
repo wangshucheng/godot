@@ -117,6 +117,9 @@ namespace Godot {
         internal static extern string godot_icall_GetUserDataDir();
 
         [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern string[] godot_icall_OS_GetCmdlineArgs();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern void godot_icall_Label_SetFpsText(IntPtr labelPtr, int fps);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
@@ -130,6 +133,30 @@ namespace Godot {
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern void godot_icall_Control_SetPosition(IntPtr ctrlPtr, int x, int y);
+
+        // P6 WorldCanvas draw icalls (WASM-safe: IntPtr + int only). §1.8.
+        // A single Node2D pans itself and issues these draw commands for every
+        // pooled entity; colors are packed ARGB (0xAARRGGBB), coords are int.
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Canvas_SetPosition(IntPtr canvas, int x, int y);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Canvas_QueueRedraw(IntPtr canvas);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Canvas_DrawRect(IntPtr canvas, int x, int y, int w, int h, int argb, int filled);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Canvas_DrawCircle(IntPtr canvas, int x, int y, int r, int argb);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Canvas_DrawTriangle(IntPtr canvas, int x, int y, int r, int argb);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Canvas_DrawDiamond(IntPtr canvas, int x, int y, int h, int argb);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Canvas_DrawHex(IntPtr canvas, int x, int y, int r, int argb);
 
         // Runtime2D icalls: WASM-safe general-purpose Godot node manipulation.
         // All icalls use only IntPtr/string/int parameters - no object/array.
@@ -280,6 +307,30 @@ namespace Godot {
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern void godot_icall_WebSocket_Close();
+
+        // Browser URL query string (Web guest auto-connect via ?lanhost=<ip>).
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern string godot_icall_GetUrlQuery();
+
+        // MultiplayerPeer icalls - byte-level LAN packet transport (§11.3).
+        // Bypass Variant marshaling (no PACKED_BYTE_ARRAY case -> stringify bug).
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_MPeer_Poll(IntPtr peer);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_MPeer_GetAvailablePacketCount(IntPtr peer);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_MPeer_GetPacketPeer(IntPtr peer);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern byte[] godot_icall_MPeer_GetPacketBytes(IntPtr peer);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int godot_icall_MPeer_SendBytes(IntPtr peer, int targetPeer, byte[] bytes);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_MPeer_Close(IntPtr peer);
 
         // Debug UI icalls - global pointer model (WASM-safe, no pointer passing)
         [MethodImpl(MethodImplOptions.InternalCall)]

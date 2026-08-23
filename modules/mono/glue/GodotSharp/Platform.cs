@@ -99,6 +99,21 @@ namespace Godot {
             if (!_initialized) Initialize();
         }
 
+        /// <summary>
+        /// Engine command-line args (engine + user). On desktop the game reads
+        /// the VAMPIRE_ARGS env var; on Android this is the only reliable channel
+        /// (the launcher merges the intent extra into OS cmdline). Returns an
+        /// empty array if the engine is not yet booted.
+        /// </summary>
+        public static string[] GetCmdlineArgs() {
+            EnsureInitialized();
+            try {
+                return Bridge.godot_icall_OS_GetCmdlineArgs();
+            } catch {
+                return new string[0];
+            }
+        }
+
         public static void ThrowIfNotSupported(string feature) {
             EnsureInitialized();
             if (IsWeb || IsSingleThreaded) {

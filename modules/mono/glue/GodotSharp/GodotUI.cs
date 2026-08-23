@@ -42,6 +42,49 @@ namespace Godot {
             get { return (bool)Get("visible"); }
             set { Set("visible", value); }
         }
+
+        // =============================================
+        // P6 WorldCanvas drawing (§1.8). WASM-safe wrappers over the
+        // Canvas_* icalls: every coordinate/radius/color is an int so nothing
+        // crosses the interop boundary as object/array. Colors are packed
+        // ARGB (0xAARRGGBB). Draw commands are only valid inside
+        // _Notification(NOTIFICATION_DRAW); QueueRedraw2 schedules it.
+        // =============================================
+
+        public static int PackColor(Color c) {
+            int r = ((int)(c.r * 255f)) & 0xff;
+            int g = ((int)(c.g * 255f)) & 0xff;
+            int b = ((int)(c.b * 255f)) & 0xff;
+            int a = ((int)(c.a * 255f)) & 0xff;
+            return (a << 24) | (r << 16) | (g << 8) | b;
+        }
+
+        // Pan this Node2D (camera follow). Only meaningful for Node2D-derived.
+        public void SetCanvasPosition(int x, int y) {
+            Bridge.godot_icall_Canvas_SetPosition(NativePtr, x, y);
+        }
+
+        // Schedule a redraw (NOTIFICATION_DRAW fires on next frame draw pass).
+        public void QueueRedraw2() {
+            Bridge.godot_icall_Canvas_QueueRedraw(NativePtr);
+        }
+
+        // Draw primitives. Valid only during NOTIFICATION_DRAW (_Notification(30)).
+        public void DrawRectI(int x, int y, int w, int h, int argb, bool filled = true) {
+            Bridge.godot_icall_Canvas_DrawRect(NativePtr, x, y, w, h, argb, filled ? 1 : 0);
+        }
+        public void DrawCircleI(int x, int y, int r, int argb) {
+            Bridge.godot_icall_Canvas_DrawCircle(NativePtr, x, y, r, argb);
+        }
+        public void DrawTriangleI(int x, int y, int r, int argb) {
+            Bridge.godot_icall_Canvas_DrawTriangle(NativePtr, x, y, r, argb);
+        }
+        public void DrawDiamondI(int x, int y, int h, int argb) {
+            Bridge.godot_icall_Canvas_DrawDiamond(NativePtr, x, y, h, argb);
+        }
+        public void DrawHexI(int x, int y, int r, int argb) {
+            Bridge.godot_icall_Canvas_DrawHex(NativePtr, x, y, r, argb);
+        }
     }
 
     [Preserve(AllMembers = true)]

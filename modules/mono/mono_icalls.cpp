@@ -43,9 +43,15 @@
 #include "scene/gui/control.h"
 #include "scene/main/scene_tree.h"
 #include "scene/main/canvas_layer.h"
+#include "scene/main/canvas_item.h"
 #include "scene/main/viewport.h"
 #include "scene/main/window.h"
+#include "scene/2d/node_2d.h"
 #include "modules/websocket/websocket_peer.h"
+#include "modules/websocket/websocket_multiplayer_peer.h"
+#ifdef WEB_ENABLED
+#include <emscripten.h>
+#endif
 #include "servers/text/text_server.h"
 #include "core/io/file_access.h"
 #include "core/io/dir_access.h"
@@ -689,6 +695,32 @@ static MonoString *godot_icall_GetUserDataDir() {
 	return mono_string_new(domain, path.utf8().get_data());
 }
 
+// C++-side: return the engine command-line args (engine + user). On desktop the
+// game consumes VAMPIRE_ARGS env directly; on Android the launcher merges the
+// launch-intent extra (_esa command_line_params) into OS cmdline via
+// GodotActivity, so this icall is the only reliable channel to read it here
+// (the glue's GodotObject-style singletons are not instantiable via ClassDB).
+static MonoArray *godot_icall_OS_GetCmdlineArgs() {
+	MonoDomain *domain = mono_domain_get();
+	if (!OS::get_singleton()) {
+		return mono_array_new(domain, mono_get_string_class(), 0);
+	}
+
+	List<String> engine_args = OS::get_singleton()->get_cmdline_args();
+	List<String> user_args = OS::get_singleton()->get_cmdline_user_args();
+	uint32_t total = engine_args.size() + user_args.size();
+
+	MonoArray *arr = mono_array_new(domain, mono_get_string_class(), (uintptr_t)total);
+	uint32_t idx = 0;
+	for (const List<String>::Element *E = engine_args.front(); E; E = E->next()) {
+		mono_array_set(arr, MonoString *, idx++, mono_string_new(domain, E->get().utf8().get_data()));
+	}
+	for (const List<String>::Element *E = user_args.front(); E; E = E->next()) {
+		mono_array_set(arr, MonoString *, idx++, mono_string_new(domain, E->get().utf8().get_data()));
+	}
+	return arr;
+}
+
 // C++-side: set Label text with a prefix + int (e.g. "Frames: 1234")
 static void godot_icall_Label_SetPrefixedInt(intptr_t label_ptr, MonoString *prefix, int32_t value) {
 	if (label_ptr == 0) return;
@@ -821,6 +853,97 @@ static void godot_icall_R2D_SetPosition(intptr_t node, int32_t x, int32_t y) {
 	if (c) {
 		c->set_position(Vector2((real_t)x, (real_t)y));
 	}
+}
+
+// ============================================================
+// P6 WorldCanvas draw icalls (WASM-safe: IntPtr + int only).
+// §1.8: a single Node2D overrides _Notification(NOTIFICATION_DRAW)
+// and issues these draw commands for ALL entities. Every parameter
+// is int (world coords *1px precision) or a packed ARGB (0xAARRGGBB)
+// color int; no MonoObject*/MonoArray* crosses the boundary.
+// ============================================================
+static CanvasItem *_canvas_item(intptr_t canvas) {
+	if (canvas == 0) return nullptr;
+	return Object::cast_to<CanvasItem>((Object *)canvas);
+}
+
+// Unpack a packed ARGB int (0xAARRGGBB) into a Godot Color.
+static Color _canvas_color(int32_t argb) {
+	uint8_t a = (uint8_t)((argb >> 24) & 0xff);
+	uint8_t r = (uint8_t)((argb >> 16) & 0xff);
+	uint8_t g = (uint8_t)((argb >> 8) & 0xff);
+	uint8_t b = (uint8_t)(argb & 0xff);
+	return Color(r / 255.0f, g / 255.0f, b / 255.0f, a / 255.0f);
+}
+
+// Pan a Node2D (camera follows player 0). WorldCanvas is a Node2D.
+static void godot_icall_Canvas_SetPosition(intptr_t canvas, int32_t x, int32_t y) {
+	if (canvas == 0) return;
+	Node2D *n2d = Object::cast_to<Node2D>((Object *)canvas);
+	if (n2d) {
+		n2d->set_position(Vector2((real_t)x, (real_t)y));
+	}
+}
+
+// Request a redraw of this CanvasItem (schedules NOTIFICATION_DRAW).
+static void godot_icall_Canvas_QueueRedraw(intptr_t canvas) {
+	CanvasItem *ci = _canvas_item(canvas);
+	if (!ci) return;
+	ci->queue_redraw();
+}
+
+// Filled/unfilled rectangle.
+static void godot_icall_Canvas_DrawRect(intptr_t canvas, int32_t x, int32_t y, int32_t w, int32_t h, int32_t argb, int32_t filled) {
+	CanvasItem *ci = _canvas_item(canvas);
+	if (!ci) return;
+	ci->draw_rect(Rect2((real_t)x, (real_t)y, (real_t)w, (real_t)h), _canvas_color(argb), filled != 0);
+}
+
+// Filled circle.
+static void godot_icall_Canvas_DrawCircle(intptr_t canvas, int32_t x, int32_t y, int32_t r, int32_t argb) {
+	CanvasItem *ci = _canvas_item(canvas);
+	if (!ci) return;
+	ci->draw_circle(Vector2((real_t)x, (real_t)y), (real_t)r, _canvas_color(argb));
+}
+
+// Filled isoceles triangle (pointing up, circumradius r). ranged archetype.
+static void godot_icall_Canvas_DrawTriangle(intptr_t canvas, int32_t x, int32_t y, int32_t r, int32_t argb) {
+	CanvasItem *ci = _canvas_item(canvas);
+	if (!ci) return;
+	Vector<Point2> pts;
+	pts.push_back(Vector2((real_t)x, (real_t)(y - r)));
+	pts.push_back(Vector2((real_t)(x + r), (real_t)(y + (int32_t)(r * 0.8f))));
+	pts.push_back(Vector2((real_t)(x - r), (real_t)(y + (int32_t)(r * 0.8f))));
+	ci->draw_colored_polygon(pts, _canvas_color(argb));
+}
+
+// Filled diamond (4 points). fast archetype + XP gems.
+static void godot_icall_Canvas_DrawDiamond(intptr_t canvas, int32_t x, int32_t y, int32_t h, int32_t argb) {
+	CanvasItem *ci = _canvas_item(canvas);
+	if (!ci) return;
+	Vector<Point2> pts;
+	pts.push_back(Vector2((real_t)x, (real_t)(y - h)));
+	pts.push_back(Vector2((real_t)(x + h), (real_t)y));
+	pts.push_back(Vector2((real_t)x, (real_t)(y + h)));
+	pts.push_back(Vector2((real_t)(x - h), (real_t)y));
+	ci->draw_colored_polygon(pts, _canvas_color(argb));
+}
+
+// Filled regular hexagon (6 points, vertex up, circumradius r). tank archetype.
+static void godot_icall_Canvas_DrawHex(intptr_t canvas, int32_t x, int32_t y, int32_t r, int32_t argb) {
+	CanvasItem *ci = _canvas_item(canvas);
+	if (!ci) return;
+	const real_t s3 = 0.86602540378f; // sqrt(3) / 2
+	real_t hr = (real_t)r;
+	real_t hh = (real_t)r * 0.5f;
+	Vector<Point2> pts;
+	pts.push_back(Vector2((real_t)x, (real_t)y - hr));
+	pts.push_back(Vector2((real_t)x + hr * s3, (real_t)y - hh));
+	pts.push_back(Vector2((real_t)x + hr * s3, (real_t)y + hh));
+	pts.push_back(Vector2((real_t)x, (real_t)y + hr));
+	pts.push_back(Vector2((real_t)x - hr * s3, (real_t)y + hh));
+	pts.push_back(Vector2((real_t)x - hr * s3, (real_t)y - hh));
+	ci->draw_colored_polygon(pts, _canvas_color(argb));
 }
 
 // Set Control size (w, h).
@@ -1725,6 +1848,84 @@ static int32_t godot_icall_WebSocket_GetPacketCount() {
 static void godot_icall_WebSocket_Close() {
 	if (!_ws_global_peer) return;
 	_ws_global_peer->close();
+}
+
+// Get the browser URL query string (everything after '?', including the '?').
+// Web (WASM) reads window.location.search via emscripten; other platforms
+// return "". Used by the §11.3 Web guest to auto-connect via ?lanhost=<ip>.
+static MonoString *godot_icall_GetUrlQuery() {
+#ifdef WEB_ENABLED
+	const char *q = emscripten_run_script_string("window.location.search || ''");
+	if (q && q[0]) {
+		// Copy immediately: the emscripten_run_script_string buffer is only
+		// valid until the next JS-interop call.
+		String s(q);
+		return mono_string_new(mono_domain_get(), s.utf8().get_data());
+	}
+#endif
+	return mono_string_new(mono_domain_get(), "");
+}
+
+// ============================================================
+// MultiplayerPeer icalls (LAN §11.3): byte-level packet transport.
+// The auto-generated PacketPeer.GetPacket/PutPacket bindings go
+// through Variant marshaling, which lacks a PACKED_BYTE_ARRAY case
+// and stringifies packets (InvalidCastException). These icalls copy
+// raw packet bytes to/from byte[] directly — no strings, no Variant,
+// consistent with the WASM-safe icall policy.
+// ============================================================
+
+static MultiplayerPeer *_mpeer(intptr_t p) {
+	return p ? reinterpret_cast<MultiplayerPeer *>(p) : nullptr;
+}
+
+static int32_t godot_icall_MPeer_Poll(intptr_t p) {
+	MultiplayerPeer *mp = _mpeer(p);
+	if (!mp) return -1;
+	mp->poll();
+	return 0;
+}
+
+static int32_t godot_icall_MPeer_GetAvailablePacketCount(intptr_t p) {
+	MultiplayerPeer *mp = _mpeer(p);
+	return mp ? (int32_t)mp->get_available_packet_count() : 0;
+}
+
+static int32_t godot_icall_MPeer_GetPacketPeer(intptr_t p) {
+	MultiplayerPeer *mp = _mpeer(p);
+	return mp ? (int32_t)mp->get_packet_peer() : -1;
+}
+
+static MonoArray *godot_icall_MPeer_GetPacketBytes(intptr_t p) {
+	MultiplayerPeer *mp = _mpeer(p);
+	if (!mp || mp->get_available_packet_count() <= 0) {
+		return nullptr;
+	}
+	const uint8_t *buf = nullptr;
+	int len = 0;
+	Error err = mp->get_packet(&buf, len);
+	if (err != OK || !buf || len <= 0) {
+		return nullptr;
+	}
+	MonoDomain *dom = mono_domain_get();
+	MonoArray *arr = mono_array_new(dom, mono_get_byte_class(), (uintptr_t)len);
+	memcpy(mono_array_addr(arr, uint8_t, 0), buf, len);
+	return arr;
+}
+
+static int32_t godot_icall_MPeer_SendBytes(intptr_t p, int32_t target_peer, MonoArray *bytes) {
+	MultiplayerPeer *mp = _mpeer(p);
+	if (!mp || !bytes) return -1;
+	int len = (int)mono_array_length(bytes);
+	if (len < 0) return -1;
+	mp->set_target_peer(target_peer);
+	return (int32_t)mp->put_packet((const uint8_t *)mono_array_addr(bytes, uint8_t, 0), len);
+}
+
+static void godot_icall_MPeer_Close(intptr_t p) {
+	MultiplayerPeer *mp = _mpeer(p);
+	if (!mp) return;
+	mp->close();
 }
 
 // ============================================================
@@ -3190,9 +3391,17 @@ void godot_register_icalls() {
 	mono_add_internal_call("Godot.Bridge::godot_icall_Object_SetIntText", (const void *)godot_icall_Object_SetIntText);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Engine_GetFps", (const void *)godot_icall_Engine_GetFps);
 	mono_add_internal_call("Godot.Bridge::godot_icall_GetUserDataDir", (const void *)godot_icall_GetUserDataDir);
+	mono_add_internal_call("Godot.Bridge::godot_icall_OS_GetCmdlineArgs", (const void *)godot_icall_OS_GetCmdlineArgs);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Label_SetPrefixedInt", (const void *)godot_icall_Label_SetPrefixedInt);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Label_AppendLog", (const void *)godot_icall_Label_AppendLog);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Control_SetPosition", (const void *)godot_icall_Control_SetPosition);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Canvas_SetPosition", (const void *)godot_icall_Canvas_SetPosition);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Canvas_QueueRedraw", (const void *)godot_icall_Canvas_QueueRedraw);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Canvas_DrawRect", (const void *)godot_icall_Canvas_DrawRect);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Canvas_DrawCircle", (const void *)godot_icall_Canvas_DrawCircle);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Canvas_DrawTriangle", (const void *)godot_icall_Canvas_DrawTriangle);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Canvas_DrawDiamond", (const void *)godot_icall_Canvas_DrawDiamond);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Canvas_DrawHex", (const void *)godot_icall_Canvas_DrawHex);
 
 	// Runtime2D icalls (WASM-safe general-purpose node manipulation, IntPtr-based)
 	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_NodeCreate", (const void *)godot_icall_R2D_NodeCreate);
@@ -3248,6 +3457,15 @@ void godot_register_icalls() {
 	mono_add_internal_call("Godot.Bridge::godot_icall_WebSocket_ShowLastMessage", (const void *)godot_icall_WebSocket_ShowLastMessage);
 	mono_add_internal_call("Godot.Bridge::godot_icall_WebSocket_GetPacketCount", (const void *)godot_icall_WebSocket_GetPacketCount);
 	mono_add_internal_call("Godot.Bridge::godot_icall_WebSocket_Close", (const void *)godot_icall_WebSocket_Close);
+	mono_add_internal_call("Godot.Bridge::godot_icall_GetUrlQuery", (const void *)godot_icall_GetUrlQuery);
+
+	// MultiplayerPeer icalls (LAN §11.3 byte transport)
+	mono_add_internal_call("Godot.Bridge::godot_icall_MPeer_Poll", (const void *)godot_icall_MPeer_Poll);
+	mono_add_internal_call("Godot.Bridge::godot_icall_MPeer_GetAvailablePacketCount", (const void *)godot_icall_MPeer_GetAvailablePacketCount);
+	mono_add_internal_call("Godot.Bridge::godot_icall_MPeer_GetPacketPeer", (const void *)godot_icall_MPeer_GetPacketPeer);
+	mono_add_internal_call("Godot.Bridge::godot_icall_MPeer_GetPacketBytes", (const void *)godot_icall_MPeer_GetPacketBytes);
+	mono_add_internal_call("Godot.Bridge::godot_icall_MPeer_SendBytes", (const void *)godot_icall_MPeer_SendBytes);
+	mono_add_internal_call("Godot.Bridge::godot_icall_MPeer_Close", (const void *)godot_icall_MPeer_Close);
 
 	// Debug UI icalls (global pointer model - no pointer passing, no C# string ops)
 	mono_add_internal_call("Godot.Bridge::godot_icall_DebugUi_Init", (const void *)godot_icall_DebugUi_Init);

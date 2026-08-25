@@ -27408,7 +27408,7 @@ namespace Godot {
 
     // Auto-generated from ClassDB: LineEdit
     public class LineEdit : Godot.Control {
-        public LineEdit() : base() {}
+        public LineEdit() : base(Bridge.godot_icall_Object_InstantiateFromNative("LineEdit")) {}
         internal LineEdit(System.IntPtr ptr) : base(ptr) {}
 
         public string Text {
@@ -36397,7 +36397,7 @@ namespace Godot {
 
     // Auto-generated from ClassDB: OptionButton
     public class OptionButton : Button {
-        public OptionButton() : base() {}
+        public OptionButton() : base(Bridge.godot_icall_Object_InstantiateFromNative("OptionButton")) {}
         internal OptionButton(System.IntPtr ptr) : base(ptr) {}
 
         public long Selected {

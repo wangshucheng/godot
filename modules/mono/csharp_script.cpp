@@ -47,13 +47,29 @@
 using namespace mono_variant;
 using namespace mono_bridge;
 
-// Verbose Mono-side logging. In release templates (target=template_release)
-// the per-frame notification prints below would flood stdout and add real
-// overhead (printf + fflush every frame for every script instance), so they
-// are compiled out via DEBUG_ENABLED. Editor / debug builds still emit them
-// for diagnostics. (M13)
+// Verbose Mono-side logging. These traces fire on EVERY script-instance
+// notification (2 printf lines x several notifications per frame). An
+// unconditional printf+fflush there has two observed failure modes:
+//   1) caps the game at ~7 FPS when stdout is a slow consumer
+//      (console / PowerShell pipe) — same root cause as the removed
+//      find_method trace;
+//   2) blocks the process FOREVER once the consumer stops draining the
+//      pipe (observed as the STRESS-mode t≈70s "hang": thread stuck in
+//      fflush, wait state EventPairLow, CPU=0 — not a game bug).
+// Default off even in debug builds; opt in with GODOT_MONO_TRACE=1.
+// The env var is read once and cached (no per-call getenv). (M13)
 #ifdef DEBUG_ENABLED
-#define MONO_LOG(...) do { printf(__VA_ARGS__); fflush(stdout); } while (0)
+static bool godot_mono_trace_enabled() {
+	static bool enabled = OS::get_singleton()->get_environment("GODOT_MONO_TRACE") == "1";
+	return enabled;
+}
+#define MONO_LOG(...)                                        \
+	do {                                                     \
+		if (godot_mono_trace_enabled()) {                    \
+			printf(__VA_ARGS__);                             \
+			fflush(stdout);                                  \
+		}                                                    \
+	} while (0)
 #else
 #define MONO_LOG(...) do {} while (0)
 #endif
@@ -692,6 +708,62 @@ ScriptInstance *CSharpScript::instance_create(Object *p_this) {
 	return memnew(CSharpInstance(Ref<CSharpScript>(this), p_this));
 }
 
+void CSharpScript::attach_dynamic_script(MonoObject *p_managed, Object *p_native) {
+	if (!p_managed || !p_native) {
+		return;
+	}
+
+	// Dynamic `new` from C# (e.g. `new WorldCanvas()`): godot_icall_Object_Ctor
+	// already created + tied the native object, but it carries NO CSharpScript,
+	// so it has no ScriptInstance and the engine never routes _Process/_Notification
+	// (incl. NOTIFICATION_DRAW) to the managed instance — the window renders grey.
+	// Here we build a minimal CSharpScript resolved directly against the live
+	// managed class and attach it; CSharpInstance::CSharpInstance "reuses" the
+	// existing managed object (mono_gc_bridge::get_managed) instead of allocating
+	// a second instance.
+	MonoClass *klass = mono_object_get_class(p_managed);
+	if (!klass) {
+		return;
+	}
+	const char *ns = mono_class_get_namespace(klass);
+	const char *nm = mono_class_get_name(klass);
+	if (!nm || nm[0] == '\0') {
+		return;
+	}
+	// Engine/proxy/framework classes (Godot.Node, Godot.Node2D, ...) are plain
+	// native proxies with no script to attach; only script classes in the game's
+	// own namespaces need a ScriptInstance.
+	if (!ns || ns[0] == '\0' || strcmp(ns, "Godot") == 0 ||
+			strcmp(ns, "System") == 0 || strcmp(ns, "Microsoft") == 0) {
+		return;
+	}
+	// Already has a ScriptInstance (e.g. re-enter) — nothing to attach.
+	if (p_native->get_script_instance()) {
+		return;
+	}
+
+	Ref<CSharpScript> script;
+	script.instantiate();
+	script->class_name = nm;
+	script->source = "namespace ";
+	script->source += (ns && ns[0]) ? ns : "";
+	script->source += " { }\n";
+	script->source_valid = true;
+	// mono_class already known from the live instance's own class — no need to
+	// re-resolve; mark the image so CSharpInstance has a coherent mono_class.
+	script->mono_class = klass;
+	script->mono_image = mono_class_get_image(klass);
+	script->mono_class_valid = true;
+
+	// set_script -> CSharpScript::instance_create -> CSharpInstance(reuses owner's
+	// managed object). Export/signal metadata is not needed on this runtime path.
+	p_native->set_script(Variant(script.ptr()));
+
+	printf("[Mono] attach_dynamic_script: ns='%s' class='%s' instance=%p\n",
+			ns, nm, (void *)p_native);
+	fflush(stdout);
+}
+
 bool CSharpScript::can_instantiate() const {
 #ifdef TOOLS_ENABLED
 	if (Engine::get_singleton() && Engine::get_singleton()->is_editor_hint()) {
@@ -713,7 +785,6 @@ PlaceHolderScriptInstance *CSharpScript::placeholder_instance_create(Object *p_t
 CSharpInstance::CSharpInstance(const Ref<CSharpScript> &p_script, Object *p_owner) {
 	script = p_script;
 	owner = p_owner;
-	mono_object = nullptr;
 	gchandle = 0;
 
 	if (!script.is_valid() || !owner) {
@@ -738,8 +809,7 @@ CSharpInstance::CSharpInstance(const Ref<CSharpScript> &p_script, Object *p_owne
 
 	MonoObject *existing = mono_gc_bridge::get_managed(owner);
 	if (existing) {
-		mono_object = existing;
-		gchandle = mono_gchandle_new(mono_object, false);
+		gchandle = mono_gchandle_new(existing, false);
 		printf("[Mono] CSharpInstance: reused existing managed object for '%s'\n", script->class_name.utf8().get_data());
 		fflush(stdout);
 		return;
@@ -816,11 +886,10 @@ CSharpInstance::CSharpInstance(const Ref<CSharpScript> &p_script, Object *p_owne
 
 	mono_bridge::tie_native_ptr(cs_obj, owner);
 
-	mono_object = cs_obj;
-	gchandle = mono_gchandle_new(mono_object, false);
+	gchandle = mono_gchandle_new(cs_obj, false);
 
 	printf("[Mono] CSharpInstance: successfully created for '%s' (obj=%p, handle=%u)\n",
-		   script->class_name.utf8().get_data(), mono_object, gchandle);
+		   script->class_name.utf8().get_data(), cs_obj, gchandle);
 	fflush(stdout);
 }
 
@@ -829,10 +898,18 @@ CSharpInstance::~CSharpInstance() {
 		mono_gchandle_free(gchandle);
 		gchandle = 0;
 	}
-	mono_object = nullptr;
+}
+
+// Fetch the managed object through the GCHandle — see csharp_script.h.
+// sgen's copying GC moves live objects and updates the handle; this always
+// returns the CURRENT address (or nullptr once the handle is released).
+MonoObject *CSharpInstance::get_mono_object() const {
+	if (gchandle == 0) return nullptr;
+	return mono_gchandle_get_target(gchandle);
 }
 
 MonoMethod *CSharpInstance::find_method(const StringName &p_method, int p_argcount) {
+	MonoObject *mono_object = get_mono_object();
 	if (!mono_object) return nullptr;
 
 	String method_name = String(p_method);
@@ -871,6 +948,12 @@ MonoMethod *CSharpInstance::find_method(const StringName &p_method, int p_argcou
 	// therefore resolve the new methods. script->get_method() remains as a
 	// fallback for the rare case the method isn't found on the object class.
 	MonoClass *klass = mono_object_get_class(mono_object);
+	// NOTE: the per-lookup printf/fflush crash-diagnosis trace that used to live
+	// here was removed: it fired 7-14 lines on EVERY virtual-method lookup
+	// (every frame: _Process, NOTIFICATION_DRAW, ...), and the per-line fflush
+	// syscall storm alone capped the game at ~7 FPS whenever stdout was a slow
+	// consumer (console / PowerShell pipe). The GC-bridge crash it diagnosed is
+	// fixed; the class-hierarchy walk below is unchanged.
 	StringName key = StringName(method_name);
 	if (p_argcount >= 0) {
 		key = StringName(method_name + ":" + itos(p_argcount));
@@ -893,6 +976,7 @@ MonoMethod *CSharpInstance::find_method(const StringName &p_method, int p_argcou
 
 MonoObject *CSharpInstance::invoke_method(MonoMethod *p_method, const Variant **p_args, int p_argcount, Variant &r_result, Callable::CallError &r_error) {
 	r_error.error = Callable::CallError::CALL_OK;
+	MonoObject *mono_object = get_mono_object();
 	if (!p_method || !mono_object) {
 		r_error.error = Callable::CallError::CALL_ERROR_INVALID_METHOD;
 		return nullptr;
@@ -1011,6 +1095,7 @@ MonoObject *CSharpInstance::invoke_method(MonoMethod *p_method, const Variant **
 }
 
 bool CSharpInstance::set(const StringName &p_name, const Variant &p_value) {
+	MonoObject *mono_object = get_mono_object();
 	if (!mono_object) return false;
 
 	String prop_name = String(p_name);
@@ -1084,6 +1169,7 @@ bool CSharpInstance::set(const StringName &p_name, const Variant &p_value) {
 }
 
 bool CSharpInstance::get(const StringName &p_name, Variant &r_ret) const {
+	MonoObject *mono_object = get_mono_object();
 	if (!mono_object) return false;
 
 	String prop_name = String(p_name);
@@ -1150,6 +1236,7 @@ bool CSharpInstance::get(const StringName &p_name, Variant &r_ret) const {
 
 Variant::Type CSharpInstance::get_property_type(const StringName &p_name, bool *r_is_valid) const {
 	if (r_is_valid) *r_is_valid = false;
+	MonoObject *mono_object = get_mono_object();
 	if (!mono_object) return Variant::NIL;
 
 	String prop_name = String(p_name);
@@ -1252,11 +1339,10 @@ void CSharpInstance::notification(int p_notification, bool p_reversed) {
 			mono_gchandle_free(gchandle);
 			gchandle = 0;
 		}
-		mono_object = nullptr;
 		return;
 	}
 
-	if (!mono_object) return;
+	if (!get_mono_object()) return;
 
 	MONO_LOG("[Mono] notification(id=%d) for '%s'\n", p_notification, script->class_name.utf8().get_data());
 
@@ -1311,7 +1397,7 @@ void CSharpInstance::resolve_notify_entry(NotifyEntryIndex p_index) {
 	entry.declaring_class = nullptr;
 	entry.resolved = true; // mark resolved even if not found (avoids re-lookup)
 
-	if (!mono_object) return;
+	if (!get_mono_object()) return;
 
 	const NotifySpec *spec = csharp_notify_find_spec_by_entry(p_index);
 	if (!spec) return;
@@ -1393,7 +1479,7 @@ void CSharpInstance::invoke_cached_notify(NotifyEntryIndex p_index, int p_notifi
 
 String CSharpInstance::to_string(bool *r_valid) {
 	if (r_valid) *r_valid = false;
-	if (!mono_object) return "<CSharpInstance>";
+	if (!get_mono_object()) return "<CSharpInstance>";
 
 	// Phase 0.2: use cached dispatch entry for ToString.
 	NotifyEntry &ts_entry = notify_dispatch_.get_entry(NOTIFY_ENTRY_TOSTRING);
@@ -1917,6 +2003,11 @@ void CSharpLanguage::frame() {
 	// run on the GC thread and may have enqueued engine objects for release;
 	// this is the safe point to actually free them.
 	mono_gc_bridge::flush_deferred_free();
+
+	// Drain GCHandles deferred by the ~Object() destroyed-callback path.
+	// The destructor path must not touch Mono APIs (concurrent-GC race);
+	// this is the safe main-thread point to release them.
+	mono_gc_bridge::flush_pending_unbinds();
 
 #ifdef TOOLS_ENABLED
 	// P4 v2 (W3): poll the async build mailbox; on completion this joins the

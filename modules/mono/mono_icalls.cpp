@@ -53,6 +53,7 @@
 #include <emscripten.h>
 #endif
 #include "servers/text/text_server.h"
+#include "servers/rendering/rendering_server.h"
 #include "core/io/file_access.h"
 #include "core/io/dir_access.h"
 #include "core/templates/local_vector.h"
@@ -111,25 +112,24 @@ static bool godot_icall_Object_IsInstanceValid(intptr_t native_ptr) {
 	return mono_gc_bridge::is_native_alive(obj);
 }
 
-static void godot_icall_Object_Free(intptr_t native_ptr) {
+static void godot_icall_Object_Free(MonoObject *p_self, intptr_t native_ptr) {
 	if (native_ptr == 0) return;
 	Object *obj = (Object *)native_ptr;
 
-	// H8: finalizer-thread safety. C# finalizers (~GodotObject) run on the
-	// Mono GC thread. Engine APIs (queue_free / memdelete / unreference on
-	// non-atomic RefCounted paths) are not safe off the main thread, and
-	// temporary wrappers (GetNode<T>() creates a new wrapper each call) can
-	// be finalized while the underlying node is still in use → UAF.
+	// H8: finalizer-thread safety. godot_icall_Object_Free may run on a
+	// non-main thread. Engine APIs (queue_free / memdelete / unreference on
+	// non-atomic RefCounted paths) are not safe off the main thread.
 	// When called off the main thread, enqueue for deferred free instead.
 	if (!Thread::is_main_thread()) {
-		bool is_rc = mono_gc_bridge::is_refcounted_binding(obj);
-		mono_gc_bridge::enqueue_deferred_free(obj, is_rc);
+		mono_gc_bridge::enqueue_deferred_free(obj);
 		return;
 	}
 
-	// Main-thread path: also verify the native object is still alive — a
-	// finalizer may have been delayed past native deletion.
-	if (!mono_gc_bridge::is_native_alive(obj)) {
+	// Identity validation: the binding at this address must belong to THIS
+	// wrapper. A stale NativePtr whose native was freed (binding removed by
+	// the ~Object() hook) plus address reuse by a new object would otherwise
+	// free the WRONG live object.
+	if (!mono_gc_bridge::binding_belongs_to(p_self, obj)) {
 		return;
 	}
 
@@ -160,9 +160,22 @@ static void godot_icall_Object_Free(intptr_t native_ptr) {
 }
 
 // C# RefCounted.Dispose() calls this to release the C# held reference
-static void godot_icall_RefCounted_ReleaseRef(intptr_t native_ptr) {
+static void godot_icall_RefCounted_ReleaseRef(MonoObject *p_self, intptr_t native_ptr) {
 	if (native_ptr == 0) return;
 	Object *obj = (Object *)native_ptr;
+
+	// H8 (same guard as godot_icall_Object_Free): if this ever runs on a
+	// non-main thread (e.g. a future finalizer path), the unreference() ->
+	// memdelete -> ~Object() chain would run there, and the destructor's
+	// bridge cleanup (mono_gchandle_free / mono_field_set_value) would race
+	// with the Mono GC. Defer to the main-thread flush queue instead.
+	if (!Thread::is_main_thread()) {
+		mono_gc_bridge::enqueue_deferred_free(obj);
+		return;
+	}
+
+	// Identity validation (see godot_icall_Object_Free).
+	if (!mono_gc_bridge::binding_belongs_to(p_self, obj)) return;
 	RefCounted *rc = Object::cast_to<RefCounted>(obj);
 	if (!rc) return;
 	mono_gc_bridge::release_refcounted_binding(rc);
@@ -375,6 +388,10 @@ static intptr_t godot_icall_Object_Ctor(MonoObject *p_this_obj) {
 			Object *obj = ClassDB::instantiate(class_name);
 			if (obj) {
 				mono_bridge::tie_native_ptr(p_this_obj, obj);
+				// P9 fix: dynamic `new X()` nodes get a ScriptInstance so the engine
+				// routes _Process/_Notification (incl. NOTIFICATION_DRAW) to them —
+				// otherwise the window stays grey (no draw, no menu UI).
+				CSharpScript::attach_dynamic_script(p_this_obj, obj);
 				return (intptr_t)obj;
 			}
 		}
@@ -387,6 +404,15 @@ static void godot_icall_Object_BindNativePtr(MonoObject *p_this_obj, intptr_t na
 	if (!p_this_obj || native_ptr == 0) return;
 	Object *obj = (Object *)native_ptr;
 	mono_bridge::tie_native_ptr(p_this_obj, obj);
+	// P9 root-cause fix: Control/UI classes (and most other glue classes) go
+	// through GodotObject::Object(IntPtr) -> BindNativePtr, NOT Object_Ctor.
+	// E.g. `new MainMenu()` -> Control() -> godot_icall_Object_InstantiateFromNative
+	// -> base(IntPtr) -> BindNativePtr. Without a ScriptInstance the engine never
+	// routes _Process/_Notification (incl. NOTIFICATION_DRAW) to the managed
+	// instance, so the menu never builds/draws and the window stays grey.
+	// attach_dynamic_script is a no-op for Godot.*/System.* proxy wrappers and for
+	// native nodes that already carry a ScriptInstance (e.g. GetNode<T> wrappers).
+	CSharpScript::attach_dynamic_script(p_this_obj, obj);
 }
 
 static intptr_t godot_icall_Callable_CreateFromDelegate(MonoObject *p_delegate) {
@@ -944,6 +970,129 @@ static void godot_icall_Canvas_DrawHex(intptr_t canvas, int32_t x, int32_t y, in
 	pts.push_back(Vector2((real_t)x - hr * s3, (real_t)y + hh));
 	pts.push_back(Vector2((real_t)x - hr * s3, (real_t)y - hh));
 	ci->draw_colored_polygon(pts, _canvas_color(argb));
+}
+
+// ============================================================
+// Batched draw icalls — ONE rendering command per frame.
+//
+// The per-primitive icalls above each issue an independent canvas
+// command (draw_rect/draw_circle/draw_colored_polygon, the latter
+// running earcut triangulation per call). At ~600 primitives/frame
+// on software GL (RDP / llvmpipe, no GPU) the per-command driver
+// overhead (~0.2ms each) dominated: 7 FPS with 6.9ms of sim logic.
+//
+// The batch API accumulates every primitive of the frame into one
+// shared vertex/index buffer (pre-allocated, cleared per frame, no
+// heap churn) and flushes with a single
+// RenderingServer::canvas_item_add_triangle_array() — no
+// triangulation, one GPU submission, order preserved (triangle
+// emission order = draw order). Same WASM-safe signature style
+// (int/IntPtr only).
+// ============================================================
+static Vector<Point2> _batch_pts;
+static Vector<Color> _batch_cols;
+static Vector<int> _batch_idx;
+static bool _batch_overflow = false;
+// 60k verts ≈ 20k triangles ≈ 30x the per-frame worst case (cap guard)
+static const int _BATCH_MAX_VERTS = 60000;
+
+static void _batch_reset() {
+	_batch_pts.clear();   // Vector::clear keeps capacity (no realloc per frame)
+	_batch_cols.clear();
+	_batch_idx.clear();
+	_batch_overflow = false;
+}
+
+static _FORCE_INLINE_ void _batch_vert(real_t x, real_t y, const Color &c) {
+	if (_batch_pts.size() >= _BATCH_MAX_VERTS) {
+		_batch_overflow = true;
+		return;
+	}
+	_batch_idx.push_back(_batch_pts.size());
+	_batch_pts.push_back(Point2(x, y));
+	_batch_cols.push_back(c);
+}
+
+// Append one triangle (3 vertices, same color).
+static _FORCE_INLINE_ void _batch_tri(real_t x0, real_t y0, real_t x1, real_t y1, real_t x2, real_t y2, const Color &c) {
+	_batch_vert(x0, y0, c);
+	_batch_vert(x1, y1, c);
+	_batch_vert(x2, y2, c);
+}
+
+// Begin a frame batch (called from NOTIFICATION_DRAW before any primitive).
+static void godot_icall_Canvas_BatchBegin() {
+	_batch_reset();
+}
+
+// Axis-aligned quad: 2 triangles.
+static void godot_icall_Canvas_BatchQuad(int32_t x, int32_t y, int32_t w, int32_t h, int32_t argb) {
+	if (w <= 0 || h <= 0) return;
+	Color c = _canvas_color(argb);
+	real_t x0 = (real_t)x, y0 = (real_t)y, x1 = (real_t)(x + w), y1 = (real_t)(y + h);
+	_batch_tri(x0, y0, x1, y0, x1, y1, c);
+	_batch_tri(x0, y0, x1, y1, x0, y1, c);
+}
+
+// Diamond (4 verts): 2 triangles.
+static void godot_icall_Canvas_BatchDiamond(int32_t x, int32_t y, int32_t h, int32_t argb) {
+	if (h <= 0) return;
+	Color c = _canvas_color(argb);
+	real_t cx = (real_t)x, cy = (real_t)y, hh = (real_t)h;
+	_batch_tri(cx, cy - hh, cx + hh, cy, cx, cy + hh, c);
+	_batch_tri(cx, cy - hh, cx, cy + hh, cx - hh, cy, c);
+}
+
+// Up-pointing triangle (ranged archetype): 1 triangle.
+static void godot_icall_Canvas_BatchTriangle(int32_t x, int32_t y, int32_t r, int32_t argb) {
+	if (r <= 0) return;
+	Color c = _canvas_color(argb);
+	real_t cx = (real_t)x, cy = (real_t)y, rr = (real_t)r;
+	_batch_tri(cx, cy - rr, cx + rr, cy + rr * 0.8f, cx - rr, cy + rr * 0.8f, c);
+}
+
+// Hexagon (tank archetype): fan of 4 triangles around vertex 0.
+static void godot_icall_Canvas_BatchHex(int32_t x, int32_t y, int32_t r, int32_t argb) {
+	if (r <= 0) return;
+	Color c = _canvas_color(argb);
+	const real_t s3 = 0.86602540378f;
+	real_t cx = (real_t)x, cy = (real_t)y, hr = (real_t)r, hh = (real_t)r * 0.5f;
+	Point2 v[6] = {
+		Point2(cx, cy - hr),
+		Point2(cx + hr * s3, cy - hh),
+		Point2(cx + hr * s3, cy + hh),
+		Point2(cx, cy + hr),
+		Point2(cx - hr * s3, cy + hh),
+		Point2(cx - hr * s3, cy - hh)
+	};
+	for (int i = 1; i < 5; i++) {
+		_batch_tri(v[0].x, v[0].y, v[i].x, v[i].y, v[i + 1].x, v[i + 1].y, c);
+	}
+}
+
+// Circle: 12-segment fan (12 triangles). Smooth enough for r<=16px sprites.
+static void godot_icall_Canvas_BatchCircle(int32_t x, int32_t y, int32_t r, int32_t argb) {
+	if (r <= 0) return;
+	Color c = _canvas_color(argb);
+	real_t cx = (real_t)x, cy = (real_t)y, rr = (real_t)r;
+	const int SEG = 12;
+	const real_t STEP = (real_t)0.5235987755982988f; // 2*PI/12
+	for (int i = 0; i < SEG; i++) {
+		real_t a0 = (real_t)i * STEP;
+		real_t a1 = (real_t)(i + 1) * STEP;
+		_batch_tri(cx, cy,
+				cx + Math::cos(a0) * rr, cy + Math::sin(a0) * rr,
+				cx + Math::cos(a1) * rr, cy + Math::sin(a1) * rr, c);
+	}
+}
+
+// Flush: submit the whole frame as ONE canvas command.
+static void godot_icall_Canvas_BatchFlush(intptr_t canvas) {
+	CanvasItem *ci = _canvas_item(canvas);
+	if (!ci) return;
+	if (_batch_idx.is_empty()) return;
+	RenderingServer::get_singleton()->canvas_item_add_triangle_array(
+			ci->get_canvas_item(), _batch_idx, _batch_pts, _batch_cols);
 }
 
 // Set Control size (w, h).
@@ -2751,13 +2900,17 @@ static int32_t godot_icall_Test_RegisterDelegateProbe(MonoObject *delegate_obj) 
 // 通过 mono_runtime_invoke 调用 delegate.Invoke。
 // 返回 1 成功（无异常），0 失败（异常或状态无效）。
 static int32_t godot_icall_Test_InvokeDelegateViaMRI() {
-	if (!_g_delegate_probe || !_g_delegate_invoke_method) {
+	// Fetch through the GCHandle: the raw cached _g_delegate_probe goes stale
+	// after sgen's copying GC moves the delegate (same class of bug as the
+	// CSharpInstance::mono_object / sync_context_instance stale pointers).
+	MonoObject *probe_obj = _g_delegate_probe_gchandle != 0 ? mono_gchandle_get_target(_g_delegate_probe_gchandle) : nullptr;
+	if (!probe_obj || !_g_delegate_invoke_method) {
 		printf("[PROBE] InvokeViaMRI: delegate not registered\n");
 		return 0;
 	}
 
 	MonoObject *exc = nullptr;
-	mono_runtime_invoke(_g_delegate_invoke_method, _g_delegate_probe, nullptr, &exc);
+	mono_runtime_invoke(_g_delegate_invoke_method, probe_obj, nullptr, &exc);
 	if (exc) {
 		MonoClass *exc_class = mono_object_get_class(exc);
 		const char *exc_name = exc_class ? mono_class_get_name(exc_class) : "(unknown)";
@@ -2772,7 +2925,9 @@ static int32_t godot_icall_Test_InvokeDelegateViaMRI() {
 // 通过 mono_compile_method 拿到函数指针直接调用（绕过 mono_runtime_invoke）。
 // 返回 1 成功，0 失败（函数指针获取失败或调用异常）。
 static int32_t godot_icall_Test_InvokeDelegateViaFtnPtr() {
-	if (!_g_delegate_probe || !_g_delegate_invoke_method) {
+	// Fetch through the GCHandle — see InvokeViaMRI above.
+	MonoObject *probe_obj = _g_delegate_probe_gchandle != 0 ? mono_gchandle_get_target(_g_delegate_probe_gchandle) : nullptr;
+	if (!probe_obj || !_g_delegate_invoke_method) {
 		printf("[PROBE] InvokeViaFtnPtr: delegate not registered\n");
 		return 0;
 	}
@@ -2797,7 +2952,7 @@ static int32_t godot_icall_Test_InvokeDelegateViaFtnPtr() {
 	// 注意：直接函数指针调用绕过 mono_runtime_invoke 的异常捕获，
 	// 若 delegate 内部抛异常会直接传播到 C++，无法被 try/catch 捕获。
 	// 这里依赖 C# 侧不抛异常作为前提（探针 OnDelegateInvoked 仅 ++计数）。
-	fn(_g_delegate_probe);
+	fn(probe_obj);
 
 	return 1;
 }
@@ -3402,6 +3557,15 @@ void godot_register_icalls() {
 	mono_add_internal_call("Godot.Bridge::godot_icall_Canvas_DrawTriangle", (const void *)godot_icall_Canvas_DrawTriangle);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Canvas_DrawDiamond", (const void *)godot_icall_Canvas_DrawDiamond);
 	mono_add_internal_call("Godot.Bridge::godot_icall_Canvas_DrawHex", (const void *)godot_icall_Canvas_DrawHex);
+
+	// Batched canvas draw (one rendering command per frame — see icall section)
+	mono_add_internal_call("Godot.Bridge::godot_icall_Canvas_BatchBegin", (const void *)godot_icall_Canvas_BatchBegin);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Canvas_BatchQuad", (const void *)godot_icall_Canvas_BatchQuad);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Canvas_BatchDiamond", (const void *)godot_icall_Canvas_BatchDiamond);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Canvas_BatchTriangle", (const void *)godot_icall_Canvas_BatchTriangle);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Canvas_BatchHex", (const void *)godot_icall_Canvas_BatchHex);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Canvas_BatchCircle", (const void *)godot_icall_Canvas_BatchCircle);
+	mono_add_internal_call("Godot.Bridge::godot_icall_Canvas_BatchFlush", (const void *)godot_icall_Canvas_BatchFlush);
 
 	// Runtime2D icalls (WASM-safe general-purpose node manipulation, IntPtr-based)
 	mono_add_internal_call("Godot.Bridge::godot_icall_R2D_NodeCreate", (const void *)godot_icall_R2D_NodeCreate);

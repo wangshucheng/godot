@@ -2317,7 +2317,21 @@ void Object::detach_from_objectdb() {
 	}
 }
 
+// Custom (Mono GC bridge): see object.h. Defined before ~Object() which uses it.
+static ObjectDestroyedCallback object_destroyed_callback = nullptr;
+
+void set_object_destroyed_callback(ObjectDestroyedCallback p_callback) {
+	object_destroyed_callback = p_callback;
+}
+
 Object::~Object() {
+	// Custom (Mono GC bridge): notify registered language bridges first so
+	// they drop native->managed bindings keyed by this pointer before the
+	// memory is freed/reused. Fires on every Object destruction path.
+	if (object_destroyed_callback) {
+		object_destroyed_callback(this);
+	}
+
 	if (_emitting) {
 		//@todo this may need to actually reach the debugger prioritarily somehow because it may crash before
 		ERR_PRINT(vformat("Object '%s' was freed or unreferenced while a signal is being emitted from it. Try connecting to the signal using 'CONNECT_DEFERRED' flag, or use queue_free() to free the object (if this object is a Node) to avoid this error and potential crashes.", to_string()));

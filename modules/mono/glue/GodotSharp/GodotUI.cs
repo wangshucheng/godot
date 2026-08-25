@@ -31,6 +31,11 @@ namespace Godot {
         public void SetPosition(int x, int y) {
             Bridge.godot_icall_Control_SetPosition(NativePtr, x, y);
         }
+
+        // WASM-safe: set size via C++ icall (HUD bars resize every tick).
+        public void SetSize(int w, int h) {
+            Bridge.godot_icall_R2D_SetSize(NativePtr, w, h);
+        }
     }
 
     [Preserve(AllMembers = true)]
@@ -84,6 +89,36 @@ namespace Godot {
         }
         public void DrawHexI(int x, int y, int r, int argb) {
             Bridge.godot_icall_Canvas_DrawHex(NativePtr, x, y, r, argb);
+        }
+
+        // =============================================
+        // Batched drawing: all primitives of a frame accumulate into a C++-side
+        // vertex buffer and flush as ONE RenderingServer command (see the
+        // Canvas_Batch* icalls). Per-primitive icalls cost ~0.2ms of driver
+        // overhead each on software GL — 600+/frame was the 7-FPS killer.
+        // Usage: BatchBegin() → Batch*() in draw order → BatchFlush().
+        // Valid only during NOTIFICATION_DRAW, same as Draw*I.
+        // =============================================
+        public void BatchBegin() {
+            Bridge.godot_icall_Canvas_BatchBegin();
+        }
+        public void BatchQuad(int x, int y, int w, int h, int argb) {
+            Bridge.godot_icall_Canvas_BatchQuad(x, y, w, h, argb);
+        }
+        public void BatchDiamond(int x, int y, int h, int argb) {
+            Bridge.godot_icall_Canvas_BatchDiamond(x, y, h, argb);
+        }
+        public void BatchTriangle(int x, int y, int r, int argb) {
+            Bridge.godot_icall_Canvas_BatchTriangle(x, y, r, argb);
+        }
+        public void BatchHex(int x, int y, int r, int argb) {
+            Bridge.godot_icall_Canvas_BatchHex(x, y, r, argb);
+        }
+        public void BatchCircle(int x, int y, int r, int argb) {
+            Bridge.godot_icall_Canvas_BatchCircle(x, y, r, argb);
+        }
+        public void BatchFlush() {
+            Bridge.godot_icall_Canvas_BatchFlush(NativePtr);
         }
     }
 

@@ -182,7 +182,7 @@ namespace Godot {
             if (_connectedCallables != null) _connectedCallables.Clear();
 
             if (NativePtr != IntPtr.Zero) {
-                Bridge.godot_icall_Object_Free(NativePtr);
+                Bridge.godot_icall_Object_Free(this, NativePtr);
                 NativePtr = IntPtr.Zero;
                 _bridgeGCHandle = 0;
             }

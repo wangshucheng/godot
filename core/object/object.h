@@ -852,6 +852,16 @@ public:
 bool predelete_handler(Object *p_object);
 void postinitialize_handler(Object *p_object);
 
+// Custom (Mono GC bridge): language bridges register a callback fired at the
+// very start of ~Object(). Every Object destruction path converges there
+// (memdelete -> predelete_handler -> destructor), so it is the only reliable
+// point where a bridge can drop its native->managed bindings before the
+// native memory is invalidated. Without this, natively-freed objects leave
+// stale entries in the bridge maps and later memdelete/finalizer paths
+// operate on freed memory (use-after-free -> heap corruption -> GC crash).
+typedef void (*ObjectDestroyedCallback)(Object *p_object);
+void set_object_destroyed_callback(ObjectDestroyedCallback p_callback);
+
 template <typename T, typename O>
 bool Object::derives_from() const {
 	if constexpr (std::is_base_of_v<T, O>) {

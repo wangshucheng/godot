@@ -1505,8 +1505,19 @@ void MonoHost::pump_sync_context() {
 	// Invoke the instance method PumpInstance() on the singleton.
 	// Instance method dispatch works in the WASM interpreter; only static
 	// method dispatch via mono_runtime_invoke triggers signature mismatch.
+	//
+	// CRITICAL: fetch the instance through the GCHandle on EVERY call. sgen's
+	// copying GC moves live objects and updates the handle, but the cached raw
+	// sync_context_instance pointer is NOT updated — invoking on the stale
+	// address crashes on the first minor GC (garbage vtable -> crash inside
+	// Mono class functions). The handle keeps the object alive; reading
+	// through it always yields the CURRENT address.
+	MonoObject *instance = sync_context_gchandle != 0 ? mono_gchandle_get_target(sync_context_gchandle) : nullptr;
+	if (!instance) {
+		return;
+	}
 	MonoObject *exc = nullptr;
-	mono_runtime_invoke(sync_context_pump_method, sync_context_instance, nullptr, &exc);
+	mono_runtime_invoke(sync_context_pump_method, instance, nullptr, &exc);
 	if (exc) {
 		MonoClass *exc_class = mono_object_get_class(exc);
 		const char *exc_name = exc_class ? mono_class_get_name(exc_class) : "(unknown)";

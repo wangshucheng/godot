@@ -57,6 +57,12 @@ class CSharpScript : public Script {
 
 public:
 	void set_class_name(const String &p_name) { class_name = p_name; }
+	// P6/P9 fix: attach a CSharpScript to an already-created native object that was
+	// instantiated from C# (e.g. `new WorldCanvas()` / `new MainMenu()`), reusing the
+	// existing managed instance so the engine routes _Process/_Notification to it.
+	// No effect for engine-side proxy classes (Godot.* / System.*) or nodes that
+	// already carry a script instance.
+	static void attach_dynamic_script(MonoObject *p_managed, Object *p_native);
 	bool can_instantiate() const override;
 	Ref<Script> get_base_script() const override { return Ref<Script>(); }
 	bool inherits_script(const Ref<Script> &p_script) const override { return false; }
@@ -104,7 +110,15 @@ class CSharpInstance : public ScriptInstance {
 
 	Object *owner = nullptr;
 	Ref<CSharpScript> script;
-	MonoObject *mono_object = nullptr;
+	// CRITICAL: the managed object MUST be fetched via the GCHandle on every
+	// use — NEVER cached as a raw MonoObject*. Mono's sgen minor GC is a
+	// copying collector: live objects MOVE and the GCHandle is updated to
+	// track them, but a cached raw pointer keeps pointing at the stale old
+	// address. The stale nursery memory happens to survive a while, then
+	// gets reused -> garbage vtable/class -> delayed crash (observed
+	// deterministically at the 2nd GC, ~frame 1660, crashing inside
+	// mono_class_init_internal via mono_class_get_method_from_name).
+	MonoObject *get_mono_object() const;
 	uint32_t gchandle = 0;
 
 	// Phase 0.2: per-instance notification dispatch cache.

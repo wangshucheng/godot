@@ -7,11 +7,15 @@ namespace Godot {
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern void godot_icall_GD_Print(string message);
 
+        // self (the C# wrapper) is passed for identity validation on the
+        // C++ side: the binding at nativePtr must belong to THIS wrapper.
+        // Prevents stale NativePtr + native address reuse from freeing the
+        // wrong live object.
         [MethodImpl(MethodImplOptions.InternalCall)]
-        internal static extern void godot_icall_Object_Free(IntPtr nativePtr);
+        internal static extern void godot_icall_Object_Free(object self, IntPtr nativePtr);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        internal static extern void godot_icall_RefCounted_ReleaseRef(IntPtr nativePtr);
+        internal static extern void godot_icall_RefCounted_ReleaseRef(object self, IntPtr nativePtr);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern object godot_icall_Object_Get(IntPtr nativePtr, string name);
@@ -157,6 +161,32 @@ namespace Godot {
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern void godot_icall_Canvas_DrawHex(IntPtr canvas, int x, int y, int r, int argb);
+
+        // Batched draw: all primitives of a frame accumulate C++-side and flush
+        // as ONE RenderingServer triangle-array command. Per-primitive icalls
+        // cost ~0.2ms each on software GL (600+/frame = the 7-FPS killer);
+        // batching removes both the command count and the earcut runs.
+        // Draw order = append order within the batch (kept across layers).
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Canvas_BatchBegin();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Canvas_BatchQuad(int x, int y, int w, int h, int argb);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Canvas_BatchDiamond(int x, int y, int h, int argb);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Canvas_BatchTriangle(int x, int y, int r, int argb);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Canvas_BatchHex(int x, int y, int r, int argb);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Canvas_BatchCircle(int x, int y, int r, int argb);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void godot_icall_Canvas_BatchFlush(IntPtr canvas);
 
         // Runtime2D icalls: WASM-safe general-purpose Godot node manipulation.
         // All icalls use only IntPtr/string/int parameters - no object/array.

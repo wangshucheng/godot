@@ -552,7 +552,9 @@ String mono_object_to_native_string(MonoObject *p_obj) {
 	MonoString *str = mono_object_to_string(p_obj, nullptr);
 	if (!str) return String();
 	char *utf8 = mono_string_to_utf8(str);
-	String result(utf8);
+	// P10 encoding fix: String(const char*) appends as Latin-1, which mangles
+	// any non-ASCII (UTF-8) text. Use String::utf8() to decode properly.
+	String result = String::utf8(utf8);
 	mono_free(utf8);
 	return result;
 }

@@ -28,7 +28,7 @@ namespace Godot {
                 // so the finalizer is effectively dead code unless C++ releases
                 // the handle during shutdown (in which case we skip release anyway).
                 if (disposing && NativePtr != IntPtr.Zero) {
-                    Bridge.godot_icall_RefCounted_ReleaseRef(NativePtr);
+                    Bridge.godot_icall_RefCounted_ReleaseRef(this, NativePtr);
                     NativePtr = IntPtr.Zero;
                     _bridgeGCHandle = 0;
                 }

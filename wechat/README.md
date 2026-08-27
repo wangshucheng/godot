@@ -395,7 +395,7 @@ python wechat\convert_to_wechat.py `
 
 ## 九、构建日志与里程碑
 
-详细构建日志见：`godot-mono-port/docs/BUILD_LOG.md`。P0 修复明细见 `REVIEW_REPORT.md` 附录 A。
+详细构建日志与完整命令见：`godot-mono-port/docs/BUILD_GUIDE.md`（原 BUILD_LOG.md 2026-08-01 合并进 BUILD_GUIDE.md）。P0 修复明细见 `godot-mono-port/docs/REVIEW_2026Q3.md` 附录 A（原 REVIEW_REPORT.md 同期合并进 REVIEW_2026Q3.md）。
 
 主要里程碑：
 1. ✅ Windows 编辑器构建完成（dev 构建，含 Mono 6.12 静态链接）

@@ -181,6 +181,7 @@ char* mono_object_to_string(void* obj, void** exc) { return (char*)""; }
 void* mono_string_chars(void* string) { return nullptr; }
 int mono_class_is_array(void* klass) { return 0; }
 void* mono_class_get_element_class(void* klass) { return nullptr; }
+int mono_class_get_rank(void* klass) { return 0; }
 
 // Android/iOS stub 补全：gd_mono.cpp extern "C" 块声明的 API
 const char* mono_check_corlib_version(void) { return "stub"; }

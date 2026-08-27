@@ -38,6 +38,7 @@
 #include "core/math/expression.h"
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
+#include "core/object/message_queue.h"
 #include "core/os/keyboard.h"
 #include "editor/debugger/editor_debugger_node.h"
 #include "editor/doc/editor_help.h"
@@ -747,7 +748,10 @@ void ScriptTextEditor::_update_color_text() {
 }
 
 void ScriptTextEditor::update_settings() {
-	code_editor->get_text_editor()->set_gutter_draw(connection_gutter, EDITOR_GET("text_editor/appearance/gutters/show_info_gutter"));
+	_update_gutter_indexes();
+	if (connection_gutter >= 0) {
+		code_editor->get_text_editor()->set_gutter_draw(connection_gutter, EDITOR_GET("text_editor/appearance/gutters/show_info_gutter"));
+	}
 	if (EDITOR_GET("text_editor/appearance/enable_inline_color_picker")) {
 		code_editor->get_text_editor()->set_inline_object_handlers(
 				callable_mp(this, &ScriptTextEditor::_inline_object_parse),
@@ -1024,6 +1028,11 @@ void ScriptTextEditor::_update_errors() {
 	bool last_is_safe = false;
 	CodeEdit *te = code_editor->get_text_editor();
 
+	_update_gutter_indexes();
+	if (line_number_gutter < 0) {
+		return; // Defensive: nothing we can do without a valid line-number gutter.
+	}
+
 	for (int i = 0; i < te->get_line_count(); i++) {
 		if (highlight_safe) {
 			if (safe_lines.has(i + 1)) {
@@ -1036,7 +1045,7 @@ void ScriptTextEditor::_update_errors() {
 				last_is_safe = false;
 			}
 		} else {
-			te->set_line_gutter_item_color(i, 1, default_line_number_color);
+			te->set_line_gutter_item_color(i, line_number_gutter, default_line_number_color);
 		}
 	}
 }
@@ -1614,17 +1623,59 @@ void ScriptTextEditor::_update_connected_methods() {
 }
 
 void ScriptTextEditor::_update_gutter_indexes() {
-	for (int i = 0; i < code_editor->get_text_editor()->get_gutter_count(); i++) {
-		if (code_editor->get_text_editor()->get_gutter_name(i) == "connection_gutter") {
+	CodeEdit *te = code_editor->get_text_editor();
+	// Snapshot once to avoid TOCTOU races; do not mutate gutters inside this loop.
+	int gutter_count = te->get_gutter_count();
+	for (int i = 0; i < gutter_count; i++) {
+		const String name = te->get_gutter_name(i);
+		if (name == "connection_gutter") {
 			connection_gutter = i;
-			continue;
-		}
-
-		if (code_editor->get_text_editor()->get_gutter_name(i) == "line_numbers") {
+		} else if (name == "line_numbers") {
 			line_number_gutter = i;
-			continue;
 		}
 	}
+
+	// Fix for L6981 (Index p_gutter = -1 out of bounds): upstream 4.7.1.rc forgot to
+	// register a "connection_gutter" in CodeEdit, while ScriptTextEditor assumes it exists.
+	// If not found, append one AFTER the scan loop (so we never mutate gutters while
+	// iterating, which can invalidate state inside CodeEdit::draw / TextEdit redraw).
+	//
+	// CRITICAL reentrancy guard (R2 fix — CPU=290% infinite loop):
+	//   te->add_gutter() emits "gutter_added" signal, which calls this function again
+	//   (L2720 connection: gutter_added → _update_gutter_indexes).
+	//   If we assign connection_gutter AFTER add_gutter returns, the recursive invocation
+	//   still sees connection_gutter==-1 → another add_gutter → another signal → infinite.
+	//   Fix: write "connection_gutter" NAME as soon as possible (right after add_gutter)
+	//   and set the index sentinel BEFORE add_gutter so any reentrant scan skips this branch.
+	if (connection_gutter < 0) {
+		int new_idx = te->get_gutter_count();  // append puts new gutter exactly here
+		connection_gutter = new_idx;           // anti-recursion sentinel: no longer < 0
+		te->add_gutter();                      // signal → reentrant call sees >=0, skips
+		te->set_gutter_name(new_idx, "connection_gutter");  // name scan in any later call also hits it
+		// Intentionally keep the same GUTTER_TYPE as upstream default (ICON).
+		// If CodeEdit ever ships a default connection_gutter in a later 4.x,
+		// this block simply stops running and we inherit the upstream layout.
+		te->set_gutter_type(new_idx, TextEdit::GUTTER_TYPE_ICON);
+		te->set_gutter_overwritable(new_idx, true);
+		te->set_gutter_draw(new_idx, bool(EDITOR_DEF("text_editor/appearance/gutters/show_info_gutter", true)));
+		te->set_gutter_width(new_idx, te->get_line_height());
+	}
+
+	if (line_number_gutter < 0) {
+		// Best-effort fallback. "line_numbers" is laid out by upstream CodeEdit at
+		// construction, so this branch should basically never fire.
+		line_number_gutter = (1 < te->get_gutter_count()) ? 1 : (te->get_gutter_count() - 1);
+	}
+}
+
+void ScriptTextEditor::_refresh_connection_gutter_width() {
+	// 由 NOTIFICATION_THEME_CHANGED 经 MessageQueue 延迟调用（见 _notification 内注释）。
+	// 只写宽度，不增删 gutter，避开与 CodeEdit 绘制的竞态窗口。
+	if (connection_gutter < 0) {
+		return;
+	}
+	CodeEdit *te = code_editor->get_text_editor();
+	te->set_gutter_width(connection_gutter, te->get_line_height());
 }
 
 void ScriptTextEditor::_gutter_clicked(int p_line, int p_gutter) {
@@ -1893,9 +1944,19 @@ void ScriptTextEditor::_notification(int p_what) {
 				_update_errors();
 				_update_background_color();
 			}
+			// 字号/主题变化会导致行高变化。直接在这里写 gutter 宽度曾与 CodeEdit
+			// 并发重绘竞态（R2 死循环），改为延迟到消息队列空闲时刷新，
+			// 既避免竞态窗口，又保证 connection gutter 宽度跟随最新行高。
+			MessageQueue::get_singleton()->push_callable(
+					callable_mp(this, &ScriptTextEditor::_refresh_connection_gutter_width));
 			[[fallthrough]];
 		case NOTIFICATION_ENTER_TREE: {
-			code_editor->get_text_editor()->set_gutter_width(connection_gutter, code_editor->get_text_editor()->get_line_height());
+			// ONLY refresh indexes only; never mutate gutter layout here.
+			// Gutter creation/initialisation MUST happen in _enable_code_editor() /
+			// constructor (exactly once) or _update_gutter_indexes (append only when missing).
+			// Writing gutter width on ENTER_TREE was triggering repeated calls that race with
+			// concurrent CodeEdit redraws (gutters vector mutation mid-loop).
+			_update_gutter_indexes();
 			Ref<Font> code_font = get_theme_font("font", "CodeEdit");
 			inline_color_options->add_theme_font_override("font", code_font);
 			inline_color_options->get_popup()->add_theme_font_override("font", code_font);
@@ -2715,12 +2776,25 @@ ScriptTextEditor::ScriptTextEditor() {
 	code_editor->get_text_editor()->connect("caret_changed", callable_mp(this, &ScriptTextEditor::_on_caret_moved));
 	code_editor->connect("navigation_preview_ended", callable_mp(this, &ScriptTextEditor::_on_caret_moved));
 
-	connection_gutter = 1;
-	code_editor->get_text_editor()->add_gutter(connection_gutter);
-	code_editor->get_text_editor()->set_gutter_name(connection_gutter, "connection_gutter");
-	code_editor->get_text_editor()->set_gutter_draw(connection_gutter, false);
-	code_editor->get_text_editor()->set_gutter_overwritable(connection_gutter, true);
-	code_editor->get_text_editor()->set_gutter_type(connection_gutter, TextEdit::GUTTER_TYPE_ICON);
+	// DO NOT hardcode a fixed gutter index here.
+	//
+	// CodeEdit constructor lays out its own default gutters sequentially:
+	//   0=main_gutter, 1=line_numbers, 2=fold_gutter,
+	//   later 3=breakpoints (if draw_breakpoints_gutter=true), etc.
+	//
+	// Previous bug: we hardcoded connection_gutter=1 and called add_gutter(1),
+	// which INSERTS at slot 1, shifting line_numbers → 2, fold_gutter → 3, ...
+	// This caused ScriptTextEditor::_update_gutter_indexes to then see slot 1
+	// has name "connection_gutter" (ok) but later consumers that look up by
+	// index or iterate gutters could become inconsistent. Worse, on some
+	// re-layouts this mixed with ENTER_TREE writes to gutter_width, landing us
+	// in an infinite re-layout loop with CPU=290% and editor fully unresponsive.
+	//
+	// Fix: connection_gutter stays at -1; _update_gutter_indexes (called from
+	// _enable_code_editor below via connect chains) will detect the missing
+	// entry once and APPEND a new gutter (not insert) with the correct name.
+	connection_gutter = -1;
+	line_number_gutter = -1;
 
 	errors_panel = memnew(RichTextLabel);
 	errors_panel->set_custom_minimum_size(Size2(0, 100 * EDSCALE));

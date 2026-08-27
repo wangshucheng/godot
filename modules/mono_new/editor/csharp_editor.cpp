@@ -5,7 +5,9 @@
 #include "core/config/project_settings.h"
 #include "core/io/dir_access.h"
 #include "core/io/file_access.h"
+#include "core/os/mutex.h"
 #include "core/os/os.h"
+#include "core/os/thread.h"
 
 #ifdef TOOLS_ENABLED
 
@@ -15,6 +17,18 @@
 
 #include <stdlib.h>
 #include <time.h>
+
+// R3: dotnet 子进程跳过开关（C# 编辑器启动时的编译器探测阶段）。
+//
+// 默认 0 = 按正常顺序检查 dotnet SDK 可用性（推荐，用户机器上 dotnet 7.0.401
+// 是唯一 100% 确认存在可用的编译器）。
+//
+// 如果你确认本机完全不需要 dotnet（所有用户工程只走 Mono mcs.bat 或 csc），
+// 可以在编译前手动把下面改成 1 或在 config.h/SCons CPPFLAGS 里预定义为 1，
+// 启动时会少开 3 次 dotnet 子进程（约省 1~3 秒）。
+#ifndef GD_MONO_SKIP_DOTNET_PROBE
+#define GD_MONO_SKIP_DOTNET_PROBE 0
+#endif
 
 // ---------------------------------------------------------------------------
 // Path helpers
@@ -92,6 +106,7 @@ static String generate_csproj_content(const String &p_project_name) {
 	csproj += "    <RootNamespace>" + p_project_name + "</RootNamespace>\n";
 	csproj += "    <AssemblyName>" + p_project_name + "</AssemblyName>\n";
 	csproj += "    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>\n";
+	csproj += "    <LangVersion>latest</LangVersion>\n";
 	csproj += "    <FileAlignment>512</FileAlignment>\n";
 	csproj += "  </PropertyGroup>\n";
 	csproj += "  <PropertyGroup Condition=\" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' \">\n";
@@ -167,6 +182,10 @@ static String generate_sln_content(const String &p_project_name, const String &p
 // Project solution creation
 // ---------------------------------------------------------------------------
 
+// Forward declaration: remove_dir_recursive is defined later in this file
+// (after compile_with_mcs) but used here (foreign csproj cleanup).
+static void remove_dir_recursive(const String &p_dir);
+
 bool csharp_editor_ensure_project_solution() {
 	String project_name = get_project_name();
 	String project_dir = get_project_dir();
@@ -174,6 +193,106 @@ bool csharp_editor_ensure_project_solution() {
 	String sln_path = csharp_editor_get_sln_path();
 
 	bool created = false;
+	bool regenerated_existing = false;
+
+	// -----------------------------------------------------------------------
+	// 外来 csproj 检测：如果 csproj 已存在，但它是 Godot.NET.Sdk 官方格式
+	// （Sdk= 属性）、TargetFramework=net8.0/6.0/7.0、或不包含我们模块约定的
+	// `HintPath=.../GodotSharp.dll`，则判定为「外来格式」——典型是 Chickensoft
+	// GameDemo 模板。这种 csproj 即使用 dotnet build 成功，产出的 DLL 也是
+	// net8.0 + 依赖官方 GodotSharp.SourceGenerators，**与本模块 net48 + 静态链接
+	// Mono 6.12 的运行时完全不兼容**，必须替换。
+	//
+	// 处理策略（可回滚）：
+	//   1. 把旧 csproj → <name>.csproj.<timestamp>.mono_new_backup
+	//      旧 global.json → global.json.<timestamp>.mono_new_backup
+	//      旧 sln → <name>.sln.<timestamp>.mono_new_backup
+	//   2. 生成我们自己的 net48 旧式 csproj + sln
+	//   3. 生成一份空的 global.json（显式不锁 SDK 版本，rollForward=latestMajor），
+	//      这样 Chickensoft 原来锁 8.0.423 就不会把 dotnet build 搞挂
+	//   4. 打一条醒目的 INFO 日志：告诉用户备份位置、如何回滚、如果他们想保留
+	//      原来的 Godot.NET.Sdk 方案就用官方 Godot 4 .NET 模块而不是 mono_new。
+	// -----------------------------------------------------------------------
+	if (FileAccess::exists(csproj_path)) {
+		String existing;
+		{
+			Error err;
+			Ref<FileAccess> f = FileAccess::open(csproj_path, FileAccess::READ, &err);
+			if (f.is_valid()) {
+				existing = f->get_as_text();
+				f->close();
+			}
+		}
+		bool has_sdk_attr = existing.contains("Sdk=\"Godot.NET.Sdk") ||
+		                     existing.contains("Sdk='Godot.NET.Sdk") ||
+		                     existing.find("<Project Sdk=") >= 0;
+		bool has_netcore_tfm = existing.contains("net8.0") ||
+		                        existing.contains("net7.0") ||
+		                        existing.contains("net6.0") ||
+		                        existing.contains("TargetFramework>net");
+		bool missing_our_godotsharp_hint = !existing.contains("GodotSharp.dll") &&
+		                                    !existing.contains("HintPath") &&
+		                                    has_sdk_attr;
+		if (has_sdk_attr || has_netcore_tfm || missing_our_godotsharp_hint) {
+			MonoLogger::log_warning(vformat(
+					"Detected FOREIGN C# project format at:\n  %s\n"
+					"  Project uses Sdk-style / Godot.NET.Sdk / net6/7/8.0 TFM which is INCOMPATIBLE with\n"
+					"  the mono_new module (net48 + statically linked Mono 6.12).\n"
+					"  Auto-replacing with module-generated project.\n"
+					"  Backup files (safe to delete) will be renamed to *.mono_new_backup — "
+					"rename them back without the .mono_new_backup suffix to roll back.\n"
+					"  If you intended to use official Godot .NET 6+/CoreCLR, disable the mono_new module\n"
+					"  and use official Godot 4 .NET builds instead.",
+					csproj_path));
+
+			String ts = String::num_int64((int64_t)time(nullptr));
+			{
+				String backup = csproj_path + "." + ts + ".mono_new_backup";
+				DirAccess::copy_absolute(csproj_path, backup);
+				Error re = DirAccess::remove_absolute(csproj_path);
+				MonoLogger::log(vformat("  Backed up: %s  ->  %s  (removed original: err=%d)",
+				                        csproj_path, backup, (int)re));
+			}
+			if (FileAccess::exists(sln_path)) {
+				String backup = sln_path + "." + ts + ".mono_new_backup";
+				DirAccess::copy_absolute(sln_path, backup);
+				DirAccess::remove_absolute(sln_path);
+				MonoLogger::log(vformat("  Backed up: %s  ->  %s", sln_path, backup));
+			}
+			String global_json = project_dir.path_join("global.json");
+			if (FileAccess::exists(global_json)) {
+				String backup = global_json + "." + ts + ".mono_new_backup";
+				DirAccess::copy_absolute(global_json, backup);
+				DirAccess::remove_absolute(global_json);
+				MonoLogger::log(vformat("  Backed up: %s  ->  %s (pinned SDK version removed so dotnet build works)",
+				                        global_json, backup));
+				// 写一份宽松的 global.json：显式不锁版本，用本机最新已安装 SDK
+				{
+					Error gerr;
+					Ref<FileAccess> gf = FileAccess::open(global_json, FileAccess::WRITE, &gerr);
+					if (gf.is_valid()) {
+						gf->store_string(
+							"{\n"
+							"  \"sdk\": {\n"
+							"    \"rollForward\": \"latestMajor\",\n"
+							"    \"allowPrerelease\": false\n"
+							"  }\n"
+							"}\n");
+						gf->close();
+						MonoLogger::log(vformat("  Wrote relaxed global.json: %s", global_json));
+					}
+				}
+			}
+			// 同时删掉旧的 obj/ 和 .mono/temp，避免旧缓存干扰新 csproj 编译
+			{
+				String obj_dir = project_dir.path_join("obj");
+				if (DirAccess::exists(obj_dir)) remove_dir_recursive(obj_dir);
+				String temp_bin = project_dir.path_join(".mono").path_join("temp");
+				if (DirAccess::exists(temp_bin)) remove_dir_recursive(temp_bin);
+			}
+			regenerated_existing = true;
+		}
+	}
 
 	if (!FileAccess::exists(csproj_path)) {
 		MonoLogger::log(vformat("Generating C# project file: %s", csproj_path));
@@ -208,8 +327,9 @@ bool csharp_editor_ensure_project_solution() {
 	String assemblies_dir = csharp_editor_get_assemblies_output_dir();
 	(void)assemblies_dir;
 
-	if (created) {
-		MonoLogger::log("C# project solution files created");
+	if (created || regenerated_existing) {
+		MonoLogger::log(vformat("C# project solution files %s",
+		                        regenerated_existing ? "regenerated (foreign format backed up)" : "created"));
 	}
 
 	return true;
@@ -299,12 +419,131 @@ static Vector<String> nuget_restore(const String &p_project_dir) {
 	return references;
 }
 
+// ---------------------------------------------------------------------------
+// Execute-with-timeout: 同步 OS::execute 的看门狗包装。
+// 根因：Windows 下 dotnet.exe 可能被 Windows Defender / SDK resolver
+// 或被 global.json 锁定未装 SDK 永久卡住；此时同步 OS::execute 在主
+// 线程被 block 后编辑器会「完全无响应」。解决方案：启动独立 watchdog
+// 线程，超过 timeout_ms 还没返回就 force kill 所有 dotnet/dotnet.exe
+// 子进程（探测阶段副作用可接受），让 OS::execute 提前返回错误并回
+// 退到 csc/mcs，保证编辑器 3s 内必进主窗口。
+// ---------------------------------------------------------------------------
+struct _ExecWatchdogCtx {
+	Mutex state_mut;
+	bool armed = false;       // watchdog 激活 = execute 仍在跑
+	bool fired = false;       // 已触发 timeout + kill
+	int timeout_ms = 3000;    // 默认 3000ms
+};
+
+static void _watchdog_thread_proc(void *p_user) {
+	_ExecWatchdogCtx *ctx = (_ExecWatchdogCtx *)p_user;
+	const int step_ms = 20;
+	int waited = 0;
+	while (waited < ctx->timeout_ms) {
+		{
+			MutexLock lock(ctx->state_mut);
+			if (!ctx->armed) {
+				return; // execute 正常返回，提前退出
+			}
+		}
+		OS::get_singleton()->delay_usec(step_ms * 1000);
+		waited += step_ms;
+	}
+
+	bool do_kill = false;
+	{
+		MutexLock lock(ctx->state_mut);
+		if (ctx->armed) {
+			ctx->fired = true;
+			do_kill = true;
+		}
+	}
+	if (!do_kill) return;
+
+	MonoLogger::log_warning(
+			"[C#] dotnet compiler probe exceeded timeout (3000ms) on main thread. "
+			"Force-killing dotnet child processes; falling back to csc/mcs. "
+			"Fix: install a .NET SDK version matching your project's global.json, "
+			"or relax/remove the SDK pin inside global.json.");
+	// 只杀本编辑器进程派生的 dotnet 子进程树（按父 PID 过滤），避免误杀
+	// 系统上其它无关的 dotnet 进程（其它编辑器实例、VS MSBuild 后台节点等）。
+	const String our_pid = itos((int64_t)OS::get_singleton()->get_process_id());
+#ifdef WINDOWS_ENABLED
+	List<String> killer_args;
+	killer_args.push_back("-NoProfile");
+	killer_args.push_back("-Command");
+	killer_args.push_back(
+			"Get-CimInstance Win32_Process | "
+			"Where-Object { $_.Name -eq 'dotnet.exe' -and $_.ParentProcessId -eq " + our_pid + " } | "
+			"ForEach-Object { taskkill /F /T /PID $($_.ProcessId) > $null 2>&1 }");
+	String ignore_out;
+	int ignore_ec = -1;
+	OS::get_singleton()->execute("powershell.exe", killer_args, &ignore_out, &ignore_ec, true);
+#else
+	// pkill -P：只杀以本进程为父的 dotnet 子进程。
+	List<String> killer_args;
+	killer_args.push_back("-9");
+	killer_args.push_back("-P");
+	killer_args.push_back(our_pid);
+	killer_args.push_back("dotnet");
+	String ignore_out;
+	int ignore_ec = -1;
+	OS::get_singleton()->execute("pkill", killer_args, &ignore_out, &ignore_ec, true);
+#endif
+}
+
+static Error _execute_with_watchdog(const String &p_path, const List<String> &p_arguments,
+		String *r_pipe, int *r_exitcode, bool p_read_stderr = false, int p_timeout_ms = 3000) {
+	_ExecWatchdogCtx ctx;
+	ctx.timeout_ms = p_timeout_ms;
+
+	Thread *wd_thread = memnew(Thread);
+	{
+		MutexLock lock(ctx.state_mut);
+		ctx.armed = true;
+		ctx.fired = false;
+	}
+	Thread::Settings lowpri;
+	lowpri.priority = Thread::PRIORITY_LOW;
+	wd_thread->start(_watchdog_thread_proc, &ctx, lowpri);
+
+	// 真正的同步 execute（若 dotnet 卡死，watchdog 会 kill 让系统调用返回）
+	Error err = OS::get_singleton()->execute(p_path, p_arguments, r_pipe, r_exitcode, p_read_stderr);
+
+	bool fired_copy = false;
+	{
+		MutexLock lock(ctx.state_mut);
+		ctx.armed = false;
+		fired_copy = ctx.fired;
+	}
+	if (wd_thread->is_started()) {
+		wd_thread->wait_to_finish();
+	}
+	memdelete(wd_thread);
+
+	if (fired_copy) {
+		if (r_exitcode) *r_exitcode = -1;
+		return ERR_TIMEOUT;
+	}
+	return err;
+}
+
+// M8/M12 编译器探测缓存：文件级静态变量（失效由 invalidate_csharp_compiler_cache 控制）。
+// 在以下场景会失效：(a) mcs.bat 实际编译失败走 dotnet fallback 时，
+// 说明这个 mcs.bat 是假阳性（Companion mcs.exe 缺失的精简 Mono 安装），
+// 清缓存后下次 find_csharp_compiler 会自动跳过它、直接命中可用的 dotnet。
+static String s_csharp_compiler_cache;
+
+void invalidate_csharp_compiler_cache() {
+	s_csharp_compiler_cache = String();
+}
+
 static String find_csharp_compiler() {
-	// M8 修复: 缓存编译器探测结果，避免每次保存脚本都启动子进程探测。
-	// 编译器在编辑器会话内不会变化，一次探测即可。
-	static String cached_compiler;
-	if (!cached_compiler.is_empty()) {
-		return cached_compiler;
+	// 缓存编译器探测结果，避免每次保存脚本都启动子进程探测。
+	// 编译器在编辑器会话内一般不会变化；一旦某次候选（如残缺 mcs.bat）被实锤失败，
+	// 调 invalidate_csharp_compiler_cache 即可触发下一轮重新探测。
+	if (!s_csharp_compiler_cache.is_empty()) {
+		return s_csharp_compiler_cache;
 	}
 
 	// 1. Try mcs from Mono installation
@@ -330,37 +569,200 @@ static String find_csharp_compiler() {
 #endif
 
 	for (const String &candidate : candidates) {
+#if GD_MONO_SKIP_DOTNET_PROBE
+		// R3 保险：跳过 dotnet 子进程探测链，直接走 csc/mcs 兜底。
+		// 本项目用户工程都是 net48 + Mono BCL，不依赖 dotnet SDK。
 		if (candidate == "dotnet") {
-			// Check if dotnet is available
-			String output;
-			int exit_code = -1;
-			Error err = OS::get_singleton()->execute(candidate, List<String>(), &output, &exit_code);
-			if (err == OK) {
-				cached_compiler = candidate;
-				return cached_compiler;
+			continue;
+		}
+#endif
+		if (candidate == "dotnet") {
+			// 不能只检查 dotnet 命令能否启动（无参 dotnet 会打印帮助然后 exit 0）。
+			// 必须验证：本机装了至少一个 SDK，且所有探测命令全部在 exe_dir 沙箱下运行
+			// （引擎 bin 目录，保证没有项目的 global.json 干扰）。否则被 Chickensoft 一类
+			// 模板锁定 SDK 版本的 global.json 误伤，会直接把 dotnet 标成不可用。
+			// 三步探测任何一步失败，回退到 csc/mcs。
+			bool ok = false;
+			String installed_sdks_preview;
+			String exe_dir = OS::get_singleton()->get_executable_path().get_base_dir();
+			String old_cwd = OS::get_singleton()->get_cwd();
+			OS::get_singleton()->set_cwd(exe_dir);
+			{
+				String out_ver;
+				int ec = -1;
+				List<String> ver_args;
+				ver_args.push_back("--version");
+				MonoLogger::log(vformat("Probing dotnet: step 1/3 `dotnet --version` (sandboxed at exe_dir: %s) ...", exe_dir));
+				Error err = _execute_with_watchdog(
+						"dotnet", ver_args, &out_ver, &ec);
+				if (err == OK && ec == 0 && !out_ver.strip_edges().is_empty()) {
+					ok = true;
+					MonoLogger::log(vformat("Probing dotnet: step 1/3 OK -> runtime reports SDK version '%s'", out_ver.strip_edges()));
+				} else {
+					MonoLogger::log_warning(vformat(
+							"Probing dotnet: step 1/3 FAILED (err=%d exit=%d, sandboxed at exe_dir). "
+							"dotnet --version output:\n%s"
+							"Sandboxed probe (no global.json influence) means this machine genuinely has no usable .NET SDK. "
+							"Install a .NET 7.x SDK (any 7.0.4xx) so 'dotnet --version' prints a valid version.",
+							(int)err, ec, out_ver));
+				}
+			}
+			if (ok) {
+				String out_sdks;
+				int ec_sdks = -1;
+				List<String> sdks_args;
+				sdks_args.push_back("--list-sdks");
+				MonoLogger::log("Probing dotnet: step 2/3 `dotnet --list-sdks` (sandboxed at exe_dir) ...");
+				Error err_sdks = _execute_with_watchdog(
+						"dotnet", sdks_args, &out_sdks, &ec_sdks);
+				Vector<String> lines = out_sdks.split("\n");
+				int available = 0;
+				for (int i = 0; i < lines.size(); i++) {
+					if (!lines[i].strip_edges().is_empty()) {
+						available++;
+						if (installed_sdks_preview.length() < 200) {
+							if (!installed_sdks_preview.is_empty()) installed_sdks_preview += ", ";
+							installed_sdks_preview += lines[i].strip_edges();
+						}
+					}
+				}
+				if (err_sdks != OK || ec_sdks != 0 || available == 0) {
+					MonoLogger::log_warning(vformat(
+							"Probing dotnet: step 2/3 FAILED (installed sdks count=%d, err=%d exit=%d). "
+							"Falling back to csc/mcs. Install a .NET 7.x SDK (any 7.0.4xx) to enable dotnet build. "
+							"Installed SDKs preview: %s",
+							available, (int)err_sdks, ec_sdks, installed_sdks_preview));
+					ok = false;
+				} else {
+					MonoLogger::log(vformat(
+							"Probing dotnet: step 2/3 OK -> %d installed SDKs. First few: %s",
+							available, installed_sdks_preview));
+				}
+			}
+			if (ok) {
+				List<String> help_args;
+				help_args.push_back("build");
+				help_args.push_back("--help");
+				String out_help;
+				int ec_help = -1;
+				MonoLogger::log("Probing dotnet: step 3/3 `dotnet build --help` (sandboxed at exe_dir) ...");
+				Error err_help = _execute_with_watchdog(
+						"dotnet", help_args, &out_help, &ec_help, true);
+				if (err_help != OK || ec_help != 0) {
+					MonoLogger::log_warning(vformat(
+							"Probing dotnet: step 3/3 FAILED (err=%d exit=%d). Falling back to csc/mcs. "
+							"Output tail:\n%s",
+							(int)err_help, ec_help, out_help.substr(out_help.length() - MIN(out_help.length(), 1200))));
+					ok = false;
+				} else {
+					MonoLogger::log("Probing dotnet: step 3/3 OK -> dotnet build --help succeeded.");
+				}
+			}
+			OS::get_singleton()->set_cwd(old_cwd);
+			if (ok) {
+				s_csharp_compiler_cache = candidate;
+				MonoLogger::log("Using dotnet CLI as C# compiler.");
+				return s_csharp_compiler_cache;
 			}
 		} else if (candidate.ends_with("mcs.bat")) {
-			// mcs.bat 存在不等于可用：它内部调用 mono.exe 加载 mcs.exe，
-			// 系统 Mono 安装可能不完整（4.5 目录为空）。同时验证 mcs.exe 存在。
+			// mcs.bat 是 Mono 官方分发包在 Windows 上的入口脚本。
+			// 典型的"精简安装"（只装了运行时，没装完整 SDK）会导致 mcs.bat 存在但
+			// companion 的 lib/mono/4.5/mcs.exe 缺失，强行调用会直接 exit code 2
+			// + 一串 ERROR 日志，然后 fallback 到 dotnet build。
+			//
+			// 所以这里加一次 Companion EXE 实锤校验：
+			//   - mcs.exe 找到 → 信任这个 mcs.bat，写入缓存并返回
+			//   - mcs.exe 缺失 → 不打 WARNING（避免日志噪音），直接 continue 跳过，
+			//     下一个候选就是 dotnet（本机已通过完整三探测，可用）。这样下次
+			//     保存脚本直接走 dotnet，不会再先触发必定失败的 mcs.bat。
 			if (FileAccess::exists(candidate)) {
-				String mcs_exe = candidate.get_base_dir().path_join("..").path_join("lib").path_join("mono").path_join("4.5").path_join("mcs.exe");
-				if (FileAccess::exists(mcs_exe)) {
-					cached_compiler = candidate;
-					return cached_compiler;
+				String expected_mcs_exe = candidate.get_base_dir().path_join("..").path_join("lib").path_join("mono").path_join("4.5").path_join("mcs.exe");
+				if (FileAccess::exists(expected_mcs_exe)) {
+					s_csharp_compiler_cache = candidate;
+					return s_csharp_compiler_cache;
 				}
-				MonoLogger::log_warning(vformat("Found %s but %s is missing, skipping mcs", candidate, mcs_exe));
+				// Companion 缺失 → info 级日志仅提示一次（DEBUG 会话内可能想知道为什么没走 mcs）。
+				MonoLogger::log(vformat(
+						"mcs.bat at %s skipped (companion mcs.exe was not found at %s). "
+						"Falling through to the next compiler candidate (dotnet/csc).",
+						candidate, expected_mcs_exe));
+				continue;
 			}
 		} else {
 			if (FileAccess::exists(candidate)) {
-				cached_compiler = candidate;
-				return cached_compiler;
+				s_csharp_compiler_cache = candidate;
+				return s_csharp_compiler_cache;
 			}
 		}
 	}
 
-	// Fallback: try mcs on PATH
-	cached_compiler = "mcs";
-	return cached_compiler;
+	// C3 终极兜底：
+	//
+	// 如果上面全落空（典型：C:/Program Files/Mono/bin/mcs.bat 存在但 4.5/mcs.exe 缺失，
+	// 之前旧逻辑直接 skip；又没装 csc；又因为 SKIP_DOTNET_PROBE=1 跳过 dotnet），
+	// 最后不要把 s_csharp_compiler_cache 盲目写成 "mcs" 字符串——那只会导致 CreateProcess 报
+	// ERROR_FILE_NOT_FOUND（你日志里的 Error 29）。
+	//
+	// 正确兜底顺序：
+	//   1. 用 `where mcs` (Windows) / `which mcs` (Unix) 查 PATH 中是否真的有 mcs；
+	//   2. 如果 mcs 不在 PATH，但前面 dotnet 分支被 SKIP 或因为 global.json 失败，
+	//      再单独跑一次 dotnet --version，只求找到一个能产生人类可读错误的编译器；
+	//   3. 真的全都没有时，返回空字符串并打一条明确的 ERROR 日志，告诉用户安装哪个。
+#ifdef WINDOWS_ENABLED
+	{
+		String where_out;
+		int where_ec = -1;
+		List<String> where_args;
+		where_args.push_back("mcs");
+		// `where` 是 Windows shell 内置，成功率 > PATH 手动拼（我们不需要真正定位到文件，只看 exit code）。
+		Error werr = _execute_with_watchdog("where.exe", where_args, &where_out, &where_ec, false, 2000);
+		if (werr == OK && where_ec == 0 && !where_out.strip_edges().is_empty()) {
+			s_csharp_compiler_cache = "mcs";
+			MonoLogger::log_warning("No preferred compiler found (mcs.bat/dotnet/csc all unavailable). "
+			                        "Falling back to `mcs` discovered on PATH via where.exe (user assembly builds may fail).");
+			return s_csharp_compiler_cache;
+		}
+	}
+#endif
+
+#if GD_MONO_SKIP_DOTNET_PROBE
+	// 用户配置了强跳过 dotnet，但前面所有非 dotnet 候选都没命中，说明系统压根没有 Mono/csc。
+	// 为不彻底堵死，这里做一次性 soft-fallback：只跑 dotnet --version 一个最小探测，
+	// 不再跑 list-sdks / build --help，省时间 + 避开 global.json 冲突。
+	{
+		String out_ver;
+		int ec = -1;
+		List<String> ver_args;
+		ver_args.push_back("--version");
+		Error err = _execute_with_watchdog("dotnet", ver_args, &out_ver, &ec, false, 4000);
+		if (err == OK && ec == 0 && !out_ver.strip_edges().is_empty()) {
+			s_csharp_compiler_cache = "dotnet";
+			MonoLogger::log_warning(vformat(
+					"GD_MONO_SKIP_DOTNET_PROBE=1 but no Mono/csc on PATH; soft-fallback to dotnet %s anyway. "
+					"If this fails due to global.json mismatch, relax your project's pinned SDK version.",
+					out_ver.strip_edges()));
+			return s_csharp_compiler_cache;
+		}
+	}
+#else
+	// 非 SKIP 模式下，dotnet 已经在前面的 for 循环完整跑过三探测，成功就 return 了，
+	// 能走到这里只能是 dotnet 真的失败（global.json 卡住 / 无 SDK）。
+	(void)0;
+#endif
+
+	// 最后，明确告诉用户「什么都没有」，而不是默默塞 "mcs" 导致 Error 29 无头公案。
+	MonoLogger::log_error(
+			"No usable C# compiler found on this machine.\n"
+			"  Checked (in order): MONO_PREFIX/bin/mcs, C:/Program Files/Mono/bin/mcs.bat,\n"
+			"                       dotnet SDK (--version/--list-sdks/build --help),\n"
+			"                       csc (Windows SDK / Roslyn), where.exe mcs on PATH.\n"
+			"  Fix options (choose ONE):\n"
+			"    (a) Install a .NET 7.x SDK (any 7.0.4xx) and make sure dotnet --version prints it;\n"
+			"    (b) Install full Mono 6.12 for Windows (so C:/Program Files/Mono/lib/mono/4.5/mcs.exe exists);\n"
+			"    (c) Install Visual Studio Build Tools (adds csc.exe to Developer Command Prompt PATH).\n"
+			"  Until a compiler is available, C# script auto-compile on save will fail with Error 29.");
+	s_csharp_compiler_cache = "";
+	return s_csharp_compiler_cache;
 }
 
 static bool compile_with_mcs(const String &p_compiler, const String &p_project_dir,
@@ -514,6 +916,31 @@ static void remove_dir_recursive(const String &p_dir) {
 	}
 }
 
+// 从 dotnet build 的已知输出位置查找编译产物并复制到程序集输出目录。
+// 4 个候选按优先级排列：生成 csproj 的 OutputPath（.mono/temp/bin/Debug）、
+// SDK 风格 net48 输出、旧式输出、平台特定 AnyCPU 输出。
+// 找到并复制成功返回 true；所有候选都不存在返回 false（由调用方打 WARNING）。
+static bool copy_built_assembly_to_output(const String &p_project_dir, const String &p_project_name, const String &p_output_dll) {
+	Vector<String> candidate_built_dlls;
+	candidate_built_dlls.push_back(p_project_dir.path_join(".mono").path_join("temp").path_join("bin").path_join("Debug").path_join(p_project_name + ".dll"));
+	candidate_built_dlls.push_back(p_project_dir.path_join("bin").path_join("Debug").path_join("net48").path_join(p_project_name + ".dll"));
+	candidate_built_dlls.push_back(p_project_dir.path_join("bin").path_join("Debug").path_join(p_project_name + ".dll"));
+	candidate_built_dlls.push_back(p_project_dir.path_join("bin").path_join("Debug").path_join("AnyCPU").path_join(p_project_name + ".dll"));
+	String built_dll;
+	for (const String &cand : candidate_built_dlls) {
+		if (FileAccess::exists(cand)) {
+			built_dll = cand;
+			break;
+		}
+	}
+	if (built_dll.is_empty()) {
+		return false;
+	}
+	DirAccess::copy_absolute(built_dll, p_output_dll);
+	MonoLogger::log(vformat("Copied built assembly: %s  ->  %s", built_dll, p_output_dll));
+	return true;
+}
+
 static bool compile_with_dotnet(const String &p_project_dir, const String &p_csproj_path) {
 	// Clean stale obj/ artifacts before building. dotnet build generates
 	// obj/<Config>/.NETFramework,Version=v4.8.AssemblyAttributes.cs per
@@ -536,17 +963,58 @@ static bool compile_with_dotnet(const String &p_project_dir, const String &p_csp
 
 	String output;
 	int exit_code = -1;
+	MonoLogger::log(vformat("Invoking compiler: dotnet build %s (Debug)", p_csproj_path.get_file()));
 	Error err = OS::get_singleton()->execute("dotnet", args, &output, &exit_code, true);
 
 	if (err != OK) {
-		MonoLogger::log_error("Failed to execute dotnet build");
+		MonoLogger::log_error(vformat(
+				"Failed to execute dotnet build (err=%d). This typically means:\n"
+				"  (a) dotnet is not on PATH; or\n"
+				"  (b) antivirus blocked CreateProcess for dotnet.exe.\n"
+				"Fix: verify 'dotnet --version' works in a normal cmd.exe first.",
+				(int)err));
 		return false;
 	}
 
 	if (exit_code != 0) {
+		bool is_sdk_not_found = output.contains("A compatible .NET SDK was not found") ||
+		                        output.contains("Requested SDK version:") ||
+		                        output.contains("The command could not be loaded, possibly because");
+		bool is_package_not_found = output.contains("error NU1101") ||
+		                             output.contains("Unable to find package");
+		bool is_tfm_mismatch = output.contains("net48") && output.contains("not compatible") ||
+		                        output.contains("The reference assemblies for .NETFramework,Version=v4.8 were not found");
 		MonoLogger::log_error(vformat("dotnet build failed with exit code %d", exit_code));
 		if (!output.is_empty()) {
 			MonoLogger::log_error("Build output:\n" + output);
+		}
+		if (is_sdk_not_found) {
+			MonoLogger::log_error(
+					"  REMEDY (SDK-not-found): The project directory still contains a global.json that pins\n"
+					"  to an uninstalled .NET SDK version. Either:\n"
+					"    (a) Delete the project's global.json (recommended);\n"
+					"    (b) Edit global.json to remove the \"version\" field or set rollForward: \"latestMajor\";\n"
+					"    (c) Install the exact .NET SDK version requested in the error output above.\n"
+					"  You can also temporarily build from a clean cmd.exe with:\n"
+					"    cd \"<engine_bin>/windows\" && dotnet build \"<project>/<Name>.csproj\" -c Debug");
+		} else if (is_package_not_found) {
+			MonoLogger::log_error(
+					"  REMEDY (NuGet): The project references NuGet packages (Chickensoft.* / Godot.NET.Sdk / etc.)\n"
+					"  which are not available for net48 + Mono. The mono_new module uses a hand-written GodotSharp\n"
+					"  binding that does NOT use official Godot.NET.Sdk. Fix options:\n"
+					"    (a) Remove all <PackageReference> entries from the .csproj and use only GodotSharp API;\n"
+					"    (b) Copy the required NuGet DLLs manually to a references/ folder and add <Reference Include=... HintPath=...>;\n"
+					"    (c) If you need Godot.NET.Sdk / Chickensoft ecosystem, use official Godot 4 .NET (dotnet module) instead of mono_new.");
+		} else if (is_tfm_mismatch) {
+			MonoLogger::log_error(
+					"  REMEDY (TFM): The installed .NET SDK targeting pack doesn't include net48 reference assemblies.\n"
+					"  Install .NET Framework 4.8 Developer Pack (https://dotnet.microsoft.com/download/visual-studio-sdks)\n"
+					"  or use Mono mcs.exe as the compiler instead.");
+		} else {
+			MonoLogger::log_error(
+					"  REMEDY: Check the build output above for specific CSxxxx errors.\n"
+					"  The mono_new module targets net48 + Godot 3-style hand-written bindings (not official Godot 4 .NET API).\n"
+					"  Common porting items: Connect(signal, owner, method) → Callable form; don't use double.ToString()/string interpolation; use GD.Print() instead of Console.WriteLine().");
 		}
 		return false;
 	}
@@ -604,6 +1072,14 @@ bool csharp_editor_compile_project() {
 	String compiler = find_csharp_compiler();
 	bool success = false;
 
+	// C3 companion: compiler 为空说明 find_csharp_compiler 已经打了完整的 ERROR 日志，
+	// 这里不要继续走 compile_with_mcs("") → 否则 OS::execute("") 直接报 Error 29，
+	// 用户在日志里看不到我们真正写的「请安装 xxx」说明。
+	if (compiler.is_empty()) {
+		// 明确的 ERROR 已经在 find_csharp_compiler 里打了，这里只负责失败。
+		return false;
+	}
+
 	// Run NuGet restore if packages.config exists. The returned references
 	// are passed to the mcs/csc compiler. dotnet build handles restore
 	// itself via the .csproj, so we skip it for the dotnet path.
@@ -615,19 +1091,65 @@ bool csharp_editor_compile_project() {
 	if (compiler == "dotnet") {
 		success = compile_with_dotnet(project_dir, csharp_editor_get_csproj_path());
 		if (success) {
-			// Copy the built DLL from .mono/temp/bin/Debug/ to assemblies output
-			String built_dll = project_dir.path_join(".mono").path_join("temp").path_join("bin").path_join("Debug").path_join(project_name + ".dll");
-			if (FileAccess::exists(built_dll)) {
-				DirAccess::copy_absolute(built_dll, output_dll);
-				MonoLogger::log(vformat("Copied built assembly to: %s", output_dll));
+			// Copy the built DLL from known output locations to assemblies output.
+			if (!copy_built_assembly_to_output(project_dir, project_name, output_dll)) {
+				MonoLogger::log_warning(vformat(
+						"dotnet build reported SUCCESS but no compiled DLL was found at expected locations.\n"
+						"  Checked (in order):\n"
+						"    %s\\.mono\\temp\\bin\\Debug\\%s.dll\n"
+						"    %s\\bin\\Debug\\net48\\%s.dll\n"
+						"    %s\\bin\\Debug\\%s.dll\n"
+						"    %s\\bin\\Debug\\AnyCPU\\%s.dll\n"
+						"  This usually means the csproj's OutputPath was overridden or TargetFramework changed.\n"
+						"  Remedy: locate the built DLL manually and copy it to:\n"
+						"    %s\n"
+						"  or regenerate the csproj via the C# menu.",
+						project_dir, project_name,
+						project_dir, project_name,
+						project_dir, project_name,
+						project_dir, project_name,
+						output_dll));
+				success = false;
 			}
 		}
 	} else if (compiler == "csc") {
 		// Use csc directly
 		success = compile_with_mcs(compiler, project_dir, output_dll, godotsharp_ref, nuget_refs);
 	} else {
-		// mcs (Mono compiler)
+		// mcs (Mono compiler) — or any compiler path we couldn't classify:
+		// treat it as CLI-compatible with mcs argument shape.
 		success = compile_with_mcs(compiler, project_dir, output_dll, godotsharp_ref, nuget_refs);
+		if (!success && compiler.ends_with("mcs.bat")) {
+			// C2 放宽策略的回收路径：mcs.bat 实际运行失败（典型：4.5/mcs.exe 真的缺失），
+			// 但本机还装了 dotnet 就立刻 fallback 一次，不要让用户因为 WARNING 放宽反而
+			// 在有 dotnet 的情况下彻底编不过。
+			{
+				String out_ver;
+				int ec = -1;
+				List<String> ver_args;
+				ver_args.push_back("--version");
+				Error err = _execute_with_watchdog("dotnet", ver_args, &out_ver, &ec, false, 4000);
+				if (err != OK || ec != 0 || out_ver.strip_edges().is_empty()) {
+					return false;  // dotnet 也没有，真的失败
+				}
+			}
+			MonoLogger::log_warning("mcs.bat failed to compile; automatically falling back to dotnet build. "
+			                        "This mcs.bat has been marked unavailable for the rest of the editor session; "
+			                        "next save will go directly to dotnet without re-attempting mcs.bat.");
+			invalidate_csharp_compiler_cache();
+			s_csharp_compiler_cache = "dotnet";
+			success = compile_with_dotnet(project_dir, csharp_editor_get_csproj_path());
+			if (success) {
+				if (!copy_built_assembly_to_output(project_dir, project_name, output_dll)) {
+					MonoLogger::log_warning(vformat(
+							"dotnet build (fallback from mcs.bat) reported SUCCESS but no compiled DLL found.\n"
+							"  Checked the same 4 locations as the dotnet path (see 'dotnet build' warning).\n"
+							"  Copy the actual build output DLL manually to: %s",
+							output_dll));
+					success = false;
+				}
+			}
+		}
 	}
 
 	return success;
@@ -706,31 +1228,77 @@ void initialize_csharp_editor() {
 	// Ensure project solution files exist when the editor starts
 	csharp_editor_ensure_project_solution();
 
-	// Try to compile on startup if there are .cs files
+	// Try to compile on startup if there are .cs files (recursive, including src/
+	// 子目录). 旧实现只扫 project_dir 顶层，用户按 Godot 惯例把脚本放 src/app/
+	// 时 has_cs_files=False，启动阶段不编译，也不加载任何项目 DLL，导致后续
+	// 出现 6 条连续 "C# class not found (not yet compiled?): App/Menu/Splash"。
 	String project_dir = get_project_dir();
 	bool has_cs_files = false;
+	int cs_file_count = 0;
 
-	Ref<DirAccess> dir = DirAccess::open(project_dir);
-	if (dir.is_valid()) {
-		dir->list_dir_begin();
-		String fname = dir->get_next();
-		while (!fname.is_empty()) {
-			if (!dir->current_is_dir() && fname.ends_with(".cs")) {
-				has_cs_files = true;
+	{
+		// 轻量级 BFS 递归扫 .cs（不用重入函数，避免栈爆）；Depth 限 6 层足够覆盖
+		// src/app、src/menu/splash 等典型结构。
+		Vector<String> stack;
+		stack.push_back(project_dir);
+		int depth = 0;
+		const int MAX_DEPTH = 6;
+		while (!stack.is_empty() && depth < MAX_DEPTH) {
+			Vector<String> next_layer;
+			for (const String &cur : stack) {
+				Ref<DirAccess> dir = DirAccess::open(cur);
+				if (!dir.is_valid()) continue;
+				dir->list_dir_begin();
+				String fname = dir->get_next();
+				while (!fname.is_empty()) {
+					if (fname == "." || fname == "..") {
+						fname = dir->get_next();
+						continue;
+					}
+					String full = cur.path_join(fname);
+					if (dir->current_is_dir()) {
+						// 跳过典型的编译产物 / 缓存目录，加速启动
+						if (fname != ".mono" && fname != "obj" && fname != "bin" && fname != ".git" && fname != "node_modules") {
+							next_layer.push_back(full);
+						}
+					} else if (fname.ends_with(".cs")) {
+						has_cs_files = true;
+						cs_file_count++;
+					}
+					fname = dir->get_next();
+				}
+				dir->list_dir_end();
+			}
+			stack = next_layer;
+			depth++;
+			if (has_cs_files && cs_file_count > 1) {
+				// 找到多个 .cs 就可以停止更深层扫描（只用于 yes/no + 数量估算）
 				break;
 			}
-			fname = dir->get_next();
 		}
-		dir->list_dir_end();
+	}
+
+	// 兜底：即便没有任何 .cs 文件在项目里（极端情况），但 .mono/assemblies 里
+	// 已经有当前项目名的版本化 DLL（用户可能把源文件移走、或用预编译 DLL），
+	// 也尝试直接加载，避免初始化阶段错过加载机会。
+	bool has_existing_project_dll = false;
+	{
+		String asm_dir = csharp_editor_get_assemblies_output_dir();
+		String latest = find_latest_project_dll(asm_dir, get_project_name());
+		if (!latest.is_empty() && FileAccess::exists(latest)) {
+			has_existing_project_dll = true;
+		}
 	}
 
 	if (has_cs_files) {
-		MonoLogger::log("Found C# files, attempting initial compilation...");
+		MonoLogger::log(vformat("Found %d C# files (recursive, up to 6 levels), attempting initial compilation...", cs_file_count));
 		csharp_editor_compile_project();
 
 		GDMono *gdmono = GDMono::get_singleton();
 		if (gdmono) {
 			// Clear any assemblies that GDMono auto-loaded during init
+			// (典型是 exe_dir fallback 里的跨项目残留 Chickensoft DLL，不要让它
+			//  和真正的项目 DLL 共存导致类查找混乱)。
 			gdmono->clear_user_assemblies();
 
 			String latest_dll = find_latest_project_dll(csharp_editor_get_assemblies_output_dir(), get_project_name());
@@ -739,6 +1307,19 @@ void initialize_csharp_editor() {
 				MonoLogger::log(vformat("Loaded project assembly: %s", latest_dll));
 			} else {
 				MonoLogger::log_warning("Compiled assembly not found");
+			}
+		}
+	} else if (has_existing_project_dll) {
+		// 兜底：脚本没被 recursive 扫描命中（或极端情况无源文件），
+		// 但 .mono/assemblies 里已有 DLL，先把它加载起来；
+		// 总比加载 exe_dir fallback 里的跨项目 DLL 好。
+		GDMono *gdmono = GDMono::get_singleton();
+		if (gdmono) {
+			gdmono->clear_user_assemblies();
+			String latest_dll = find_latest_project_dll(csharp_editor_get_assemblies_output_dir(), get_project_name());
+			if (!latest_dll.is_empty() && FileAccess::exists(latest_dll)) {
+				gdmono->load_assembly(latest_dll, true);
+				MonoLogger::log(vformat("Loaded existing project assembly (no .cs scan hit): %s", latest_dll));
 			}
 		}
 	}
@@ -761,6 +1342,9 @@ class CSharpEditorExportPlugin : public EditorExportPlugin {
 
 	String export_path;
 	bool is_debug_build = false;
+	HashSet<String> current_features;   // 缓存 _export_begin 收到的 features（Desktop/Web/iOS/Android 等），
+	                                    // 给 _export_end 判定平台用——Godot 4 的 EditorExportPlugin
+	                                    // 没有 has_feature() 成员（has_feature 只在 EditorExportPlatform 上存在）。
 
 public:
 	virtual String get_name() const override { return "CSharp"; }
@@ -769,8 +1353,8 @@ protected:
 	virtual void _export_begin(const HashSet<String> &p_features, bool p_debug, const String &p_path, int p_flags) override {
 		export_path = p_path;
 		is_debug_build = p_debug;
+		current_features = p_features;   // 保存：_export_end 没有参数，需要靠这个判断平台
 		String exe_dir = OS::get_singleton()->get_executable_path().get_base_dir();
-
 		bool is_windows = p_features.has("windows");
 		bool is_macos = p_features.has("macos");
 		bool is_linux = p_features.has("linux");
@@ -792,6 +1376,77 @@ protected:
 			// 注意：当前使用桌面版 BCL，真机可能需要平台专用 BCL（类似 WASM 专用 BCL）。
 			_deploy_mono_mobile(exe_dir, p_features);
 			_deploy_user_assemblies_mobile(p_features);
+		}
+	}
+
+	virtual void _export_end() override {
+		// K3：Desktop 导出时给导出目录（即用户 build 目录，就是 export_path 的 base dir）
+		// 也复制一份 BCL / GodotSharp / 用户 DLL 的物理副本，双保险：
+		//   - 用户把 EXE 单独拷走时，.pck 里的 preload hook 能保证启动（见
+		//     gd_mono.cpp install_universal_assembly_preload_hook）；
+		//   - 用户把 EXE+PCK 整个文件夹拷走时，物理副本 + preload 都能命中，
+		//     即使 mono_new_stub / 旧版 gd_mono 没装 hook 也能跑。
+		bool is_windows = current_features.has("windows");
+		bool is_macos = current_features.has("macos");
+		bool is_linux = current_features.has("linux");
+		if (!(is_windows || is_macos || is_linux)) return;
+
+		String editor_exe_dir = OS::get_singleton()->get_executable_path().get_base_dir();
+		String out_dir = export_path.get_base_dir();
+
+		// BCL 源：导出开始时同一份候选解析
+		String bcl_dir = editor_exe_dir.path_join("mono").path_join("lib").path_join("mono").path_join("4.5");
+		if (!FileAccess::exists(bcl_dir.path_join("mscorlib.dll"))) {
+			bcl_dir = editor_exe_dir.path_join("..").path_join("mono").path_join("lib").path_join("mono").path_join("4.5");
+		}
+		if (!FileAccess::exists(bcl_dir.path_join("mscorlib.dll"))) {
+			bcl_dir = editor_exe_dir.path_join("..").path_join("bin").path_join("mono").path_join("lib").path_join("mono").path_join("4.5");
+		}
+		if (FileAccess::exists(bcl_dir.path_join("mscorlib.dll"))) {
+			String target_bcl = out_dir.path_join("mono").path_join("lib").path_join("mono").path_join("4.5");
+			DirAccess::make_dir_recursive_absolute(target_bcl);
+			Ref<DirAccess> bcl_d = DirAccess::open(bcl_dir);
+			if (bcl_d.is_valid()) {
+				bcl_d->list_dir_begin();
+				String fname = bcl_d->get_next();
+				while (!fname.is_empty()) {
+					if (!bcl_d->current_is_dir() && fname.ends_with(".dll")) {
+						String src = bcl_dir.path_join(fname);
+						String dst = target_bcl.path_join(fname);
+						Error copy_err = DirAccess::copy_absolute(src, dst);
+						if (copy_err != OK) {
+							MonoLogger::log_warning(vformat("Export end: BCL sidecar copy failed for %s (err=%d)", fname, (int)copy_err));
+						}
+					}
+					fname = bcl_d->get_next();
+				}
+				bcl_d->list_dir_end();
+			}
+		}
+
+		// GodotSharp.dll sidecar
+		String gs_src = bcl_dir.path_join("GodotSharp.dll");
+		if (!FileAccess::exists(gs_src)) gs_src = editor_exe_dir.path_join("GodotSharp.dll");
+		if (!FileAccess::exists(gs_src)) gs_src = editor_exe_dir.path_join(".mono").path_join("assemblies").path_join("GodotSharp.dll");
+		if (FileAccess::exists(gs_src)) {
+			Error e = DirAccess::copy_absolute(gs_src, out_dir.path_join("GodotSharp.dll"));
+			if (e != OK) MonoLogger::log_warning(vformat("Export end: GodotSharp.dll sidecar copy failed (err=%d)", (int)e));
+		}
+
+		// 用户 DLL sidecar
+		String project_name = get_project_name();
+		String project_dir = get_project_dir();
+		String project_assemblies_dir = project_dir.path_join(".mono").path_join("assemblies");
+		String latest_dll = find_latest_project_dll(project_assemblies_dir, project_name);
+		if (latest_dll.is_empty() && csharp_editor_compile_project()) {
+			latest_dll = find_latest_project_dll(project_assemblies_dir, project_name);
+		}
+		if (!latest_dll.is_empty() && FileAccess::exists(latest_dll)) {
+			String target_assemblies = out_dir.path_join(".mono").path_join("assemblies");
+			DirAccess::make_dir_recursive_absolute(target_assemblies);
+			Error e = DirAccess::copy_absolute(latest_dll, target_assemblies.path_join(project_name + ".dll"));
+			if (e != OK) MonoLogger::log_warning(vformat("Export end: user assembly sidecar copy failed (err=%d)", (int)e));
+			else MonoLogger::log(vformat("Export end: user assembly sidecar copied to %s\\%s.dll", target_assemblies, project_name));
 		}
 	}
 
@@ -1023,7 +1678,126 @@ private:
 		}
 	}
 
+	// 静态模式下部署 etc/ 目录：DFS 遍历 p_root 下所有文件，
+	// 用 add_file 以 "mono/etc/<relative>" 路径打进 PCK。
+	// p_root 是 etc 的绝对根（用于计算相对路径），
+	// p_current 是当前迭代目录（首次调用 = p_root）。
+	void _deploy_etc_dir_recursive(const String &p_root, const String &p_current, const String &p_target_prefix) {
+		Ref<DirAccess> d = DirAccess::open(p_current);
+		if (d.is_null()) {
+			return;
+		}
+		d->list_dir_begin();
+		String fname = d->get_next();
+		while (!fname.is_empty()) {
+			if (fname != "." && fname != "..") {
+				String abs = p_current.path_join(fname);
+				if (d->current_is_dir()) {
+					_deploy_etc_dir_recursive(p_root, abs, p_target_prefix);
+				} else {
+					PackedByteArray data = FileAccess::get_file_as_bytes(abs);
+					if (data.size() > 0) {
+						String rel = abs.replace_first(p_root + "/", "");
+						if (rel == abs) {
+							rel = abs.replace_first(p_root + "\\", "");
+						}
+						if (!rel.is_empty()) {
+							add_file(p_target_prefix + "/" + rel, data, false);
+						}
+					}
+				}
+			}
+			fname = d->get_next();
+		}
+		d->list_dir_end();
+	}
+
 	void _deploy_mono_desktop(const String &p_exe_dir) {
+#ifdef MONO_STATIC_BUILD
+		// ---- 静态链接模式（本项目的默认构建方式）----
+		// Mono 运行时代码（mono-2.0-sgen）已被链接进 EXE，
+		// 不再需要本地部署 mono-2.0-sgen.dll / MonoPosixHelper.dll /
+		// libmono-btls-shared.dll 这三个原生 DLL。如果强制尝试，
+		// 在任何未安装完整 Mono 的机器上都会弹出系统级错误对话框：
+		//   "由于找不到 mono-2.0-sgen.dll，无法继续执行代码。"
+		// 所以这里直接跳过。
+
+		// 但 BCL 目录（mono/lib/mono/4.5/*.dll）+ GodotSharp.dll + 用户 DLL
+		// 仍然是运行时需要加载的托管程序集，必须部署到目标 EXE 旁边，
+		// 否则 mono_jit_init_version 之后会在根域加载阶段直接断言失败。
+
+		// 查找 BCL 目录：优先 exe_dir/mono/lib/mono/4.5/（template_release 构建
+		// 后 bin/windows/mono 就是这个层级）；如果不存在（例如编辑器模板模式下
+		// 用户的 EXE 目录是 exports/<project>/），再退到 ../mono/lib/mono/4.5/
+		// 和 exe_dir/../bin/mono/lib/mono/4.5/。
+		String bcl_dir = p_exe_dir.path_join("mono").path_join("lib").path_join("mono").path_join("4.5");
+		if (!FileAccess::exists(bcl_dir.path_join("mscorlib.dll"))) {
+			bcl_dir = p_exe_dir.path_join("..").path_join("mono").path_join("lib").path_join("mono").path_join("4.5");
+		}
+		if (!FileAccess::exists(bcl_dir.path_join("mscorlib.dll"))) {
+			bcl_dir = p_exe_dir.path_join("..").path_join("bin").path_join("mono").path_join("lib").path_join("mono").path_join("4.5");
+		}
+		if (FileAccess::exists(bcl_dir.path_join("mscorlib.dll"))) {
+			Ref<DirAccess> bcl_d = DirAccess::open(bcl_dir);
+			if (bcl_d.is_valid()) {
+				bcl_d->list_dir_begin();
+				String fname = bcl_d->get_next();
+				int bcl_count = 0;
+				while (!fname.is_empty()) {
+					if (!bcl_d->current_is_dir() && fname.ends_with(".dll")) {
+						String src = bcl_dir.path_join(fname);
+						String target = "mono/lib/mono/4.5/" + fname;
+						PackedByteArray data = FileAccess::get_file_as_bytes(src);
+						if (data.size() > 0) {
+							add_file(target, data, false);
+							bcl_count++;
+						}
+					}
+					fname = bcl_d->get_next();
+				}
+				bcl_d->list_dir_end();
+				MonoLogger::log(vformat("Export (desktop static): deployed %d BCL assemblies from %s",
+						bcl_count, bcl_dir));
+			}
+		} else {
+			MonoLogger::log_warning(
+					"Export (desktop static): BCL not found (tried mono/lib/mono/4.5/, "
+					"../mono/lib/mono/4.5/, ../bin/mono/lib/mono/4.5/); "
+					"C# runtime will fail to initialize at startup");
+		}
+
+		// 部署 GodotSharp.dll：优先 BCL 目录（运行时实际加载的那一份），
+		// 其次 exe_dir/GodotSharp.dll，最后回退 exe_dir/.mono/assemblies/GodotSharp.dll。
+		String godotsharp_src = bcl_dir.path_join("GodotSharp.dll");
+		if (!FileAccess::exists(godotsharp_src)) {
+			godotsharp_src = p_exe_dir.path_join("GodotSharp.dll");
+		}
+		if (!FileAccess::exists(godotsharp_src)) {
+			godotsharp_src = p_exe_dir.path_join(".mono").path_join("assemblies").path_join("GodotSharp.dll");
+		}
+		if (FileAccess::exists(godotsharp_src)) {
+			PackedByteArray data = FileAccess::get_file_as_bytes(godotsharp_src);
+			if (data.size() > 0) {
+				add_file(".mono/assemblies/GodotSharp.dll", data, false);
+				MonoLogger::log(vformat("Export (desktop static): deployed GodotSharp.dll from %s (%d bytes)",
+						godotsharp_src, data.size()));
+			}
+		} else {
+			MonoLogger::log_warning("Export (desktop static): GodotSharp.dll not found; "
+					"C# user scripts will fail to load at runtime");
+		}
+
+		// mono 子目录（如果存在额外数据，如 etc/ 配置）也一并打包，
+		// 保证 gd_mono.cpp 的 config_dir 候选路径不失效。
+		String mono_etc_dir = p_exe_dir.path_join("mono").path_join("etc");
+		if (DirAccess::exists(mono_etc_dir)) {
+			// 静态模式下按 add_file 的逐文件方式递归打包 etc/，避免依赖
+			// 未定义的共享辅助函数。使用 DirAccess 实例 + 手动 DFS，
+			// 与 Godot 3/4 通用的 DirAccess API 对齐。
+			_deploy_etc_dir_recursive(mono_etc_dir, mono_etc_dir, "mono/etc");
+		}
+#else
+		// ---- 动态链接模式（仅系统完整安装 Mono 时才可用）----
 		Vector<String> dlls = {
 			"mono-2.0-sgen.dll",
 			"MonoPosixHelper.dll",
@@ -1053,6 +1827,7 @@ private:
 		if (FileAccess::exists(godotsharp_in_assemblies) && !FileAccess::exists(p_exe_dir.path_join("GodotSharp.dll"))) {
 			add_shared_object(godotsharp_in_assemblies, Vector<String>(), String());
 		}
+#endif  // MONO_STATIC_BUILD
 	}
 
 	void _deploy_mono_web(const String &p_exe_dir) {

@@ -117,6 +117,8 @@ if mono_stub:
         env_mono.Append(CPPDEFINES=["DISABLE_THREADS"])
         env_mono.Append(CPPDEFINES=["UNIX_ENABLED"])
 elif mono_static:
+    env_mono.Append(CPPDEFINES=["MONO_STATIC_BUILD"])
+    env_mono.Append(CPPDEFINES=["MONO_STATIC"])
     if env["platform"] == "windows":
         if env.msvc:
             import os

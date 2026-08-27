@@ -85,6 +85,7 @@ class ScriptTextEditor : public CodeEditorBase {
 	int connection_gutter = -1;
 	void _gutter_clicked(int p_line, int p_gutter);
 	void _update_gutter_indexes();
+	void _refresh_connection_gutter_width();
 
 	int line_number_gutter = -1;
 	Color default_line_number_color = Color(1, 1, 1);

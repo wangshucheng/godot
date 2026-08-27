@@ -65,12 +65,17 @@ public:
 	bool initialize();
 	void cleanup();
 
-#if defined(ANDROID_ENABLED) && !defined(MONO_STUB)
-	// Android: 安装程序集 preload hook，从 APK 内 res:// 路径加载 .dll。
-	// 在 initialize() 内部调用，无需外部主动调用。
-	// 条件必须与 gd_mono.cpp 实现/调用处一致：ANDROID_ENABLED && !MONO_STUB。
-	// editor 与 template_release 均需此 hook（APK 内 res:// 路径无法 fopen）。
-	void install_android_assembly_preload_hook();
+#if (defined(ANDROID_ENABLED) || (!defined(WEB_ENABLED) && !defined(IOS_ENABLED))) && !defined(MONO_STUB)
+	// 通用的程序集 preload hook（Desktop / Android 共用实现）。
+	//   - Desktop：从 .pck 内 res://mono/lib/mono/4.5/ 和 res://.mono/assemblies/
+	//     加载 BCL / GodotSharp / 用户 DLL，即使 EXE 旁边没有物理副本也能正常启动；
+	//     用于修复"Godot preset 选了 wrapper launcher / Custom template 路径填错
+	//     / 导出目录被精简清理时 EXE 直接闪退在 mono_jit_init_version()"的问题。
+	//   - Android：沿用原 Android 实现逻辑，条件编译在 candidates 中额外追加
+	//     res://.godot/mono/publish/<arch>/。
+	// 必须在 mono_jit_init_version() 之前安装（JIT 初始化会加载 mscorlib.dll，
+	// 若 hook 装晚了，Mono 会因找不到 mscorlib 直接 exit()）。
+	void install_universal_assembly_preload_hook();
 #endif
 
 	bool load_assembly(const String &p_path, bool p_is_proj_assembly = false);

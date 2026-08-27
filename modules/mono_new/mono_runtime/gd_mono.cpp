@@ -372,14 +372,13 @@ bool GDMono::initialize() {
 	                "assertion in VkThread during GC signal-based suspend");
 #endif
 
-#if defined(ANDROID_ENABLED) && !defined(MONO_STUB)
-	// Android: 必须在 mono_jit_init_version() 之前安装 preload hook。
-	// 原因：mono_jit_init_version() 内部会加载 mscorlib.dll，而 Android 上 BCL
-	// 文件打包在 APK 的 assets/ 内，无法通过 fopen 直接访问，必须通过 Godot 的
-	// FileAccess（内部走 AndroidAssetFileAccess）。若 hook 在 JIT init 之后才安装，
-	// Mono 会因找不到 mscorlib.dll 调用 exit() 终止进程。
-	// 参考 modules/mono/mono_gd/gd_mono.cpp:589-594（在 coreclr_initialize 之前安装）。
-	install_android_assembly_preload_hook();
+#if (defined(ANDROID_ENABLED) || (!defined(WEB_ENABLED) && !defined(IOS_ENABLED))) && !defined(MONO_STUB)
+	// 通用（Desktop + Android）preload hook 必须在 mono_jit_init_version() 之前装：
+	// mono_jit_init_version() 内部就会加载 mscorlib.dll，而无论 Desktop .pck 还是
+	// Android APK，BCL/GodotSharp/用户 DLL 全部是通过 Godot FileAccess 挂在 res://
+	// 下的 VFS 文件，Mono 自身的 fopen() 查找路径根本看不见 → 不装 hook 的话，
+	// JIT init 阶段直接因为找不到 mscorlib 调用 exit() 闪退。
+	install_universal_assembly_preload_hook();
 #endif
 
 	MonoLogger::log(vformat("Calling mono_jit_init_version with runtime: %s", runtime_version));
@@ -506,13 +505,45 @@ bool GDMono::initialize() {
 					MonoLogger::log_error(vformat("Failed to read GodotSharp.dll: %s", path));
 				}
 #else
-				CharString path_utf8 = path.utf8();
-				godotsharp_assembly = mono_domain_assembly_open(scripts_domain, path_utf8.get_data());
-				if (godotsharp_assembly) {
-					godotsharp_image = mono_assembly_get_image(godotsharp_assembly);
-					if (godotsharp_image) {
-						MonoLogger::log("GodotSharp loaded successfully");
-						break;
+				// Desktop (Windows/macOS/Linux):
+				//   - 前 3 个候选：exe_dir/GodotSharp.dll、exe_dir/.mono/assemblies/GodotSharp.dll、assemblies_path/GodotSharp.dll
+				//     → 都是真实磁盘路径，直接 mono_domain_assembly_open 就行。
+				//   - 第 4 个候选：res://.mono/assemblies/GodotSharp.dll
+				//     → 这是 Godot Export 把 DLL 打进 .pck 时的路径。mono_domain_assembly_open
+				//       只接受真实磁盘路径，它不认识 Godot VFS 的 res://。必须走 FileAccess
+				//       读字节 + mono_image_open_from_data + mono_assembly_load_from。
+				bool use_buffer = path.begins_with("res://") || path.begins_with("user://");
+				if (use_buffer) {
+					PackedByteArray gs_data = FileAccess::get_file_as_bytes(path);
+					if (gs_data.size() > 0) {
+						MonoLogger::log(vformat("Reading GodotSharp.dll from VFS into buffer: %d bytes (%s)", gs_data.size(), path));
+						MonoImageOpenStatus status = MONO_IMAGE_OK;
+						MonoImage *gs_image = mono_image_open_from_data(
+							(char *)gs_data.ptrw(), (unsigned int)gs_data.size(), 1, &status);
+						CharString path_utf8 = path.utf8();
+						if (gs_image && status == 0) {
+							godotsharp_assembly = mono_assembly_load_from(gs_image, path_utf8.get_data(), &status);
+							if (godotsharp_assembly) {
+								godotsharp_image = mono_assembly_get_image(godotsharp_assembly);
+								if (godotsharp_image) {
+									MonoLogger::log("GodotSharp loaded successfully (from PCK buffer, desktop)");
+									break;
+								}
+							}
+						}
+						if (!godotsharp_assembly) {
+							MonoLogger::log_warning(vformat("Desktop VFS mono_image_open_from_data/load_from failed (status=%d) for %s", status, path));
+						}
+					}
+				} else {
+					CharString path_utf8 = path.utf8();
+					godotsharp_assembly = mono_domain_assembly_open(scripts_domain, path_utf8.get_data());
+					if (godotsharp_assembly) {
+						godotsharp_image = mono_assembly_get_image(godotsharp_assembly);
+						if (godotsharp_image) {
+							MonoLogger::log("GodotSharp loaded successfully");
+							break;
+						}
 					}
 				}
 #endif
@@ -521,45 +552,110 @@ bool GDMono::initialize() {
 	}
 
 	if (scripts_domain) {
+		// 当前项目名（project.godot 里的 application/config/name），用于过滤
+		// "从 editor bin 里带过来的其它项目 DLL" 这种跨项目污染。
+		// 如果取不到（例如未加载 project_settings），留空表示不做过滤。
+		String current_project_name;
+		{
+			ProjectSettings *ps = ProjectSettings::get_singleton();
+			if (ps) {
+				current_project_name = ps->get_setting("application/config/name", String());
+				current_project_name = current_project_name.strip_edges();
+			}
+		}
+
 		Vector<String> search_dirs;
-		search_dirs.push_back(assemblies_path);
-		search_dirs.push_back(OS::get_singleton()->get_user_data_dir().path_join(".mono").path_join("assemblies"));
+		// ① 项目级：PCK / 源码树内的 res://.mono/assemblies（优先级最高，必须是当前项目自己的）
 		search_dirs.push_back(String("res://.mono/assemblies"));
+		// ② 项目级：res:// 翻译成物理绝对路径后的 .mono/assemblies
+		//   （有些 dev 场景下 DirAccess 对 res:// 只读 PCK、看不到物理新增的 DLL）
+		{
+			ProjectSettings *ps = ProjectSettings::get_singleton();
+			if (ps) {
+				String globalized = ps->globalize_path("res://.mono/assemblies");
+				if (!globalized.is_empty() && !search_dirs.has(globalized)) {
+					search_dirs.push_back(globalized);
+				}
+			}
+		}
+		// ③ 用户级：userdata 下的 .mono/assemblies（热更新等使用）
+		search_dirs.push_back(OS::get_singleton()->get_user_data_dir().path_join(".mono").path_join("assemblies"));
+		// ④ 最后才是 exe_dir/.mono/assemblies（fallback：editor 自己以前残留的 DLL、
+		//   或导出模板部署目录；这个目录里的 DLL 如果不是当前项目名，极可能是跨项目污染）
 
 		Vector<String> user_dll_paths;
 
-		for (const String &search_dir : search_dirs) {
-			String abs_dir;
-#if defined(WEB_ENABLED) || defined(ANDROID_ENABLED)
-			// In WASM/Android, keep res:// prefix so DirAccess can scan PCK/APK directories.
-			// globalize_path strips res:// prefix which breaks PCK/APK directory access.
-			if (search_dir.begins_with("res://")) {
-				abs_dir = search_dir;
-			} else {
-				abs_dir = ProjectSettings::get_singleton() ? ProjectSettings::get_singleton()->globalize_path(search_dir) : search_dir;
-			}
-#else
-			abs_dir = ProjectSettings::get_singleton() ? ProjectSettings::get_singleton()->globalize_path(search_dir) : search_dir;
-#endif
-			MonoLogger::log(vformat("Scanning for user assemblies in: %s", abs_dir));
+		{
+			Vector<String> with_fallback = search_dirs;
+			with_fallback.push_back(assemblies_path);  // ④ 末尾追加
 
-			if (FileAccess::exists(abs_dir) || DirAccess::exists(abs_dir)) {
-				Ref<DirAccess> dir = DirAccess::open(abs_dir);
-				if (dir.is_valid()) {
-					dir->list_dir_begin();
-					String fname = dir->get_next();
-					while (!fname.is_empty()) {
-						if (!dir->current_is_dir() && fname.ends_with(".dll") && fname != "GodotSharp.dll") {
-							String full_path = abs_dir.path_join(fname);
-							if (!user_dll_paths.has(full_path)) {
-								user_dll_paths.push_back(full_path);
-							}
-						}
-						fname = dir->get_next();
-					}
-					dir->list_dir_end();
+			for (int si = 0; si < with_fallback.size(); si++) {
+				const String &search_dir = with_fallback[si];
+				String abs_dir;
+#if defined(WEB_ENABLED) || defined(ANDROID_ENABLED) || defined(IOS_ENABLED)
+				// In WASM/Android/iOS, keep res:// prefix so DirAccess can scan PCK/APK directories.
+				// globalize_path strips res:// prefix which breaks PCK/APK directory access.
+				if (search_dir.begins_with("res://")) {
+					abs_dir = search_dir;
 				} else {
-					MonoLogger::log_warning(vformat("DirAccess::open failed for: %s", abs_dir));
+					abs_dir = ProjectSettings::get_singleton() ? ProjectSettings::get_singleton()->globalize_path(search_dir) : search_dir;
+				}
+#else
+				// Desktop: keep res:// prefix for PCK entries too (exported .pck is mounted at res://).
+				if (search_dir.begins_with("res://")) {
+					abs_dir = search_dir;
+				} else {
+					abs_dir = ProjectSettings::get_singleton() ? ProjectSettings::get_singleton()->globalize_path(search_dir) : search_dir;
+				}
+#endif
+				bool is_exe_dir_fallback = (si == with_fallback.size() - 1);
+
+				MonoLogger::log(vformat("Scanning for user assemblies in: %s", abs_dir));
+
+				if (FileAccess::exists(abs_dir) || DirAccess::exists(abs_dir)) {
+					Ref<DirAccess> dir = DirAccess::open(abs_dir);
+					if (dir.is_valid()) {
+						dir->list_dir_begin();
+						String fname = dir->get_next();
+						while (!fname.is_empty()) {
+							if (!dir->current_is_dir() && fname.ends_with(".dll") && fname != "GodotSharp.dll") {
+								String full_path = abs_dir.path_join(fname);
+								// 跨项目污染检测（仅当我们明确知道当前项目名时才启用）：
+								// ④ exe_dir fallback 目录里的 DLL，如果 base name 不是
+								// 当前项目名，那就是 editor 之前编译过别的项目残留的
+								// 历史垃圾，继续加载会让 "C# class not found" 排查更难。
+								// 这里不阻止加载（可能是 NuGet 依赖 DLL），但给一个醒目 WARNING。
+								if (is_exe_dir_fallback && !current_project_name.is_empty()) {
+									String base = fname.get_basename();
+									// 去掉版本化 Name_<timestamp>.dll 的时间戳后缀
+									int us = base.rfind("_");
+									String cks = (us > 0) ? base.substr(us + 1) : String();
+									bool all_digit = !cks.is_empty();
+									for (int ci = 0; all_digit && ci < cks.length(); ci++) {
+										if (cks[ci] < '0' || cks[ci] > '9') { all_digit = false; break; }
+									}
+									String bare_name = (us > 0 && all_digit) ? base.substr(0, us) : base;
+
+									if (bare_name != current_project_name) {
+										MonoLogger::log_warning(vformat(
+											"Cross-project assembly candidate found in exe_dir fallback: %s"
+											" (base '%s' != current project '%s'). "
+											"Keeping it only as fallback/nuget dependency; if this is your project DLL, "
+											"move/copy it to <project>/.mono/assemblies/ and delete this stale copy.",
+											full_path, bare_name, current_project_name));
+									}
+								}
+
+								if (!user_dll_paths.has(full_path)) {
+									user_dll_paths.push_back(full_path);
+								}
+							}
+							fname = dir->get_next();
+						}
+						dir->list_dir_end();
+					} else {
+						MonoLogger::log_warning(vformat("DirAccess::open failed for: %s", abs_dir));
+					}
 				}
 			}
 		}
@@ -655,13 +751,15 @@ bool GDMono::initialize() {
 			MonoLogger::log(vformat("Loading user assembly from: %s", path));
 			MonoAssembly *assy = nullptr;
 			CharString path_utf8 = path.utf8();
-#if defined(WEB_ENABLED) || defined(ANDROID_ENABLED)
-			// In WASM/Android, Mono's fopen cannot access PCK/APK internal res:// paths.
-			// Read via FileAccess (which handles PCK/APK) and load from byte buffer.
-			if (path.begins_with("res://")) {
+			// Desktop 导出时：扫描到的是 res://.mono/assemblies/<name>.dll（在 .pck 里），
+			// mono_domain_assembly_open 只接受真实磁盘路径。所以统一：
+			//   - 任何 res:// / user:// 开头的路径 → FileAccess 读字节 + mono_image_open_from_data + mono_assembly_load_from + 必要时落盘 fallback
+			//   - 其它路径 → 直接 mono_domain_assembly_open
+			bool is_vfs_path = path.begins_with("res://") || path.begins_with("user://");
+			if (is_vfs_path) {
 				PackedByteArray data = FileAccess::get_file_as_bytes(path);
 				if (data.size() > 0) {
-					MonoLogger::log(vformat("Loading assembly from buffer: %s (%d bytes)", path, data.size()));
+					MonoLogger::log(vformat("Loading assembly from buffer (VFS): %s (%d bytes)", path, data.size()));
 					MonoImageOpenStatus status = MONO_IMAGE_OK;
 					MonoImage *img = mono_image_open_from_data(
 						(char *)data.ptrw(), (unsigned int)data.size(), 1, &status);
@@ -669,46 +767,27 @@ bool GDMono::initialize() {
 						assy = mono_assembly_load_from(img, path_utf8.get_data(), &status);
 					}
 					if (!assy) {
-						MonoLogger::log_error(vformat("Buffer load failed (status=%d), trying MEMFS copy: %s", status, path));
-						// Fallback: copy to MEMFS and try mono_domain_assembly_open
+						MonoLogger::log_warning(vformat("Buffer load failed (status=%d), falling back to MEMFS copy: %s", status, path));
+						// 落盘到 assemblies_path（exe_dir/.mono/assemblies 或 userdata/.mono/assemblies），
+						// mono_domain_assembly_open 才能吃到真实路径。
 						String memfs_path = assemblies_path.path_join(path.get_file());
-						CharString memfs_path_utf8 = memfs_path.utf8();
-						Ref<FileAccess> f = FileAccess::open(memfs_path, FileAccess::WRITE);
-						if (f.is_valid()) {
-							f->store_buffer(data.ptr(), data.size());
-							f->close();
-							assy = mono_domain_assembly_open(scripts_domain, memfs_path_utf8.get_data());
+						DirAccess::make_dir_recursive_absolute(memfs_path.get_base_dir());
+						{
+							Ref<FileAccess> f = FileAccess::open(memfs_path, FileAccess::WRITE);
+							if (f.is_valid()) {
+								f->store_buffer(data.ptr(), data.size());
+								f->close();
+							}
 						}
+						CharString memfs_path_utf8 = memfs_path.utf8();
+						assy = mono_domain_assembly_open(scripts_domain, memfs_path_utf8.get_data());
 					}
 				} else {
-					MonoLogger::log_error(vformat("Failed to read from PCK: %s", path));
+					MonoLogger::log_warning(vformat("Failed to read user DLL from VFS: %s", path));
 				}
 			} else {
-#if defined(WEB_ENABLED) || defined(ANDROID_ENABLED)
-			// Also load non-res:// paths from buffer in WASM/Android
-			PackedByteArray data = FileAccess::get_file_as_bytes(path);
-				if (data.size() > 0) {
-					MonoLogger::log(vformat("Loading assembly from buffer: %s (%d bytes)", path, data.size()));
-					MonoImageOpenStatus status = MONO_IMAGE_OK;
-					MonoImage *img = mono_image_open_from_data(
-						(char *)data.ptrw(), (unsigned int)data.size(), 1, &status);
-					if (img && status == 0) {
-						assy = mono_assembly_load_from(img, path_utf8.get_data(), &status);
-					}
-					if (!assy) {
-						MonoLogger::log_error(vformat("Buffer load failed (status=%d), falling back: %s", status, path));
-						assy = mono_domain_assembly_open(scripts_domain, path_utf8.get_data());
-					}
-				} else {
-					assy = mono_domain_assembly_open(scripts_domain, path_utf8.get_data());
-				}
-#else
 				assy = mono_domain_assembly_open(scripts_domain, path_utf8.get_data());
-#endif
 			}
-#else
-			assy = mono_domain_assembly_open(scripts_domain, path_utf8.get_data());
-#endif
 			if (assy) {
 				MonoImage *img = mono_assembly_get_image(assy);
 				if (img) {
@@ -743,14 +822,29 @@ bool GDMono::initialize() {
 	return true;
 }
 
-#if defined(ANDROID_ENABLED) && !defined(MONO_STUB)
-// Android 程序集 preload hook：从 APK 内 res:// 路径加载程序集。
-// 参考 modules/mono/mono_gd/gd_mono.cpp:530-589 load_assembly_from_pck。
+#if (defined(ANDROID_ENABLED) || (!defined(WEB_ENABLED) && !defined(IOS_ENABLED))) && !defined(MONO_STUB)
+// 通用的程序集 preload hook（Desktop / macOS / Linux / Android 共享一份实现）。
 //
-// Android 的文件系统不能直接 fopen APK 内的 res:// 路径，必须通过 Godot 的
-// FileAccess（内部走 AndroidAssetFileAccess）。安装此 hook 后，Mono 在
-// 解析程序集引用时会回调此函数，从 APK 内读取 .dll 字节流。
-static MonoAssembly *android_load_assembly_from_pck(MonoAssemblyName *p_name, char **p_assemblies_path, void *p_user_data) {
+// 为什么 Desktop 也需要这个 hook？
+//   - 我们的 C# 导出插件 _deploy_mono_desktop / _deploy_mono_mobile 会把
+//     BCL / GodotSharp / 用户 DLL 全部打进 .pck，路径形如：
+//         res://mono/lib/mono/4.5/mscorlib.dll
+//         res://.mono/assemblies/GodotSharp.dll
+//         res://.mono/assemblies/<ProjectName>.dll
+//   - 但 mono_set_dirs(mono_lib_dir, mono_etc_dir) 只会让 Mono 在
+//     **真实文件系统** 里搜索 fopen() 能打开的路径；.pck 里的 res:// 是
+//     Godot 虚拟文件系统，fopen() 根本找不到。
+//   - 之前 Desktop 导出能跑全靠"导出插件顺手把 DLL 也复制到了 EXE 旁边的物理副本"，
+//     一旦 Custom template 没选对 / 复制分支漏写 / 用户把 EXE 单独拷走，
+//     直接就在 mono_jit_init_version() 里因为找不到 mscorlib.dll 崩溃。
+//   - 解决方案：给 Desktop 也装一份 preload hook（和 Android 同款）。
+//     Mono 在 JIT 初始化加载 mscorlib.dll / 解析任何程序集引用时先回调这个 hook，
+//     hook 走 Godot 的 FileAccess 去读 .pck → 只要 add_file 打进了 .pck，就一定能
+//     被找到；即使没有物理副本，依然能正常启动。
+static MonoAssembly *universal_load_assembly_from_pck(MonoAssemblyName *p_name, char **p_assemblies_path, void *p_user_data) {
+	(void)p_assemblies_path;
+	(void)p_user_data;
+
 	const char *name = mono_assembly_name_get_name(p_name);
 	const char *culture = mono_assembly_name_get_culture(p_name);
 	if (!name) return nullptr;
@@ -764,13 +858,13 @@ static MonoAssembly *android_load_assembly_from_pck(MonoAssemblyName *p_name, ch
 		assembly_name += ".dll";
 	}
 
-	// 优先在 res://.godot/mono/publish/<arch>/ 查找（参考 godotsharp_dirs.cpp:181）
-	String arch = Engine::get_singleton()->get_architecture_name();
-	Vector<String> candidates = {
-		"res://.godot/mono/publish/" + arch + "/" + assembly_name,
-		"res://.mono/assemblies/" + assembly_name,
-		"res://mono/lib/mono/4.5/" + assembly_name,
-	};
+	String arch = Engine::get_singleton() ? Engine::get_singleton()->get_architecture_name() : String();
+	Vector<String> candidates;
+#ifdef ANDROID_ENABLED
+	candidates.push_back("res://.godot/mono/publish/" + arch + "/" + assembly_name);
+#endif
+	candidates.push_back("res://.mono/assemblies/" + assembly_name);
+	candidates.push_back("res://mono/lib/mono/4.5/" + assembly_name);
 
 	for (const String &path : candidates) {
 		if (!FileAccess::exists(path)) continue;
@@ -788,18 +882,28 @@ static MonoAssembly *android_load_assembly_from_pck(MonoAssemblyName *p_name, ch
 		MonoAssembly *assembly = mono_assembly_load_from_full(
 				image, assembly_name.utf8().get_data(), &status, /*ref_only*/ false);
 		if (status == MONO_IMAGE_OK && assembly) {
+#ifdef ANDROID_ENABLED
 			MonoLogger::log(vformat("Android preload hook loaded: %s from %s", assembly_name, path));
+#else
+			MonoLogger::log(vformat("Desktop preload hook loaded: %s from %s", assembly_name, path));
+#endif
 			return assembly;
 		}
 	}
 	return nullptr;  // 让 Mono 继续走默认查找路径
 }
+#endif  // (ANDROID || !WEB && !IOS) && !MONO_STUB
 
-void GDMono::install_android_assembly_preload_hook() {
-	mono_install_assembly_preload_hook(&android_load_assembly_from_pck, nullptr);
-	MonoLogger::log("Android assembly preload hook installed (loads from res://.godot/mono/publish/<arch>/)");
+#if (defined(ANDROID_ENABLED) || (!defined(WEB_ENABLED) && !defined(IOS_ENABLED))) && !defined(MONO_STUB)
+void GDMono::install_universal_assembly_preload_hook() {
+	mono_install_assembly_preload_hook(&universal_load_assembly_from_pck, nullptr);
+#ifdef ANDROID_ENABLED
+	MonoLogger::log("Universal assembly preload hook installed (Android, loads from res://.mono/assemblies/ + res://mono/lib/mono/4.5/)");
+#else
+	MonoLogger::log("Universal assembly preload hook installed (Desktop, loads from PCK .mono/assemblies + mono/lib/mono/4.5 even when no physical side-by-side copy exists)");
+#endif
 }
-#endif  // ANDROID_ENABLED && !MONO_STUB
+#endif
 
 void GDMono::cleanup() {
 	if (!initialized)

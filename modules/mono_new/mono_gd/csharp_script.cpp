@@ -10,6 +10,16 @@
 #include <cstdio>
 #include "scene/main/node.h"
 
+// ── Diagnostic log switches for CSharpInstance::has_method / callp ────────────
+// Default: off (0). The hand-written "callp DIAG" / "has_method DIAG" prints
+// below were added as a one-off input-integration investigation and can spam
+// hundreds of lines per frame for normal C# Node2D / Control scripts.
+// Set to 1 and rebuild when you need to diagnose method-call shape mismatches
+// (e.g. "why isn't _UnhandledInput being called?").
+#ifndef GD_MONO_ENABLE_CALLP_DIAG
+#define GD_MONO_ENABLE_CALLP_DIAG 0
+#endif
+
 extern "C" {
 MonoClassField *mono_class_get_field_from_name(MonoClass *klass, const char *name);
 void mono_field_set_value(MonoObject *obj, MonoClassField *field, void *value);
@@ -1143,11 +1153,13 @@ bool CSharpInstance::has_method(const StringName &p_method) const {
 	StringName pascal_name = snake_to_pascal_case(p_method);
 	if (pascal_name != p_method) {
 		bool found = mono_class->has_method(pascal_name);
+#if GD_MONO_ENABLE_CALLP_DIAG
 		// 诊断日志：输入相关方法检查
 		String method_str = String(p_method);
 		if (method_str.find("input") != -1 || method_str.find("Input") != -1) {
 			MonoLogger::log(vformat("has_method DIAG: '%s' -> '%s' found=%d", method_str, String(pascal_name), found ? 1 : 0));
 		}
+#endif
 		return found;
 	}
 	return false;
@@ -1159,11 +1171,13 @@ Variant CSharpInstance::callp(const StringName &p_method, const Variant **p_args
 		return Variant();
 	}
 
+#if GD_MONO_ENABLE_CALLP_DIAG
 	// 诊断日志：输入相关方法调用
 	String method_str = String(p_method);
 	if (method_str.find("input") != -1 || method_str.find("Input") != -1) {
 		MonoLogger::log(vformat("callp DIAG: method='%s' argcount=%d", method_str, p_argcount));
 	}
+#endif
 
 	MonoMethod *method = mono_class->get_method(p_method, p_argcount);
 	if (!method) {
@@ -1171,13 +1185,19 @@ Variant CSharpInstance::callp(const StringName &p_method, const Variant **p_args
 		StringName pascal_name = snake_to_pascal_case(p_method);
 		if (pascal_name != p_method) {
 			method = mono_class->get_method(pascal_name, p_argcount);
+#if GD_MONO_ENABLE_CALLP_DIAG
 			if (method) {
-				MonoLogger::log(vformat("callp DIAG: found via PascalCase '%s' -> '%s'", method_str, String(pascal_name)));
+				String method_str2 = String(p_method);
+				MonoLogger::log(vformat("callp DIAG: found via PascalCase '%s' -> '%s'", method_str2, String(pascal_name)));
 			}
+#endif
 		}
 	}
 	if (!method) {
-		MonoLogger::log(vformat("callp DIAG: method NOT FOUND '%s' argcount=%d", method_str, p_argcount));
+#if GD_MONO_ENABLE_CALLP_DIAG
+		String method_str3 = String(p_method);
+		MonoLogger::log(vformat("callp DIAG: method NOT FOUND '%s' argcount=%d", method_str3, p_argcount));
+#endif
 		r_error.error = Callable::CallError::CALL_ERROR_INVALID_METHOD;
 		return Variant();
 	}

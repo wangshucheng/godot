@@ -30,6 +30,8 @@
 
 # Buildsystem
 bin
+# bin/ 构建产物整体忽略（见第32行），但保留 bin/README.md 作为目录说明
+!bin/README.md
 *.gen.*
 compile_commands.json
 platform/windows/godot_res.res
@@ -481,5 +483,4 @@ csharp_test/csbench_godot_*_manifest.txt
 # 探针输出 / 临时响应文本（2026-08-22 防回归）
 csharp_test/csbench_*.txt
 link_resp.txt
-# bin/ 构建产物整体忽略（见第32行），但保留 bin/README.md 作为目录说明
-!bin/README.md
+

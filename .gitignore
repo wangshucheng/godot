@@ -400,8 +400,9 @@ $RECYCLE.BIN/
 ##################################
 ### mono_new 项目本地产物补充 ###
 ##################################
-# 导出模板（web/windows）与导出包体积巨大且均为本地构建产物，不入库。
+# 导出模板（web/windows）与导出包（--export-release 产物）体积巨大且均为本地构建产物，不入库。
 # 生成/获取方式见 godot-mono-port/docs/DEPLOYMENT_GUIDE.md 与 BUILD_GUIDE.md。
 /templates/
+/exports/
 # 编辑器打开引擎仓库根目录时 CSharpProjectPanel 生成的临时工程（含机器特定绝对路径）
 /GodotProject.csproj

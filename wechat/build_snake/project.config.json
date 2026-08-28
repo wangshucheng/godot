@@ -1,0 +1,49 @@
+{
+	"description": "2048 WeChat MiniGame",
+	"compileType": "minigame",
+	"miniprogramRoot": "",
+	"libVersion": "3.17.0",
+	"appid": "wxc07c26935264a5e5",
+	"projectname": "2048-minigame",
+	"packOptions": {
+		"ignore": [],
+		"include": [
+			{
+				"type": "folder",
+				"value": "wasm_pkg"
+			},
+			{
+				"type": "folder",
+				"value": "data_pkg"
+			}
+		]
+	},
+	"setting": {
+		"urlCheck": false,
+		"es6": false,
+		"enhance": false,
+		"postcss": false,
+		"minified": false,
+		"babelSetting": {
+			"ignore": [
+				"index.js"
+			],
+			"disablePlugins": [],
+			"outputPath": ""
+		},
+		"compileWorklet": false,
+		"uglifyFileName": false,
+		"uploadWithSourceMap": true,
+		"packNpmManually": false,
+		"packNpmRelationList": [],
+		"minifyWXSS": true,
+		"minifyWXML": true,
+		"localPlugins": false,
+		"disableUseStrict": false,
+		"useCompilerPlugins": false,
+		"condition": false
+	},
+	"simulatorPluginLibVersion": {},
+	"isGameTourist": false,
+	"editorSetting": {}
+}
